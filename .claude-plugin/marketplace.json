@@ -1,0 +1,16 @@
+{
+  "name": "budgit-hub",
+  "owner": {
+    "name": "Suraei"
+  },
+  "metadata": {
+    "description": "Budgit: phased, token-saving workflow for Claude Code"
+  },
+  "plugins": [
+    {
+      "name": "budgit",
+      "source": "./plugin",
+      "description": "Budgit: enforced input ledger, phase router, guards and a token budget for Claude Code"
+    }
+  ]
+}
