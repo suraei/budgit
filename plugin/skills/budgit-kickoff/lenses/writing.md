@@ -1,6 +1,6 @@
 # Lens: writing (docs, UI copy, messages, store/landing text)
 Source: blader/humanizer v3.1.0 patterns (MIT, built on Wikipedia "Signs of AI writing").
-The aim is clear writing for the user's readers; it does not beat AI detectors (measured). Apply it while writing: that costs less than a rewrite pass.
+The aim is clear writing for the user's readers; it does not beat AI detectors (measured). Apply it while writing: that costs less than a rewrite pass. Public English text (README, landing, store copy): run `stop-slop` on the draft as a second pass (optional; if not installed: the patterns below). Not for Spanish text, legal or security wording.
 
 **Rules that never bend**
 - **No new facts.** A rewrite keeps every number, name, caveat and link, and adds none. Unsure → leave it as it was.

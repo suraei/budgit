@@ -1,7 +1,9 @@
 # Phase 5 — QA (separate skeptical evaluator, never self-grade)
 - Fresh state is enforced: cache-clearing / worker-restart / fresh-fetch commands go in
   `.budgit/project.json` → `verify.prepare`. They run as shell, so the user approves them: show the user the list,
-  then `budgit prepare --approve` (a guard asks the user). Never approve on the user's behalf.
+  then give the user the approve command from `budgit prepare`'s error, alone in a fenced bash block (the user presses
+  Run, or types it in a terminal, reads the commands and answers y). Only a person at a terminal can approve; never try
+  it yourself.
 - Before each verifier round on code: `budgit codex review` (cheap first pass, the ChatGPT lane, if set up), fix what it finds,
   pass the report path to the verifier. Round cap: 3 verifier rounds per item, then close naming the residual risk.
 - Dispatch `budgit:verifier` per ledger item: it runs `budgit prepare`, checks every EARS criterion like

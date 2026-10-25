@@ -8,7 +8,10 @@ and weekly percentages (status line `rate_limits`, or `budgit budget record` aft
 get_usage), else "normal". The level follows pace (used % minus elapsed % of the weekly window), with
 absolute ceilings and a 5-point hysteresis so it does not flap.
 """
+import contextlib
+import fcntl
 import json
+import math
 import os
 import time
 
@@ -160,17 +163,75 @@ def save(data):
     sl.atomic_write(_path(), json.dumps(data, indent=1))
 
 
-def record(seven_day=None, five_hour=None, extra=None, now=None):
-    """seven_day / five_hour: (used_percent, resets_at_epoch); extra: (spent_usd, monthly_limit_usd)."""
-    data = load()
-    limits = data.setdefault("limits", {})
-    for name, value in (("seven_day", seven_day), ("five_hour", five_hour)):
-        if value is not None:
-            limits[name] = {"used": float(value[0]), "resets_at": float(value[1])}
-    if extra is not None:
-        data["extra"] = {"spent": float(extra[0]), "limit": float(extra[1])}
-    data["seen_at"] = now or time.time()
-    save(data)
+WINDOW_JITTER = 600     # two reset times this close are the same window (sessions report them to the second, or nearly)
+
+
+@contextlib.contextmanager
+def _locked():
+    """One writer at a time: every session of every project reads, merges and rewrites the same file."""
+    os.makedirs(sl.home_state(), mode=0o700, exist_ok=True)
+    try:
+        fd = os.open(os.path.join(sl.home_state(), "budget.lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        yield
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+STALE_AFTER = 1800      # a stored value nobody has refreshed for this long is not defended against a fresh reading
+MAX_AHEAD = {"seven_day": WEEK + 6 * 3600, "five_hour": 6 * 3600}   # no window ends further ahead than its length (+ slack)
+
+
+def _plausible(name, value, now):
+    used, resets = value
+    return 0.0 <= used <= 100.0 and math.isfinite(resets) and 0 < resets <= now + MAX_AHEAD[name]
+
+
+def _merge_window(old, new, authoritative, now, seen_at):
+    """R-212 #4: sessions share one snapshot file and lag each other (weekly 45, 34, 45, 38 within five minutes), so a
+    snapshot never lowers what is stored for the same window while the stored value is fresh. A later window replaces
+    it, an earlier one is ignored. What the user types (`budgit budget record`) is authoritative.
+    -> (value to store, True when the reading was taken: only a taken reading keeps the stored value fresh)."""
+    if authoritative or not isinstance(old, dict) or old.get("used") is None or old.get("resets_at") is None:
+        return new, True
+    if now - (seen_at or 0) > STALE_AFTER:
+        return new, True
+    if old["resets_at"] <= now - WINDOW_JITTER:      # the stored window is over
+        return new, True
+    if new["resets_at"] > old["resets_at"] + WINDOW_JITTER:
+        return new, True
+    if new["resets_at"] < old["resets_at"] - WINDOW_JITTER:
+        return old, False
+    return {"used": max(old["used"], new["used"]), "resets_at": max(old["resets_at"], new["resets_at"])}, \
+        new["used"] >= old["used"]
+
+
+def record(seven_day=None, five_hour=None, extra=None, now=None, authoritative=False):
+    """seven_day / five_hour: (used_percent, resets_at_epoch); extra: (spent_usd, monthly_limit_usd). A reading outside
+    what a window can be (used not in 0..100, an end further away than the window is long) is dropped."""
+    now = now or time.time()
+    with _locked():
+        data = load()
+        limits = data.setdefault("limits", {})
+        seen = data.get("seen") if isinstance(data.get("seen"), dict) else {}
+        for name, value in (("seven_day", seven_day), ("five_hour", five_hour)):
+            if value is not None and _plausible(name, (float(value[0]), float(value[1])), now):
+                new = {"used": float(value[0]), "resets_at": float(value[1])}
+                limits[name], taken = _merge_window(limits.get(name), new, authoritative, now, seen.get(name))
+                if taken:
+                    seen[name] = max(now, seen.get(name) or 0)
+        if not limits:
+            data.pop("limits")
+        data["seen"] = seen
+        if extra is not None and all(math.isfinite(float(x)) and float(x) >= 0 for x in extra):
+            data["extra"] = {"spent": float(extra[0]), "limit": float(extra[1])}
+        data["seen_at"] = max(now, data.get("seen_at") or 0)
+        save(data)
 
 
 def set_override(level):
@@ -178,15 +239,17 @@ def set_override(level):
     if chosen is None:
         raise sl.StudioError("unknown budget level %r (use one of: %s; or %s)"
                              % (level, ", ".join(LEVELS), ", ".join(sorted(LEVEL_ALIASES))))
-    data = load()
-    data["override"] = chosen
-    save(data)
+    with _locked():
+        data = load()
+        data["override"] = chosen
+        save(data)
 
 
 def clear_override():
-    data = load()
-    data.pop("override", None)
-    save(data)
+    with _locked():
+        data = load()
+        data.pop("override", None)
+        save(data)
 
 
 # --- classification ------------------------------------------------------------------------------
@@ -286,8 +349,10 @@ def current(now=None):
                 "source": "override"}
     level, reason = classify(data.get("limits"), prev=data.get("level"), now=now)
     if data.get("level") != level:
-        data["level"] = level
-        save(data)
+        with _locked():                       # re-read under the lock so a merge that just happened is not overwritten
+            fresh = load()
+            fresh["level"] = level
+            save(fresh)
     extra = data.get("extra")
     if extra and level in ("tight", "critical"):
         reason += "; extra usage $%.2f of $%.0f this month (real money once the plan limit is hit)" % (

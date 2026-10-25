@@ -1,6 +1,8 @@
 {
-  "description": "Budgit: input ledger (bound sessions), commit-identity guard (all sessions), real-data guard + push reminder (bound sessions)",
-  "modules": ["./register.jsx"],
+  "description": "Budgit: input ledger (bound sessions), commit-identity guard (all sessions), real-data guard + push reminder (bound sessions); Brote's event line for the floating window (visual only, writes one short line only while the app runs)",
+  "modules": [
+    "./register.jsx"
+  ],
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -9,6 +11,15 @@
             "type": "command",
             "command": "env -u PYTHONDONTWRITEBYTECODE python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" user-prompt-submit",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$HOME/Library/Application Support/BroteWindow/events.log\"; [ -f \"$f\" ] || exit 0; s=/bin/dash; [ -x \"$s\" ] || s=sh; exec \"$s\" \"${CLAUDE_PLUGIN_ROOT}/hooks/brote-event.sh\" prompt",
+            "timeout": 5
           }
         ]
       }
@@ -23,6 +34,15 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$HOME/Library/Application Support/BroteWindow/events.log\"; [ -f \"$f\" ] || exit 0; s=/bin/dash; [ -x \"$s\" ] || s=sh; exec \"$s\" \"${CLAUDE_PLUGIN_ROOT}/hooks/brote-event.sh\" post",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "Stop": [
@@ -32,6 +52,15 @@
             "type": "command",
             "command": "env -u PYTHONDONTWRITEBYTECODE python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" stop",
             "timeout": 30
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$HOME/Library/Application Support/BroteWindow/events.log\"; [ -f \"$f\" ] || exit 0; s=/bin/dash; [ -x \"$s\" ] || s=sh; exec \"$s\" \"${CLAUDE_PLUGIN_ROOT}/hooks/brote-event.sh\" stop",
+            "timeout": 5
           }
         ]
       }
@@ -81,6 +110,15 @@
             "onFailure": "block"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$HOME/Library/Application Support/BroteWindow/events.log\"; [ -f \"$f\" ] || exit 0; s=/bin/dash; [ -x \"$s\" ] || s=sh; exec \"$s\" \"${CLAUDE_PLUGIN_ROOT}/hooks/brote-event.sh\" pre",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SubagentStop": [
@@ -103,6 +141,27 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$HOME/Library/Application Support/BroteWindow/events.log\"; [ -f \"$f\" ] || exit 0; s=/bin/dash; [ -x \"$s\" ] || s=sh; exec \"$s\" \"${CLAUDE_PLUGIN_ROOT}/hooks/brote-event.sh\" fail",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$HOME/Library/Application Support/BroteWindow/events.log\"; [ -f \"$f\" ] || exit 0; s=/bin/dash; [ -x \"$s\" ] || s=sh; exec \"$s\" \"${CLAUDE_PLUGIN_ROOT}/hooks/brote-event.sh\" perm",
+            "timeout": 5
+          }
+        ],
+        "matcher": "permission_prompt"
       }
     ]
   }

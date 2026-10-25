@@ -282,10 +282,9 @@ def on_session_start(inp, project):
         sl.ensure_gitignore(project)          # projects activated before a line existed get it on their next session
     except Exception:                         # a bad .gitignore (Latin-1, a directory) must not cost the user the summary
         sl.log_error("session-start: gitignore step")
-    text = sl.session_summary(project, inp.get("session_id"))
     pointer = brain.session_pointer(project)
     conflict = sl.data_dir_conflict(project)      # R-120: a stale session recreated .studio next to .budgit
-    _context("SessionStart", text + ("\n" + pointer if pointer else "") + ("\n" + conflict if conflict else ""))
+    _context("SessionStart", sl.session_summary(project, inp.get("session_id"), extra=(pointer, conflict)))
 
 
 def on_session_end(inp, project):

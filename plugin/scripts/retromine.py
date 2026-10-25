@@ -46,7 +46,7 @@ def _text_of(rec):
     return ""
 
 
-def is_her_prompt(rec):
+def is_user_prompt(rec):
     if rec.get("type") != "user" or rec.get("isSidechain") or "toolUseResult" in rec:
         return False
     # programmatic runs (SDK scripts, automated reviews) are not the user's typing, whatever their `origin` says
@@ -124,7 +124,7 @@ def prompts(path):
     sid = os.path.basename(path)[:-6]
     win = _blank_window()
     for rec in _records(path):
-        if is_her_prompt(rec):
+        if is_user_prompt(rec):
             yield {"session": sid, "ts": rec.get("timestamp", ""), "epoch": _epoch(rec.get("timestamp")),
                    "text": _text_of(rec).strip(), "before": _before(win)}
             win = _blank_window()

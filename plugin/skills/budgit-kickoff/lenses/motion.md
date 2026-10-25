@@ -2,6 +2,7 @@
 - `impeccable` animate mode + `anthropic-skills:emil-design-eng` for UI motion (if not installed: this lens' checklist below); gsap-skills (official)
   for web animation; hyperframes (official) for trailers/launch videos; Rive/Lottie only when a project
   needs vector assets. Measure on a mid Android + iPhone Low Power before committing.
+- 3D: the `threejs-*` skills (fundamentals, geometry, materials, lighting, shaders, animation, loaders) only for real 3D, scroll timelines or GSAP-level work; simple motion stays CSS/WAAPI (optional; if not installed: this lens' checklist below).
 - Image/keyframe generation: `budgit image "<prompt>" --name <file>` (Codex CLI, the ChatGPT lane, if set up, traced in MANIFEST.jsonl). The user is never the copy-paste proxy. Heavy batches → ask first (plan limits; API is the paid fallback).
 
 ## Motion rules

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds Brote.app from brote.swift with swiftc only (R-151). No network, no elevated rights.
+# Builds Brote.app from brote.swift with swiftc only. No network, no elevated rights.
 # The bundle goes OUTSIDE ~/Documents (iCloud's File Provider stamps Finder metadata on anything made there, and codesign refuses it).
 set -euo pipefail
 export PATH=/usr/bin:/bin
@@ -16,7 +16,8 @@ rm -rf -- "$app" && mkdir -p -- "$app/Contents/MacOS" "$app/Contents/Resources" 
 swiftc -O -swift-version 5 -module-cache-path build/ModuleCache brote.swift -o "$app/Contents/MacOS/Brote" \
   -framework AppKit -framework QuartzCore -framework JavaScriptCore
 cp Info.plist "$app/Contents/Info.plist"
-cp sprites.js say.js menu.json "$app/Contents/Resources/"
+cp sprites.js say.js personality.js director.js menu.json book-icon.json "$app/Contents/Resources/"
+shasum -a 256 brote.swift | cut -c1-12 > "$app/Contents/Resources/build.txt"   # which source built this bundle; START in probe.log prints it
 codesign --force --sign - "$app"
 codesign --verify --strict "$app"
 echo "built $app"

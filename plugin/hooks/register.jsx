@@ -69,10 +69,29 @@ async function startLine($) {
   if (await hasProject($, cwd)) {
     // Last in this step: a refused name throws, and a throw must not skip the rest.
     await $.command.register({ name: 'budgit-status', description: word('cmd.desc_status', 'Show the Budgit status (ledger, budget)') })
+    try {
+      await $.command.register({ name: 'budgit-colour-probe', description: word('cmd.desc_colour_probe', 'Show the status line in colour once (does this screen draw colours?)') })
+    } catch {
+      // The probe is optional.
+    }
   }
 }
 
 function registerLine(on) {
+  // R-206: a one-shot probe. The line is drawn once with ANSI colours (`status --line --ansi`); the next 60 s refresh puts the
+  // plain one back. It shows whether this surface draws colour in `$.ui.status` (unknown on the desktop Code tab).
+  on('command.run', { command: 'budgit-colour-probe' }, async ($) => {
+    try {
+      const cwd = await $.session.cwd()
+      const line = await budgit($, cwd, ['status', '--line', '--ansi'])
+      if (!line) return { text: word('cmd.no_project', 'budgit: no Budgit project here (run: budgit activate <dir>)') }
+      $.ui.status(line)
+      return { text: word('cmd.colour_probe', 'Look at the line under the prompt: green, pink, lilac and blue segments mean this screen draws colour; odd codes or one grey line mean it does not. The plain line comes back within a minute.') }
+    } catch {
+      return { text: word('cmd.status_unavailable', 'budgit: status unavailable') }
+    }
+  })
+
   // Full `budgit status` as the command's text, without a Claude turn.
   on('command.run', { command: 'budgit-status' }, async ($) => {
     try {

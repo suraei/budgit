@@ -6,6 +6,7 @@ The user's words are never passed through the shell: `ledger add --src I-n` copi
 import argparse
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "scripts"))
@@ -165,7 +166,7 @@ def _counts(data):
 
 
 def _status_line(args):
-    """One plain line (<= 80 chars) in the user's language, no emoji (a 2026-10-21 decision), starting with the product
+    """One line (<= 80 chars, plain unless --ansi) in the user's language, no emoji (a 2026-10-21 decision; text glyphs only), starting with the product
     name; the mod shows it as is. Empty and exit 0 when there is nothing to show."""
     opened = _open_project(args)
     if not opened:
@@ -178,38 +179,26 @@ def _status_line(args):
         lang = i18n.detect()
         limits, _fresh = _live_snapshot(args)
         n = _counts(data)
-        parts = [text for count, text in ((n["doing"], i18n.t("status.doing", lang, n=n["doing"])),
-                                          (n["next"], i18n.t("status.queued", lang, n=n["next"]))) if count]
-        line = "budgit  " + (" \u00b7 ".join(parts) if parts else i18n.t("status.nothing", lang))
         now = time.time()
-        extras = []
         o = budget.week_outlook(limits, now=now)
-        if o:
-            # a 2026-10-21 catch: say when the week runs out at today's rate, not a level word
-            day = lambda t: i18n.day_name(time.localtime(t).tm_wday, lang)
-            if o["runs_out"]:
-                word = i18n.t("status.until", lang, day=day(o["runs_out"]))
-            elif o["projected"] is not None and o["projected"] >= 90:
-                word = i18n.t("status.just_until", lang, day=day(o["resets_at"]))
-            else:
-                word = i18n.t("status.reach", lang, day=day(o["resets_at"]))
-            used = int(o["used"])
-            week_short, week_full = i18n.t("status.week", lang, used=used), i18n.t("status.week_arrow", lang, used=used, word=word)
-            extras.append(week_short)
-        stale = len(sl.stale_doing(data, at=now))
-        if stale:
-            extras.append(i18n.t("status.stale_one" if stale == 1 else "status.stale_many", lang, n=stale))
+        out = time.localtime(o["runs_out"]) if o and o["runs_out"] else None
         five = limits.get("five_hour")
-        if isinstance(five, dict) and (five.get("resets_at") or 0) > now and five.get("used") is not None and five["used"] >= 70:
-            extras.append(i18n.t("status.five_hour", lang, used=int(five["used"])))   # the 5-hour window only matters when it is close to the cap
-        for extra in extras:                    # most important first; an extra that would overflow 80 columns is left out
-            if len(line) + 3 + len(extra) <= 80:
-                line += " \u00b7 " + extra
-        if o and week_short in line and len(line) - len(week_short) + len(week_full) <= 80:
-            line = line.replace(week_short, week_full)   # the "when it runs out" words only if they still fit
+        live5 = isinstance(five, dict) and (five.get("resets_at") or 0) > now and five.get("used") is not None
+        forecast = None if not o or o["projected"] is None else "out" if out else "ok"
+        line = sl.status_line({"doing": n["doing"], "next": n["next"], "later": n["later"],
+                               "week": o["used"] if o else None, "forecast": forecast,
+                               "out_day": i18n.day_abbr(out.tm_wday, lang) if out else "",
+                               "out_hour": out.tm_hour if out else 0,
+                               "stale": len(sl.stale_doing(data, at=now)), "h5": five["used"] if live5 else 0},
+                              lang, ansi=args.ansi, extras=args.extras)
         print(line)
     except Exception:
         pass   # a status line must never break its caller
+
+
+def _id_number(item):
+    m = re.match(r"^R-(\d+)$", item["id"])
+    return int(m.group(1)) if m else -1
 
 
 def _brote_json(args):
@@ -228,11 +217,16 @@ def _brote_json(args):
         out = budget.brote_state(limits, now=now)
         lang = i18n.detect()
         out.update({"lang": lang, "t": i18n.brote_strings(lang)})   # the mod and the floating window carry no catalog of their own
-        item = lambda i: {"id": i["id"], "text": i["text"][:90].replace("\n", " "), "state": sl.claim_state(i)}
+        item = lambda i: {"id": i["id"], "text": i["text"][:90].replace("\n", " "), "title": sl.item_title(i), "state": sl.claim_state(i)}
         doing = [i for i in data["items"] if i["status"] == "doing"]
         queue = [i for i in data["items"] if i["status"] == "open" and i.get("phase") != "later"]
         later = [i for i in data["items"] if i["status"] == "open" and i.get("phase") == "later"]
-        out.update({"version": 1, "counts": dict(_counts(data), done=sum(1 for i in data["items"] if i["status"] in ("done", "verified"))),
+        newest = lambda items: sorted(items, key=_id_number, reverse=True)   # ids without a number (legacy) sort last
+        closed = [i for i in data["items"] if i["status"] in ("done", "verified")]
+        out.update({"version": 2, "total": sum(1 for i in data["items"] if i["status"] != "dropped"), "done_total": len(closed),
+                    "queue_recent": [item(i) for i in newest(queue)][:8],
+                    "done_recent": [{"id": i["id"], "title": sl.item_title(i)} for i in newest(closed)][:3],
+                    "counts": dict(_counts(data), done=sum(1 for i in data["items"] if i["status"] in ("done", "verified"))),
                     "stale": [i["id"] for i in sl.stale_doing(data, at=now)],
                     "idle": [i["id"] for i in doing if sl.claim_state(i) == "idle"],
                     "doing": [item(i) for i in doing][:20], "queue": [item(i) for i in queue][:12],
@@ -402,12 +396,13 @@ def cmd_ledger(args):
             if not src:                         # P8: a first item needs no inbox entry made by hand
                 if args.text is None:
                     raise sl.StudioError("pass --text \"what you want built\" (or --src I-n for an input already in the inbox)")
+                sl.check_title(args.title)         # a bad --title adds nothing, not even an inbox entry
                 inbox_id = sl.append_inbox(project, sl.redact(args.text), SESSION, "manual")
                 if not inbox_id:
                     raise sl.StudioError("item text is empty")
                 src = [inbox_id]
             text = args.text if args.text is not None else _inbox_text(project, src)
-            it = sl.add_item(data, text, src, phase=args.phase or "")
+            it = sl.add_item(data, text, src, phase=args.phase or "", title=args.title)
             result = "%s -> open" % it["id"]
         elif args.op == "link":
             it = sl.link(data, args.id, args.src)
@@ -453,10 +448,6 @@ def cmd_import(args):
 def cmd_prepare(args):
     project = sl.resolve_project(args.project)
     if args.approve:
-        cmds = sl.load_project_config(project).get("verify", {}).get("prepare") or []
-        print("budgit: approving %d prepare command(s) that will run as shell in %s:" % (len(cmds), project))
-        for c in cmds:
-            print("  " + c)
         sl.approve_prepare(project)
         print("approved (stored in ~/.budgit/approved_prepare.json; any change needs a new approval)")
         return
@@ -499,7 +490,7 @@ def cmd_budget(args):
         pair = lambda used, resets: (used, resets) if used is not None and resets is not None else None
         budget.record(seven_day=pair(args.seven_day, args.seven_day_resets),
                       five_hour=pair(args.five_hour, args.five_hour_resets),
-                      extra=pair(args.extra_spent, args.extra_limit))
+                      extra=pair(args.extra_spent, args.extra_limit), authoritative=True)
     cur = budget.current()
     print("budget: %s (%s) — %s" % (cur["level"], cur["source"], cur["reason"]))
     print(budget.policy_text(cur["level"]))
@@ -752,6 +743,16 @@ def _t(key, **fmt):
     return i18n.t(key, **fmt)
 
 
+def _no_abbrev(parser):
+    """R-212 #1: a flag must be spelled out. argparse took `prepare --app` as `--approve`, which the Bash guard's
+    literal match did not see, so a repo could get its own shell command approved without the guard asking."""
+    parser.allow_abbrev = False
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for child in action.choices.values():
+                _no_abbrev(child)
+
+
 def build_parser():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--project", default=argparse.SUPPRESS,
@@ -914,12 +915,12 @@ def build_parser():
     c.set_defaults(func=cmd_scout)
     s = sub.add_parser("setup", parents=[common], help="first run: GitHub noreply identity, hub and projects folders")
     s.add_argument("--account", action="append", metavar="LOGIN=NOREPLY", help="repeatable")
-    s.add_argument("--default-account"); s.add_argument("--hub", required=True)
-    s.add_argument("--projects-root", required=True)
-    s.add_argument("--codex", choices=("on", "off"), default="off", help="ChatGPT/Codex lane (needs `codex` login)")
+    s.add_argument("--default-account"); s.add_argument("--hub", help="required on the first run")
+    s.add_argument("--projects-root", help="required on the first run")
+    s.add_argument("--codex", choices=("on", "off"), help="ChatGPT/Codex lane (needs `codex` login; default off)")
     s.add_argument("--push-after-commit", choices=sl.PUSH_MODES,
                    help="after a commit: ask the user before pushing (default) | always push | never mention it")
-    s.add_argument("--force", action="store_true", help="change an existing config (other keys are kept)")
+    s.add_argument("--force", action="store_true", help="change an existing config: only the flags you pass change, every other key is kept")
     s.set_defaults(func=cmd_setup)
     s = sub.add_parser("hub", parents=[common], help="print the hub folder (research, lessons, projects, ideas)")
     s.set_defaults(func=cmd_hub)
@@ -931,6 +932,8 @@ def build_parser():
     s.add_argument("value", nargs="?", help="en, es or auto (follow Claude Code's language setting)")
     s.set_defaults(func=cmd_lang)
     s = sub.add_parser("status", parents=[common])
+    s.add_argument("--ansi", action="store_true", help="with --line: colour each segment (24-bit ANSI); plain without it")
+    s.add_argument("--extras", action="store_true", help="with --line: also the stalled count and the 5 h window (off by default, R-209)")
     s.add_argument("--line", action="store_true", help="one short line for the Claude Code mod (empty outside a project)")
     s.add_argument("--brote", action="store_true", help="JSON for the Brote module and its notebook (empty outside a project)")
     s.add_argument("--limits-json", help="with --line/--brote: the mod's live $.session.usage().rateLimits, recorded first")
@@ -943,6 +946,7 @@ def build_parser():
     o.add_argument("--src", action="append", help="inbox ids (I-n) the item answers; omit with --text")
     o.add_argument("--text", help="the item's text; alone it also records itself in the inbox. With --src: only for items without inbox text (e.g. --src legacy)")
     o.add_argument("--phase")
+    o.add_argument("--title", help="short label for the panels, 1 to 46 characters, Spanish, no final full stop (R-153); the text stays the user's words")
     o = ops.add_parser("link", parents=[common]); o.add_argument("id"); o.add_argument("--src", action="append", required=True)
     o = ops.add_parser("ack", parents=[common]); o.add_argument("ids", nargs="+"); o.add_argument("--note", required=True)
     o = ops.add_parser("set", parents=[common]); o.add_argument("id"); o.add_argument("status")
@@ -955,6 +959,7 @@ def build_parser():
     o = ops.add_parser("drop", parents=[common]); o.add_argument("id"); o.add_argument("--by-user", required=True)
     o = ops.add_parser("list", parents=[common]); o.add_argument("--open", action="store_true")
     ops.add_parser("accept-edit", parents=[common])
+    _no_abbrev(p)
     return p
 
 

@@ -25,6 +25,6 @@ Must-obey rules live HERE (references often go unread). Unclear or ugly = useles
   Open every screenshot you take. Scoring: reference/design-rubric.md (fresh critic, not the builder).
 - Run `impeccable` itself for any UI (shape → craft → audit/polish; if not installed: this lens and the rubric); `design:ux-copy`, `design:user-research` (if not installed: plain sentence-case copy, no filler).
 - Pillar decisions get multi-screen interactive prototypes per option.
-- Images/keyframes: `budgit image "<prompt>" --name <file>` (Codex CLI, the ChatGPT lane, if set up, traced in
-  MANIFEST.jsonl). The user is never the copy-paste proxy. Heavy batches → ask first.
-- Diagrams (Diagram Design etc.): install per project only, pinned, scripts read first.
+- Images/keyframes: `budgit image "<prompt>" --name <file>` (Codex CLI, the ChatGPT lane, if set up, traced in MANIFEST.jsonl). The user is never the copy-paste proxy. Heavy batches → ask first.
+- Landing pages: `taste-v2`, `high-end-visual-design` (optional; apps and dashboards stay on `impeccable`; if not installed: this lens and the rubric). Decks: `frontend-slides` (optional; self-host fonts before sending; if not installed: plain HTML sections).
+- Diagrams and charts: `diagram-design` for diagrams, `dataviz` for charts and dashboards (optional; if not installed: a plain SVG or table with labelled axes). Anything else: install per project only, pinned, scripts read first.

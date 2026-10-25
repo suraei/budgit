@@ -1,4 +1,4 @@
-// Brote as a floating macOS window (R-151). One file, two layers:
+// Brote as a floating macOS window. One file, two layers:
 //   CORE  = numbers, structs and JavaScriptCore glue. Foundation + JavaScriptCore only, so it builds and self-tests with no window server:
 //           swiftc -D CORE_ONLY ... && ./core --selftest --assets <this folder>
 //   SHELL = the AppKit part (one panel, timers, mouse), inside `#if !CORE_ONLY`. Compile-checked, never run by the tests.
@@ -26,6 +26,9 @@ enum K {
     static let perchMargin = 40.0
     static let statusTimeout = 5.0, statusEvery = 30.0
     static let hitMargin = 1                                // art px
+    static let bookW = 60.0, bookH = 84.0                   // 20 x 28 art px, the same height as him
+    static let bookGap = 8.0, bookRoom = 68.0, sideDeadband = 24.0
+    static let libretaW = 380.0, libretaGap = 12.0, libretaRadius = 14.0, titleCap = 46
     static let logCap = 200_000
     static let bundleID = "es.budgit.brote.float"
     static let claudeBundle = "com.anthropic.claudefordesktop"
@@ -91,7 +94,11 @@ struct Grid: Equatable {
     }
     /// From the JSON the JS shim returns: an array of rows, each cell a colour string or null.
     init?(json: String) {
-        guard let d = json.data(using: .utf8), let rows = (try? JSONSerialization.jsonObject(with: d)) as? [[Any]], let first = rows.first else { return nil }
+        guard let d = json.data(using: .utf8), let rows = (try? JSONSerialization.jsonObject(with: d)) as? [[Any]] else { return nil }
+        self.init(rows: rows)
+    }
+    init?(rows: [[Any]]) {
+        guard let first = rows.first else { return nil }
         w = first.count; h = rows.count; cells = []
         for r in rows {
             guard r.count == w else { return nil }
@@ -99,6 +106,12 @@ struct Grid: Equatable {
         }
     }
     init(w: Int, h: Int, cells: [RGBA?]) { self.w = w; self.h = h; self.cells = cells }
+}
+
+/// True when the picture on screen is certainly still right: the sprite runtime gave the same key as last time and he faces the same way.
+func frameUnchanged(key: String?, cachedKey: String?, flip: Bool, cachedFlip: Bool) -> Bool {
+    guard let k = key, let c = cachedKey else { return false }
+    return k == c && flip == cachedFlip
 }
 
 struct HitMask {
@@ -354,9 +367,343 @@ func hubTrusted(_ hub: String, fm: FileManager = .default) -> Bool {
     return names.filter { $0.hasSuffix(".py") }.allSatisfy { sound(scripts + "/" + $0, .typeRegular) }
 }
 
+
+// MARK: - the book: a second body with his physics, its picture, its place
+
+/// What the book looks like. `open` beats `hover` (being held counts as hover) beats `marked` beats `closed`.
+enum BookLook: String { case closed, marked, hover, open }
+
+func bookLook(open: Bool, hover: Bool, held: Bool, stale: Int) -> BookLook {
+    open ? .open : (hover || held) ? .hover : stale > 0 ? .marked : .closed
+}
+/// The ribbon stays while the pointer is on the book and goes while the Libreta is open (the panel lists the stale rows itself).
+func bookRibbon(look: BookLook, stale: Int) -> Bool { look != .open && stale > 0 }
+
+/// Where its bottom-left corner may be: the visible frame, the whole book inside.
+func bookBounds(_ v: Rc) -> Bounds { Bounds(minX: v.minX, maxX: max(v.minX, v.maxX - K.bookW), floorY: v.minY, ceilY: max(v.minY, v.maxY - K.bookH)) }
+
+/// Always entirely inside the visible frame of the screen under its centre.
+func bookClamp(_ p: Pt, screens: [Rc]) -> Pt {
+    guard !screens.isEmpty else { return p }
+    let b = bookBounds(screens[screenIndex(for: Pt(p.x + K.bookW / 2, p.y + K.bookH / 2), in: screens)])
+    return Pt(clamp(p.x, b.minX, b.maxX), clamp(p.y, b.floorY, b.ceilY))
+}
+
+/// The first place: on his right (8 pt from his edge, his y); on his left when fewer than 68 pt remain on his right.
+func bookSpawn(sprite: Pt, visible: Rc) -> Pt {
+    let edge = sprite.x + K.spriteW
+    let p = visible.maxX - edge >= K.bookRoom ? Pt(edge + K.bookGap, sprite.y) : Pt(sprite.x - K.bookGap - K.bookW, sprite.y)
+    let b = bookBounds(visible)
+    return Pt(clamp(p.x, b.minX, b.maxX), clamp(p.y, b.floorY, b.ceilY))
+}
+
+enum BookAction: Equatable { case stay, fly }
+/// A release below throw speed leaves the book exactly where it was dropped (kept inside the bounds); at throw speed it flies.
+func bookRelease(speed: Double, pos: Pt, bounds: Bounds) -> (action: BookAction, pos: Pt) {
+    (isThrow(speed: speed) ? .fly : .stay, Pt(clamp(pos.x, bounds.minX, bounds.maxX), clamp(pos.y, bounds.floorY, bounds.ceilY)))
+}
+
+/// A press is a mouse-up that did not travel 3 pt, on an opaque pixel of the book.
+func isBookPress(from a: Pt, to b: Pt, overBook: Bool) -> Bool { overBook && !isDrag(from: a, to: b) }
+
+enum PressTarget { case book, brote, none }
+func pressTarget(overBook: Bool, overBrote: Bool) -> PressTarget { overBook ? .book : overBrote ? .brote : .none }
+
+/// Which side the book is on, with a deadband so it cannot flicker while he strolls past it: the previous side is kept
+/// unless the centres differ by 24 pt or more. The first value is the sign of the difference. No book on screen: no side.
+func bookOnLeft(bookOn: Bool, prevLeft: Bool?, bookCx: Double, broteCx: Double) -> Bool {
+    guard bookOn else { return false }
+    let d = bookCx - broteCx
+    if let p = prevLeft, abs(d) < K.sideDeadband { return p }
+    return d < 0
+}
+/// Pointing mirrors his frame toward a book on his left; otherwise he faces left only while walking left.
+func faceFlip(pointing: Bool, bookOnLeft: Bool, facingLeft: Bool, walking: Bool) -> Bool { pointing ? bookOnLeft : (facingLeft && walking) }
+/// The Libreta lists the stale rows itself: while it is open the sprite engine is told there are none.
+func spriteStale(real: Int, panelOpen: Bool) -> Int { panelOpen ? 0 : real }
+
+/// Drag, throw and rest, the state both bodies share: the 3 pt threshold, the 0.1 s pointer samples, the fly step. No window, no timer.
+struct Dragger {
+    enum Mode { case rest, held(grab: Pt, start: Pt, moved: Bool), flying(body: Body, bounds: Bounds, dizzy: Bool) }
+    enum Drag: Equatable { case idle, started(Pt), moving(Pt) }          // the origin the body should take
+    enum Release: Equatable { case notHeld, click, moved(velocity: Pt) }
+    struct FlightTick { var body: Body; var landed: Bool; var dizzy: Bool }
+    private(set) var mode = Mode.rest
+    private(set) var samples: [Sample] = []
+    var isHeld: Bool { if case .held = mode { return true }; return false }
+    var isDragging: Bool { if case .held(_, _, let moved) = mode { return moved }; return false }
+    var isFlying: Bool { if case .flying = mode { return true }; return false }
+    var isRest: Bool { if case .rest = mode { return true }; return false }
+
+    mutating func press(at m: Pt, origin: Pt, now: Double) {
+        mode = .held(grab: m - origin, start: m, moved: false)
+        samples = [Sample(t: now, p: m)]
+    }
+    mutating func drag(to m: Pt, now: Double) -> Drag {
+        guard case .held(let grab, let start, let was) = mode else { return .idle }
+        var started = false
+        if !was {
+            guard isDrag(from: start, to: m) else { return .idle }
+            started = true
+        }
+        mode = .held(grab: grab, start: start, moved: true)
+        samples.append(Sample(t: now, p: m)); samples.removeAll { now - $0.t > 0.25 }
+        return started ? .started(m - grab) : .moving(m - grab)
+    }
+    mutating func release(now: Double) -> Release {
+        guard case .held(_, _, let moved) = mode else { return .notHeld }
+        mode = .rest
+        return moved ? .moved(velocity: throwVelocity(samples, now: now)) : .click
+    }
+    mutating func fly(_ body: Body, in bounds: Bounds, dizzy: Bool) { mode = .flying(body: body, bounds: bounds, dizzy: dizzy) }
+    mutating func step(dt: Double) -> FlightTick? {
+        guard case .flying(var body, let bounds, let dizzy) = mode else { return nil }
+        let landed = stepFly(&body, dt: dt, in: bounds) == .landed
+        mode = landed ? .rest : .flying(body: body, bounds: bounds, dizzy: dizzy)
+        return FlightTick(body: body, landed: landed, dizzy: dizzy)
+    }
+}
+
+/// Where the book is. `pos` is nil until the first feed of this run (no feed, no book). Written to the store only on a landing.
+final class BookPlace {
+    private(set) var pos: Pt?
+    let store: Store
+    var on: Bool { pos != nil }
+    init(store: Store) { self.store = store }
+    func firstFeed(sprite: Pt, screens: [Rc]) {
+        guard pos == nil else { return }
+        if let x = store.number("bookX"), let y = store.number("bookY") { pos = bookClamp(Pt(x, y), screens: screens) }
+        else { pos = bookSpawn(sprite: sprite, visible: screens.isEmpty ? Rc(0, 0, 1440, 900) : screens[screenIndex(for: spriteCentre(sprite), in: screens)]) }
+    }
+    func move(to p: Pt) { if pos != nil { pos = p } }
+    func land(at p: Pt, screens: [Rc]) {
+        let c = bookClamp(p, screens: screens)
+        pos = c
+        store.setNumber("bookX", c.x); store.setNumber("bookY", c.y)
+    }
+    /// A display went away or the Dock moved: back inside, which counts as one landing. True when it moved.
+    @discardableResult
+    func screensChanged(_ screens: [Rc]) -> Bool {
+        guard let p = pos else { return false }
+        let c = bookClamp(p, screens: screens)
+        guard c != p else { return false }
+        land(at: c, screens: screens)
+        return true
+    }
+}
+
+/// The book's colours: his state's palette (`c C l L s o` tint it like his cheeks and leaf) plus the one new key `k`.
+func bookPalette(_ pal: [String: String]) -> [Character: RGBA] {
+    var out: [Character: RGBA] = [:]
+    for (k, v) in pal where k.count == 1 { if let c = parseColor(v) { out[Character(k)] = c } }
+    // the book is brown, as in the new sprite: cover #a8683f, spine and border #5f3b27, label #f0c862, pages #fff3d6 (the same in every state; the ribbon keeps its red)
+    for (k, v) in ["o": "#5f3b27", "G": "#5f3b27", "C": "#a8683f", "c": "#a8683f", "k": "#bd7f55", "l": "#f0c862", "L": "#f0c862", "s": "#5f3b27", "W": "#fff3d6", "g": "#e6cf9e"] { out[Character(k)] = parseColor(v) }
+    return out
+}
+
+/// The art as data (book-icon.json, copied from the plugin's design folder): book states, the panel's icons and the progress bar.
+struct BookIcon {
+    struct Part { var x: Int, y: Int, rows: [String] }
+    struct St { var parts: [String], lift: Int, half: Double, spark: (Int, Int)? }
+    var w = 0, h = 0, ground = 0, barW = 0, barH = 0
+    var parts: [String: Part] = [:], states: [BookLook: St] = [:], panel: [String: [String]] = [:]
+    init?(dir: String) {
+        guard let d = try? Data(contentsOf: URL(fileURLWithPath: dir + "/book-icon.json")), let o = (try? JSONSerialization.jsonObject(with: d)) as? Dict,
+              let box = o["box"] as? Dict, let bw = box["w"] as? Int, let bh = box["h"] as? Int, let gr = box["ground_row"] as? Int,
+              let ps = o["parts"] as? [String: Dict], let sts = o["states"] as? [String: Dict],
+              let pi = o["panel_icons"] as? [String: Any], let bar = o["progress_bar"] as? Dict, let barw = bar["w"] as? Int, let barh = bar["h"] as? Int else { return nil }
+        w = bw; h = bh; ground = gr; barW = barw; barH = barh
+        for (n, p) in ps { if let rows = p["rows"] as? [String] { parts[n] = Part(x: p["x"] as? Int ?? 0, y: p["y"] as? Int ?? 0, rows: rows) } }
+        for (n, s) in sts {
+            guard let look = BookLook(rawValue: n), let pl = s["parts"] as? [String], let half = (s["shadow_half"] as? NSNumber)?.doubleValue else { return nil }
+            let sp = s["spark"] as? [Int]
+            states[look] = St(parts: pl, lift: s["lift"] as? Int ?? 0, half: half, spark: sp.flatMap { $0.count == 2 ? ($0[0], $0[1]) : nil })
+        }
+        for (n, v) in pi { if let rows = v as? [String] { panel[n] = rows } }
+        guard states.count == 4, parts["closed"] != nil, parts["open"] != nil else { return nil }
+    }
+    /// The picture of one state. The ribbon is a flag of its own (stale items), never drawn on the open book.
+    func grid(look: BookLook, ribbon: Bool, pal: [Character: RGBA]) -> Grid {
+        var cells = [RGBA?](repeating: nil, count: w * h)
+        func put(_ x: Int, _ y: Int, _ c: RGBA?) { if let c = c, x >= 0, x < w, y >= 0, y < h { cells[y * w + x] = c } }
+        func stamp(_ rows: [String], _ x0: Int, _ y0: Int) {
+            for (j, row) in rows.enumerated() { for (i, ch) in row.enumerated() where ch != "." { put(x0 + i, y0 + j, pal[ch]) } }
+        }
+        guard let st = states[look] else { return Grid(w: w, h: h, cells: cells) }
+        let lo = Int((Double(w) / 2 - st.half).rounded()), hi = Int((Double(w) / 2 + st.half).rounded())
+        for x in lo..<hi { put(x, ground, parseColor((x == lo || x == hi - 1) ? "rgba(90,70,120,.06)" : "rgba(90,70,120,.14)")) }
+        for n in st.parts where n != "ribbon" { if let p = parts[n] { stamp(p.rows, p.x, p.y - st.lift) } }
+        if ribbon && look != .open, let r = parts["ribbon"] { stamp(r.rows, r.x, r.y - st.lift) }
+        if let sp = st.spark, let s = parts["spark"] { stamp(s.rows, sp.0, sp.1) }
+        return Grid(w: w, h: h, cells: cells)
+    }
+}
+
+extension BookIcon {
+    /// The progress bar: 62 x 5 art px, outline `o`, the filled part `l` (rows 1-2) and `L` (row 3) up to `fill`, the rest `P`.
+    func barGrid(fill: Int, pal: [Character: RGBA]) -> Grid {
+        let bw = max(barW, 3), bh = max(barH, 3)
+        var cells = [RGBA?](repeating: nil, count: bw * bh)
+        for y in 0..<bh { for x in 0..<bw {
+            let edge = y == 0 || y == bh - 1 || x == 0 || x == bw - 1
+            let ch: Character = edge ? "o" : (x <= fill ? (y == bh - 2 ? "L" : "l") : "P")
+            cells[y * bw + x] = pal[ch]
+        } }
+        return Grid(w: bw, h: bh, cells: cells)
+    }
+    /// One of the panel's 8 x 8 icons (doing, next, done, later), nil when the name is not in the art file.
+    func iconGrid(_ name: String, pal: [Character: RGBA]) -> Grid? {
+        guard let rows = panel[name], let first = rows.first else { return nil }
+        let iw = first.count
+        var cells = [RGBA?](repeating: nil, count: iw * rows.count)
+        for (j, row) in rows.enumerated() { for (i, ch) in row.enumerated() where ch != "." && i < iw { cells[j * iw + i] = pal[ch] } }
+        return Grid(w: iw, h: rows.count, cells: cells)
+    }
+}
+
+// MARK: - the Libreta: where it opens, what it lists
+
+/// 60 art px of bar, full when everything is done.
+func barFill(done: Int, total: Int) -> Int {
+    guard total > 0, done > 0 else { return 0 }
+    return min(60, Int((60.0 * Double(done) / Double(total)).rounded()))
+}
+
+/// Beside Claude's window when there is room, inside its right edge when there is not, and on the book's half of the screen
+/// (12 pt in from the edge, full height) with no Claude window. Never taller than the visible frame, never outside it.
+func libretaRect(claude: Rc?, visible: Rc, bookCentre: Pt?) -> Rc {
+    let w = K.libretaW, gap = K.libretaGap
+    guard let c = claude else {
+        let left = bookCentre.map { $0.x < visible.center.x } ?? false
+        return Rc(left ? visible.minX + gap : visible.maxX - w - gap, visible.minY, w, visible.h)
+    }
+    let h = min(c.h, visible.h)
+    var x = c.maxX + gap
+    if x + w > visible.maxX { x = min(c.maxX, visible.maxX) - w }
+    x = max(visible.minX, x)
+    return Rc(x, clamp(c.y, visible.minY, visible.maxY - h), w, h)
+}
+
+/// The panel is a rounded rectangle: its four corners let the pointer through.
+func libretaOpaque(_ p: Pt, size: Pt, radius: Double = K.libretaRadius) -> Bool {
+    guard p.x >= 0, p.y >= 0, p.x < size.x, p.y < size.y else { return false }
+    let cx = p.x < radius ? radius : (p.x > size.x - radius ? size.x - radius : p.x)
+    let cy = p.y < radius ? radius : (p.y > size.y - radius ? size.y - radius : p.y)
+    return hypot(p.x - cx, p.y - cy) <= radius
+}
+
+/// Up to 46 characters, cut at a word with "…" when longer.
+func capTitle(_ s: String, limit: Int = K.titleCap) -> String {
+    let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard t.count > limit else { return t }
+    let head = String(t.prefix(limit - 1))
+    let atWord = t[t.index(t.startIndex, offsetBy: limit - 1)] == " "
+    if !atWord, let sp = head.lastIndex(of: " "), head.distance(from: head.startIndex, to: sp) > 8 {
+        return String(head[..<sp]).trimmingCharacters(in: .whitespaces) + "…"
+    }
+    return head.trimmingCharacters(in: .whitespaces) + "…"
+}
+
+/// Version 1 feeds carry no title: the text up to its first separator, capitalised. A head under 3 characters takes what follows.
+func autoTitle(_ text: String) -> String {
+    var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    for _ in 0..<2 {
+        let cuts = [" (", ": ", " — ", " – ", ". ", " = "].compactMap { s.range(of: $0) }
+        guard let r = cuts.min(by: { $0.lowerBound < $1.lowerBound }) else { break }
+        let head = String(s[..<r.lowerBound])
+        if head.count < 3, s[r].hasPrefix(":") { s = String(s[r.upperBound...]).trimmingCharacters(in: .whitespaces); continue }
+        s = head; break
+    }
+    guard let f = s.first else { return s }
+    return capTitle(f.uppercased() + s.dropFirst())
+}
+
+struct LibretaRow: Equatable { var id: String, title: String, stale: Bool, paused: Bool, caption: String? }
+struct LibretaSection: Equatable { var key: String, heading: String, count: Int, rows: [LibretaRow], more: String?, empty: String? }
+struct LibretaProgress: Equatable { var fill: Int?; var caption: String }
+struct LibretaModel: Equatable {
+    var title: String, head: String, old: String?
+    var progress: LibretaProgress?
+    var sections: [LibretaSection]
+    var parked: String?
+}
+
+private func intOf(_ v: Any?) -> Int { (v as? NSNumber)?.intValue ?? 0 }
+private func fillT(_ s: String?, _ vars: [String: String] = [:]) -> String {
+    var out = s ?? ""
+    for (k, v) in vars { out = out.replacingOccurrences(of: "{" + k + "}", with: v) }
+    return out
+}
+
+/// Everything the panel prints, from the feed alone. Words come from the feed's catalog; a missing key prints nothing rather than a wrong word.
+func libretaModel(feed: Dict, old: Bool) -> LibretaModel {
+    let t = (feed["t"] as? Dict ?? [:]).compactMapValues { $0 as? String }
+    let counts = feed["counts"] as? Dict ?? [:]
+    let v2 = intOf(feed["version"]) >= 2
+    let staleIds = Set((feed["stale"] as? [Any] ?? []).compactMap { $0 as? String })
+    let idleIds = Set((feed["idle"] as? [Any] ?? []).compactMap { $0 as? String })
+    func rows(_ key: String) -> [LibretaRow] {
+        (feed[key] as? [Dict] ?? []).map { d in
+            let id = d["id"] as? String ?? ""
+            let given = (d["title"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            let title = given.isEmpty ? autoTitle(d["text"] as? String ?? "") : capTitle(given)
+            let stale = staleIds.contains(id), paused = idleIds.contains(id) || (d["state"] as? String) == "idle"
+            let cap = stale ? t["book.stale_cap"] : (paused ? t["book.paused"].map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " ·")) } : nil)
+            return LibretaRow(id: id, title: title, stale: stale, paused: paused && !stale, caption: cap)
+        }
+    }
+    let doing = rows("doing"), doingRows = doing.filter { $0.stale } + doing.filter { !$0.stale }
+    func section(_ key: String, heading: [String], empty: String, rows r: [LibretaRow], count: Int, moreKey: String) -> LibretaSection {
+        let n = max(count, r.count)
+        let more = n > r.count ? fillT(t[moreKey] ?? t["book.more"], ["n": String(n - r.count)]) : nil
+        let hd = heading.compactMap { t[$0] }.first ?? ""
+        return LibretaSection(key: key, heading: hd, count: n, rows: r, more: more,
+                              empty: r.isEmpty ? (t[empty] ?? t["book.nothing"]) : nil)
+    }
+    var sections = [
+        section("doing", heading: ["book.h_doing", "book.now"], empty: "book.empty_doing", rows: doingRows, count: intOf(counts["doing"]), moreKey: "book.more"),
+        section("next", heading: ["book.h_next", "book.queue"], empty: "book.empty_next", rows: rows(v2 ? "queue_recent" : "queue"), count: intOf(counts["next"]),
+                moreKey: v2 ? "book.more_newest" : "book.more")]
+    var progress: LibretaProgress?
+    if v2 {
+        sections.append(section("done", heading: ["book.h_done"], empty: "book.empty_done", rows: rows("done_recent"), count: intOf(counts["done"]), moreKey: "book.more"))
+        let total = intOf(feed["total"]), done = intOf(feed["done_total"])
+        progress = total > 0
+            ? LibretaProgress(fill: barFill(done: max(0, done), total: total),
+                              caption: fillT(t["book.progress"], ["done": String(done), "total": String(total), "pct": String(Int((100.0 * Double(done) / Double(total)).rounded()))]))
+            : LibretaProgress(fill: nil, caption: t["book.progress_none"] ?? "")
+    }
+    let nDoing = max(intOf(counts["doing"]), doing.count), nNext = intOf(counts["next"]), later = intOf(counts["later"])
+    let head: String
+    if !staleIds.isEmpty { head = t[staleIds.count == 1 ? "book.head_stale_one" : "book.head_stale_many"] ?? "" }
+    else if nDoing > 0 { head = fillT(t[nDoing == 1 ? "book.head_one" : "book.head_many"], ["n": String(nDoing)]) }
+    else if nNext > 0 { head = fillT(t["book.head_quiet"], ["n": String(nNext)]) }
+    else { head = t["book.head_empty"] ?? "" }
+    return LibretaModel(title: t["book.button"] ?? "", head: head, old: old ? t["book.old"] : nil, progress: progress, sections: sections,
+                        parked: later > 0 ? fillT(t[later == 1 ? "book.parked_one" : "book.parked_many"], ["n": String(later)]) : nil)
+}
+
 // MARK: - the data line
 
 typealias Dict = [String: Any]
+
+/// the new whole lines of the events file since `offset` (the plugin's hook channel). Only a regular file that I own is read, at most 64 KB at a time,
+/// never past the last newline; a file that shrank starts again; one over 256 KB is emptied (the hooks append, so that is safe). Returns nil when there is nothing new.
+func eventsRead(path: String, offset: UInt64) -> (text: String, offset: UInt64)? {
+    var st = stat()
+    guard stat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_uid == getuid() else { return nil }
+    let size = UInt64(st.st_size)
+    if size > 262_144 { truncate(path, 0); return ("", 0) }
+    let from = size < offset ? 0 : offset
+    if size == from { return from == offset ? nil : ("", from) }
+    guard let h = FileHandle(forReadingAtPath: path) else { return nil }
+    defer { try? h.close() }
+    do { try h.seek(toOffset: from) } catch { return nil }
+    let data = h.readData(ofLength: 65_536)
+    guard let nl = data.lastIndex(of: 10) else { return data.count >= 65_536 ? ("", from + UInt64(data.count)) : nil }
+    let whole = data.prefix(nl + 1)
+    return (String(decoding: whole, as: UTF8.self), from + UInt64(whole.count))
+}
 
 func parseStatus(_ data: Data) -> Dict? {
     guard let o = (try? JSONSerialization.jsonObject(with: data)) as? Dict, o["state"] is String else { return nil }
@@ -495,28 +842,43 @@ final class Probe {
 final class PetBridge {
     let ctx = JSContext()!
     var lastError: String?
+    private(set) var generation = 0, cfgCalls = 0      // a new Pet each time make() runs; how many times the settings went to JS
     static let shim = #"""
-    var __p = null;
-    function __mk(s){ __p = new Pet(s); }
+    var __p = null, __d = null, __bookOn = false;
+    function __mk(s){ __p = new Pet(s);
+      if (typeof DIRECTOR !== 'undefined' && typeof PERSONALITY !== 'undefined') { if (!__d) __d = new DIRECTOR.Director({}); __d.attach(__p); } }
+    function __S(){ var S = __p.spec(), D = __d ? __d.frameSpec() : null; if (D && S.armR !== 'point') S = D; if (__bookOn) S.ex = S.ex.filter(function(e){ return e[0] !== 'book'; }); return S; }
     function __cfg(j){ var c = JSON.parse(j);
       var want = Object.prototype.hasOwnProperty.call(PALS, c.state) ? c.state : 'contento';
+      if (__d) __d.setState(want);
       if (want !== __p.state) { var was = __p.state; __p.setState(want); if (was === 'dormido') __p.do('wake'); }
-      __p.h5 = c.h5|0; __p.stale = c.stale|0; __p.held = !!c.held; __p.hover = !!c.hover; __p.walking = !!c.walking; }
-    function __tick(){ __p.tick(); }
+      __p.h5 = c.h5|0; __p.stale = c.stale|0; __p.held = !!c.held; __p.hover = !!c.hover; __p.walking = !!c.walking; __bookOn = !!c.bookOn; }
+    function __tick(){ __p.tick(); if (__d) __d.tick(); }
     function __do(a){ __p.do(a); }
     function __dz(b){ __p.dizzyNext = !!b; }
-    function __frame(){ return JSON.stringify(__p.frame()); }
-    function __hitGrid(){ var S = __p.spec(); S.ex = []; S.bubble = -1; S.fallen = false; return JSON.stringify(compose(S, __p.pal())); }
+    function __frame(){ var S = __S(); return JSON.stringify({g: compose(S, __p.pal()), pt: S.armR === 'point'}); }
+    function __pal(s){ return JSON.stringify(Object.prototype.hasOwnProperty.call(PALS, s) ? PALS[s] : PALS.contento); }
+    function __flags(){ return '|' + (__d && __d.directing() ? 1 : 0) + (__d && __d.calling() ? 1 : 0); }
+    function __key(){ return JSON.stringify([__S(), __p.pal()]) + __flags(); }
+    function __step(){ __p.tick(); if (__d) __d.tick(); return JSON.stringify([__S(), __p.pal()]) + __flags(); }
+    function __ev(t){ if (__d) __d.feed(t); }
+    function __front(b){ if (__d) __d.setFront(b); }
+    function __rm(b){ if (__d) __d.setReduceMotion(b); }
+    function __touch(){ if (__d) __d.touch(); }
+    function __poke(dir){ return __d ? __d.poke(dir) : false; }
+    function __amb(l){ if (__d) __d.setAmbient(l); }
+    function __hitGrid(){ var S = __S(); S.ex = []; S.bubble = -1; S.fallen = false; return JSON.stringify(compose(S, __p.pal())); }
     function __act(){ return __p.act === null ? '' : __p.act; }
     function __fid(){ return !!__p.fid; }
     function __state(){ return __p.state; }
     function __say(j){ return say(JSON.parse(j)); }
     """#
 
-    init?(sprites: String, say: String) {
+    init?(sprites: String, say: String, personality: String? = nil, director: String? = nil) {
         ctx.exceptionHandler = { [unowned self] _, e in self.lastError = e?.toString() }
         _ = ctx.evaluateScript(sprites)
         _ = ctx.evaluateScript(say)
+        if let p = personality, let d = director { _ = ctx.evaluateScript(p); _ = ctx.evaluateScript(d) }      // the animation bank and the director; without them he keeps his own animation
         _ = ctx.evaluateScript(PetBridge.shim)
         if lastError != nil { return nil }
     }
@@ -525,15 +887,16 @@ final class PetBridge {
     static func load(dir: String) -> (PetBridge?, String) {
         guard let s = try? String(contentsOfFile: dir + "/sprites.js", encoding: .utf8) else { return (nil, "sprites.js not found in " + dir) }
         guard let y = try? String(contentsOfFile: dir + "/say.js", encoding: .utf8) else { return (nil, "say.js not found in " + dir) }
-        guard let b = PetBridge(sprites: s, say: y) else { return (nil, "JavaScriptCore refused the scripts") }
+        let pers = try? String(contentsOfFile: dir + "/personality.js", encoding: .utf8), dire = try? String(contentsOfFile: dir + "/director.js", encoding: .utf8)
+        guard let b = PetBridge(sprites: s, say: y, personality: pers, director: dire) else { return (nil, "JavaScriptCore refused the scripts") }
         return (b, "")
     }
 
     private func call(_ f: String, _ args: [Any] = []) -> JSValue? { ctx.objectForKeyedSubscript(f)?.call(withArguments: args) }
-    func make(_ state: String) { _ = call("__mk", [state]) }
-    func configure(state: String, h5: Int, stale: Int, held: Bool, hover: Bool, walking: Bool) {
-        let o: [String: Any] = ["state": state, "h5": h5, "stale": stale, "held": held, "hover": hover, "walking": walking]
-        if let d = try? JSONSerialization.data(withJSONObject: o), let s = String(data: d, encoding: .utf8) { _ = call("__cfg", [s]) }
+    func make(_ state: String) { generation += 1; _ = call("__mk", [state]) }
+    func configure(state: String, h5: Int, stale: Int, held: Bool, hover: Bool, walking: Bool, bookOn: Bool = false) {
+        let o: [String: Any] = ["state": state, "h5": h5, "stale": stale, "held": held, "hover": hover, "walking": walking, "bookOn": bookOn]
+        if let d = try? JSONSerialization.data(withJSONObject: o), let s = String(data: d, encoding: .utf8) { cfgCalls += 1; _ = call("__cfg", [s]) }
     }
     func tick() { _ = call("__tick") }
     func act(_ name: String) { _ = call("__do", [name]) }
@@ -541,7 +904,35 @@ final class PetBridge {
     var currentAct: String? { let a = call("__act")?.toString() ?? ""; return a.isEmpty ? nil : a }
     var fidgeting: Bool { call("__fid")?.toBool() ?? false }
     var state: String { call("__state")?.toString() ?? "" }
-    func frame() -> Grid? { call("__frame")?.toString().flatMap { Grid(json: $0) } }
+    /// A text that is the same whenever the picture is the same (the picture is a pure function of the spec and the palette); far cheaper than building and parsing it.
+    func frameKey() -> String? { call("__key")?.toString() }
+    /// advance one tick and return the key, in one JS call
+    func step() -> String? {
+        guard let r = call("__step")?.toString() else { return nil }
+        let u = Array(r.utf8.suffix(2)); directing = u.count == 2 && u[0] == 49; calling = u.count == 2 && u[1] == 49
+        return r
+    }
+    /// the director (what Claude is doing, shown on his face). `directing`: a clip of the director is on screen; `calling`: it is a call (turn finished, question, permission).
+    private(set) var directing = false, calling = false
+    func feed(_ lines: String) { _ = call("__ev", [lines]) }
+    func setFront(_ on: Bool) { _ = call("__front", [on]) }
+    func setReduceMotion(_ on: Bool) { _ = call("__rm", [on]) }
+    func setAmbient(_ level: String) { _ = call("__amb", [level]) }
+    func touch() { _ = call("__touch") }
+    /// A click on an agotado Brote: true when the director answers it (1 neutral, 2 annoyed, 3+ angry and away from the pointer); `away` is -1 or 1.
+    func pokeAgotado(away: Int) -> Bool { call("__poke", [away])?.toBool() ?? false }
+    /// The picture and whether the arm is the pointing one, from one call: `{"g": grid, "pt": bool}`.
+    func frameInfo() -> (grid: Grid, pointing: Bool)? {
+        guard let t = call("__frame")?.toString(), let d = t.data(using: .utf8), let o = (try? JSONSerialization.jsonObject(with: d)) as? Dict,
+              let rows = o["g"] as? [[Any]], let g = Grid(rows: rows) else { return nil }
+        return (g, (o["pt"] as? Bool) ?? false)
+    }
+    func frame() -> Grid? { frameInfo()?.grid }
+    /// PALS[state] as colour strings: the book takes its cover, outline and leaf from it.
+    func palette(_ state: String) -> [String: String] {
+        guard let t = call("__pal", [state])?.toString(), let d = t.data(using: .utf8), let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: String] else { return [:] }
+        return o
+    }
     func hitGrid() -> Grid? { call("__hitGrid")?.toString().flatMap { Grid(json: $0) } }
     func say(_ d: Dict) -> String? {
         guard let data = try? JSONSerialization.data(withJSONObject: d), let s = String(data: data, encoding: .utf8) else { return nil }
@@ -556,26 +947,40 @@ final class PetGlue {
     let bridge: PetBridge
     var state = "contento", h5 = 0, stale = 0
     var held = false, hover = false, walking = false
+    var bookOn = false, panelOpen = false                       // the real book is on screen; the Libreta is open (he is told there are no stale items then)
     var pokes = PokeCounter()
     init(bridge: PetBridge) { self.bridge = bridge; bridge.make(state); push() }
 
-    func push() { bridge.configure(state: state, h5: h5, stale: stale, held: held, hover: hover, walking: walking) }
+    private struct Cfg: Equatable { var state: String, h5: Int, stale: Int, held: Bool, hover: Bool, walking: Bool, bookOn: Bool }
+    private var pushed: (cfg: Cfg, generation: Int)?
+    /// Only these values are ever written to the pet, and only here, so a push of the same values to the same pet changes nothing and is skipped.
+    func push() {
+        let c = Cfg(state: state, h5: h5, stale: spriteStale(real: stale, panelOpen: panelOpen), held: held, hover: hover, walking: walking, bookOn: bookOn)
+        if let p = pushed, p.cfg == c, p.generation == bridge.generation { return }
+        pushed = (c, bridge.generation)
+        bridge.configure(state: c.state, h5: c.h5, stale: c.stale, held: c.held, hover: c.hover, walking: c.walking, bookOn: c.bookOn)
+    }
     func setData(state s: String, h5 h: Int, stale n: Int) { state = s; h5 = h; stale = n; push() }
     func setHeld(_ on: Bool) { held = on; if on { hover = false }; push() }
     func setHover(_ on: Bool) {
         guard on != hover else { return }
         hover = on
         push()
+        if on { bridge.touch() }
         if on && bridge.currentAct == nil && !held && bridge.state != "dormido" { bridge.act("hello") }
     }
-    var busy: Bool { bridge.currentAct != nil || bridge.fidgeting || hover || held }
+    var busy: Bool { bridge.currentAct != nil || bridge.fidgeting || bridge.directing || hover || held }
     @discardableResult
-    func click(now: Double) -> Click {
+    func click(now: Double, away: Int = -1) -> Click {
         let c = pokes.click(now: now, dormido: bridge.state == "dormido")
+        bridge.touch()
+        if c != .countedOnly, bridge.state == "agotado", bridge.pokeAgotado(away: away) { return c }      // his own answer to pokes when worn out
         if c == .grumpy { bridge.act("grumpy") } else if c == .poke { bridge.act("poke") }
         return c
     }
     func tick() { bridge.tick() }
+    /// One 10 Hz step: the settings if they changed, then one tick and the picture's key in a single JS call.
+    func step() -> String? { push(); return bridge.step() }
 }
 
 // MARK: - the self-test (no window server)
@@ -590,9 +995,69 @@ func cpuSeconds() -> Double {
     var ru = rusage(); getrusage(RUSAGE_SELF, &ru)
     return Double(ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) + Double(ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 1e6
 }
-var cpuBuckets = [0.0, 0.0, 0.0]                           // CPU seconds spent in the 10 Hz tick, the pointer poll and the Claude-window poll since the last P7
+let cpuBucketNames = ["tick", "hit", "claude", "js", "hitgrid", "img", "layer", "move"]
+/// CPU seconds since the last P7: the 10 Hz tick (0), the pointer poll (1), the Claude-window poll (2), then the parts of the tick: JS calls (3), the hitGrid JS call (4), building the image (5), handing it to the layer (6), moving the panel (7)
+var cpuBuckets = [Double](repeating: 0, count: cpuBucketNames.count)
 func timed(_ bucket: Int, _ f: () -> Void) { let t = cpuSeconds(); f(); cpuBuckets[bucket] += cpuSeconds() - t }
-func runBench(assets: String) -> Never {
+func cpuParts(_ b: [Double], span: Double) -> [(String, String)] {
+    cpuBucketNames.enumerated().map { ($0.element, String(format: "%.2f", ($0.offset < b.count ? b[$0.offset] : 0) / span * 100)) }
+}
+
+// MARK: - which thread burns the CPU (P7 `threads`)
+struct ThreadCPU: Equatable { var id: UInt64; var name: String; var seconds: Double }
+func currentThreadID() -> UInt64 { var t: UInt64 = 0; pthread_threadid_np(nil, &t); return t }
+let mainThreadID = currentThreadID()      // this file's top level runs on the main thread
+
+/// CPU seconds (user + system) of every live thread of this process.
+func threadCPU() -> [ThreadCPU] {
+    var list: thread_act_array_t?
+    var count: mach_msg_type_number_t = 0
+    guard task_threads(mach_task_self_, &list, &count) == KERN_SUCCESS, let l = list else { return [] }
+    defer { vm_deallocate(mach_task_self_, vm_address_t(UInt(bitPattern: l)), vm_size_t(Int(count) * MemoryLayout<thread_t>.size)) }
+    var out: [ThreadCPU] = []
+    for i in 0..<Int(count) {
+        let port = l[i]
+        defer { mach_port_deallocate(mach_task_self_, port) }
+        var basic = thread_basic_info(), n = mach_msg_type_number_t(MemoryLayout<thread_basic_info>.size / MemoryLayout<integer_t>.size)
+        let okB = withUnsafeMutablePointer(to: &basic) { $0.withMemoryRebound(to: integer_t.self, capacity: Int(n)) { thread_info(port, thread_flavor_t(THREAD_BASIC_INFO), $0, &n) } }
+        var ident = thread_identifier_info(), m = mach_msg_type_number_t(MemoryLayout<thread_identifier_info>.size / MemoryLayout<integer_t>.size)
+        let okI = withUnsafeMutablePointer(to: &ident) { $0.withMemoryRebound(to: integer_t.self, capacity: Int(m)) { thread_info(port, thread_flavor_t(THREAD_IDENTIFIER_INFO), $0, &m) } }
+        guard okB == KERN_SUCCESS, okI == KERN_SUCCESS else { continue }
+        var name = ""
+        if let pt = pthread_from_mach_thread_np(port) {
+            var buf = [CChar](repeating: 0, count: 64)
+            if pthread_getname_np(pt, &buf, 64) == 0 { name = String(cString: buf) }
+        }
+        let secs = Double(basic.user_time.seconds + basic.system_time.seconds) + Double(basic.user_time.microseconds + basic.system_time.microseconds) / 1e6
+        out.append(ThreadCPU(id: ident.thread_id, name: name, seconds: secs))
+    }
+    return out
+}
+
+/// "main:0.31,name:0.12": percent of one core each thread used between two readings, the main thread first, then the busiest others (under 0.02 left out).
+func threadShares(before: [ThreadCPU], after: [ThreadCPU], span: Double, mainID: UInt64, top: Int) -> String {
+    var prev: [UInt64: Double] = [:]
+    for t in before { prev[t.id] = t.seconds }
+    var rows: [(String, Double, Bool)] = []
+    for t in after {
+        let pct = (t.seconds - (prev[t.id] ?? 0)) / span * 100
+        let isMain = t.id == mainID
+        if pct < 0.02 && !isMain { continue }
+        let label = isMain ? "main" : (t.name.isEmpty ? "t\(t.id % 1000)" : t.name.replacingOccurrences(of: " ", with: "_"))
+        rows.append((label, pct, isMain))
+    }
+    guard !rows.isEmpty else { return "none" }
+    let main = rows.filter { $0.2 }, others = rows.filter { !$0.2 }.sorted { $0.1 > $1.1 }.prefix(top)
+    return (main + others).map { String(format: "%@:%.2f", $0.0 as NSString, $0.1) }.joined(separator: ",")
+}
+
+/// The source stamp build.sh leaves in Resources/build.txt: exactly 12 lowercase hex characters, else "unknown".
+func buildStamp(_ text: String?) -> String {
+    guard let t = text?.trimmingCharacters(in: .whitespacesAndNewlines), t.count == 12, t.allSatisfy({ ("0"..."9").contains($0) || ("a"..."f").contains($0) }) else { return "unknown" }
+    return t
+}
+
+func runBench(assets: String, pacedSeconds: Double? = nil) -> Never {
     let (bridge, why) = PetBridge.load(dir: assets)
     guard let b = bridge else { fputs("bench: " + why + "\n", stderr); exit(1) }
     let glue = PetGlue(bridge: b)
@@ -605,12 +1070,33 @@ func runBench(assets: String) -> Never {
     per("pet.tick") { glue.tick() }
     per("frame() = JS + parse") { _ = b.frame() }
     per("hitGrid() = JS + parse") { _ = b.hitGrid() }
+    per("key (spec+pal as text)") { _ = b.frameKey() }
     var changed = 0, last: Grid?
     let t0 = cpuSeconds()
-    for _ in 0..<n { glue.push(); glue.tick(); let g = b.frame(); if g != last { changed += 1; last = g } }
+    var lastKey: String?, built = 0
+    for _ in 0..<n { let k = glue.step(); if k != lastKey { lastKey = k; built += 1; let g = b.frame(); if g != last { changed += 1; last = g } } }
     let tickUs = (cpuSeconds() - t0) / Double(n) * 1e6
-    print(String(format: "full tick (push+tick+frame)  %8.1f us/call; frame changed on %d of %d ticks", tickUs, changed, n))
+    print(String(format: "full tick (push+tick+frame)  %8.1f us/call; frame changed on %d of %d ticks, built on %d (the key changed)", tickUs, changed, n, built))
     print(String(format: "=> at 10 Hz: %.2f %% of one core (tick only, no drawing)", tickUs * 10 / 1e4))
+    // the same tick at the app's own pace: 10 Hz, one tick per 100 ms, so JavaScriptCore's compiled code goes cold between calls
+    if let secs = pacedSeconds {
+        let pg = PetGlue(bridge: b)
+        pg.setData(state: cli.firstIndex(of: "--state").flatMap { i in i + 1 < cli.count ? cli[i + 1] : nil } ?? "agotado", h5: 0, stale: 0)
+        var builds = 0, cpuBuild = 0.0
+        var cpu = 0.0, ticks = 0, pk: String?
+        let burst = cli.firstIndex(of: "--burst").flatMap { i in i + 1 < cli.count ? Int(cli[i + 1]) : nil } ?? 1
+        let end = Date().addingTimeInterval(secs)
+        while Date() < end {
+            var c0 = cpuSeconds()
+            for _ in 0..<burst { let k = pg.step(); _ = pg.busy; var built = false; if k != pk { pk = k; builds += 1; built = true; _ = b.frame() }; ticks += 1; if built { cpuBuild += cpuSeconds() - c0; c0 = cpuSeconds() } }
+            cpu += cpuSeconds() - c0
+            Thread.sleep(forTimeInterval: 0.1 * Double(burst))
+        }
+        let us = (cpu + cpuBuild) / Double(max(1, ticks)) * 1e6
+        print(String(format: "paced 10 Hz tick (push+tick+key, picture only on a new key) %8.1f us/call over %d ticks, %d pictures built", us, ticks, builds))
+        print(String(format: "   of which: %d ticks with a new picture cost %.0f us each, the other %d ticks %.0f us each", builds, cpuBuild / Double(max(1, builds)) * 1e6, ticks - builds, cpu / Double(max(1, ticks - builds)) * 1e6))
+        print(String(format: "=> at 10 Hz: %.2f %% of one core (tick only, no drawing)", us * 10 / 1e4))
+    }
     exit(0)
 }
 
@@ -1000,6 +1486,93 @@ func runSelftest(assets: String) -> Never {
         check(!hubTrusted(link), "hubTrusted: a symlink is refused (attributesOfItem does not follow it)")
     }
 
+    // P7 splits the tick cost: measure only
+    do {
+        let b = [0.57, 0.04, 0.06, 0.20, 0.10, 0.17, 0.05, 0.02]      // seconds over a 100 s span = percent of one core
+        let parts = cpuParts(b, span: 100)
+        check(parts.map { $0.0 } == ["tick", "hit", "claude", "js", "hitgrid", "img", "layer", "move"], "P7 names the tick and its five parts, in order (\(parts.map { $0.0 }))")
+        check(parts.map { $0.1 } == ["0.57", "0.04", "0.06", "0.20", "0.10", "0.17", "0.05", "0.02"], "P7 prints each bucket as a percent of the span (\(parts.map { $0.1 }))")
+        check(cpuParts([0, 0, 0], span: 100).count == 8, "P7 survives a short bucket array (zeros)")
+        let before = cpuBuckets
+        timed(5) { var x = 0.0; for i in 0..<200_000 { x += Double(i).squareRoot() }; if x < 0 { print(x) } }
+        check(cpuBuckets[5] > before[5] && cpuBuckets[3] == before[3] && cpuBuckets[0] == before[0], "timed(5) adds to the img bucket only")
+        cpuBuckets = before
+    }
+
+    // skip the picture when its key has not changed (idle CPU plan, step 1): the key is far cheaper than building and parsing the grid
+    do {
+        check(!frameUnchanged(key: nil, cachedKey: "a", flip: false, cachedFlip: false), "frame skip: no key, no skip")
+        check(!frameUnchanged(key: "a", cachedKey: nil, flip: false, cachedFlip: false), "frame skip: nothing cached, no skip")
+        check(frameUnchanged(key: "a", cachedKey: "a", flip: true, cachedFlip: true), "frame skip: same key, same side")
+        check(!frameUnchanged(key: "a", cachedKey: "b", flip: false, cachedFlip: false) && !frameUnchanged(key: "a", cachedKey: "a", flip: true, cachedFlip: false), "frame skip: another key or another side")
+        // soundness: the same key must always mean the same picture, in every state, with pokes, hover, walking and held
+        var seen: [String: Grid] = [:], bad = 0, keyChanges = 0, total = 0
+        for st in states {
+            let kg = PetGlue(bridge: bridge)
+            kg.setData(state: st, h5: st == "cansado" ? 80 : 0, stale: st == "justo" ? 3 : 0)
+            var lastKey: String?
+            for i in 0..<900 {
+                kg.walking = (i / 150) % 2 == 1; kg.hover = (i / 90) % 3 == 1
+                if i % 211 == 0 { _ = kg.click(now: Double(i)) }
+                kg.push(); kg.tick()
+                guard let k = bridge.frameKey(), let g = bridge.frame() else { bad += 1; continue }
+                total += 1
+                if k != lastKey { keyChanges += 1; lastKey = k }
+                if let prev = seen[k] { if prev != g { bad += 1 } } else { seen[k] = g }
+            }
+        }
+        check(bad == 0 && total == states.count * 900, "frame key: the same key always gave the same picture (\(bad) bad of \(total), \(seen.count) keys)")
+        let ag = PetGlue(bridge: bridge); ag.setData(state: "agotado", h5: 0, stale: 0)
+        var n = 0, lk: String?
+        for _ in 0..<600 { ag.push(); ag.tick(); let k = bridge.frameKey(); if k != lk { n += 1; lk = k } }
+        check(n * 4 < 600, "600 idle ticks of a tired pet: the key changes only \(n) times, so the picture is built \(n) times, not 600")
+    }
+
+    // one JS call per tick, and a push only when something changed (idle CPU plan: a cold JS call costs about 50 us at 10 Hz)
+    do {
+        let sg = PetGlue(bridge: bridge)
+        sg.setData(state: "cansado", h5: 10, stale: 0)
+        let c0 = bridge.cfgCalls
+        sg.push(); sg.push()
+        check(bridge.cfgCalls == c0, "push: the same settings are not sent again")
+        sg.setHover(true)
+        check(bridge.cfgCalls == c0 + 1, "push: a changed setting is sent once")
+        let other = PetGlue(bridge: bridge); _ = other
+        let c1 = bridge.cfgCalls
+        sg.push()
+        check(bridge.cfgCalls == c1 + 1, "push: a pet made since then (another glue) gets the settings again")
+        sg.walking = true
+        let key = sg.step()
+        check(key != nil && key == bridge.frameKey(), "step: one call advances the pet and returns the key a second call would give")
+        let c2 = bridge.cfgCalls
+        check(c2 == c1 + 2, "step: a changed setting is sent by the step itself")
+        check(sg.step() != nil && bridge.cfgCalls == c2, "step: and not again on the next tick")
+    }
+
+    // P7 says which thread burns the CPU (idle CPU plan: "other" was 0.9 % of a core that no timer of ours accounts for)
+    do {
+        let before = [ThreadCPU(id: 1, name: "", seconds: 1.0), ThreadCPU(id: 2, name: "JavaScriptCore Heap", seconds: 0.5), ThreadCPU(id: 3, name: "x", seconds: 2.0)]
+        let after = [ThreadCPU(id: 1, name: "", seconds: 1.30), ThreadCPU(id: 2, name: "JavaScriptCore Heap", seconds: 0.62), ThreadCPU(id: 3, name: "x", seconds: 2.0), ThreadCPU(id: 4, name: "new", seconds: 0.05)]
+        check(threadShares(before: before, after: after, span: 100, mainID: 1, top: 3) == "main:0.30,JavaScriptCore_Heap:0.12,new:0.05", "threadShares: percent of one core per thread, main first, quiet threads left out, spaces made safe (\(threadShares(before: before, after: after, span: 100, mainID: 1, top: 3)))")
+        check(threadShares(before: before, after: after, span: 100, mainID: 1, top: 1) == "main:0.30,JavaScriptCore_Heap:0.12", "threadShares: top limits the others, not the main thread")
+        check(threadShares(before: [], after: [], span: 100, mainID: 1, top: 3) == "none", "threadShares: nothing to say")
+        let t0 = threadCPU(), a0 = cpuSeconds()
+        var x = 0.0; let until = a0 + 0.15
+        while cpuSeconds() < until { for i in 0..<20_000 { x += Double(i).squareRoot() } }
+        if x < 0 { print(x) }
+        let t1 = threadCPU()
+        let me = mainThreadID
+        let grew = (t1.first { $0.id == me }?.seconds ?? 0) - (t0.first { $0.id == me }?.seconds ?? 0)
+        check(!t1.isEmpty && grew > 0.1, "threadCPU: the thread that ran 0.15 s of work shows it (+\(String(format: "%.3f", grew)) s)")
+    }
+
+    // START says which source built the bundle (build.sh writes the first 12 hex of brote.swift's sha256 into Resources/build.txt)
+    do {
+        check(buildStamp("0123456789ab\n") == "0123456789ab", "buildStamp: a 12-hex line is kept")
+        check(buildStamp(nil) == "unknown" && buildStamp("") == "unknown", "buildStamp: no file, no stamp")
+        check(buildStamp("rm -rf /\n") == "unknown" && buildStamp("0123456789AB") == "unknown" && buildStamp("0123456789abc") == "unknown" && buildStamp("0123456789a") == "unknown", "buildStamp: only exactly 12 lowercase hex characters count, anything else is unknown")
+    }
+
     // the data line
     let argv = statusArgv(plugin: "/h")
     check(argv == ["/usr/bin/python3", "-B", "/h/plugin/bin/budgit", "status", "--brote", "--project", "/h"], "status argv")
@@ -1102,6 +1675,323 @@ func runSelftest(assets: String) -> Never {
         check(!big && size <= K.logCap, "probe: 200 KB cap")
     }
 
+    do { // the director on the real sprites.js, personality.js and director.js, and the events file
+        let (dbOpt, dwhy) = PetBridge.load(dir: assets)
+        check(dbOpt != nil && dbOpt!.ctx.evaluateScript("typeof DIRECTOR")?.toString() == "object", "JSC loads personality.js and director.js (" + dwhy + ")")
+        if let db = dbOpt {
+            db.make("contento")
+            db.feed("prompt abc\npre abc Bash\nrm -rf /\npre abc Edit extra words\n")
+            db.tick()
+            check(db.ctx.evaluateScript("__d.mode()")?.toString() == "pc_run", "a Bash event shows the terminal (and junk lines are ignored)")
+            check(db.step() != nil && db.directing && !db.calling, "the director is on screen and it is not a call")
+            db.feed("post abc Bash\nstop abc\n"); for _ in 0..<35 { db.tick() }; _ = db.step()
+            check(db.calling && db.ctx.evaluateScript("__d.mode()")?.toString() == "att_1", "a finished turn calls him")
+            check(db.ctx.evaluateScript("JSON.stringify(__S().ex.map(function(e){return e[0]}))")?.toString().contains("bub_call_check") == true, "with the peach check badge")
+            check(db.frame() != nil, "and the picture builds")
+            db.setFront(true); db.tick(); check(!db.calling || db.ctx.evaluateScript("__d.mode()")?.toString() == "c_answered", "coming to Claude answers the call")
+            db.make("agotado"); db.configure(state: "agotado", h5: 0, stale: 0, held: false, hover: false, walking: false)
+            check(db.pokeAgotado(away: 1) && db.ctx.evaluateScript("__d.state")?.toString() == "agotado", "an agotado poke is answered by the director")
+        }
+        let tmp = NSTemporaryDirectory() + "brote-events-\(getpid())"
+        try? "".write(toFile: tmp, atomically: true, encoding: .utf8)
+        check(eventsRead(path: tmp, offset: 0) == nil, "an empty events file has nothing new")
+        if let h = FileHandle(forWritingAtPath: tmp) { h.seekToEndOfFile(); h.write("pre a Edit\npost a Edit\nstop a".data(using: .utf8)!); try? h.close() }
+        let r1 = eventsRead(path: tmp, offset: 0)
+        check(r1?.text == "pre a Edit\npost a Edit\n", "only whole lines are read")
+        if let h = FileHandle(forWritingAtPath: tmp) { h.seekToEndOfFile(); h.write("\n".data(using: .utf8)!); try? h.close() }
+        check(eventsRead(path: tmp, offset: r1?.offset ?? 0)?.text == "stop a\n", "the cut line is finished on the next read")
+        check(eventsRead(path: tmp, offset: 9999)?.offset == 0 || eventsRead(path: tmp, offset: 9999)?.text.isEmpty == false, "a file that shrank starts again")
+        check(eventsRead(path: NSTemporaryDirectory(), offset: 0) == nil && eventsRead(path: "/nonexistent/x", offset: 0) == nil, "a folder or a missing file is ignored")
+        try? FileManager.default.removeItem(atPath: tmp)
+    }
+
+    // the book: geometry, states, the drag machine both bodies share, the stored place, the shim on the real sprites.js
+    let vis = Rc(0, 0, 1440, 875)
+    do { // bookBounds / bookClamp / bookSpawn (B9, B10)
+        let bb = bookBounds(vis)
+        check(bb.minX == 0 && bb.maxX == 1380 && bb.floorY == 0 && bb.ceilY == 791, "bookBounds: the visible frame minus the book's 60 x 84")
+        check(bookClamp(Pt(-50, -9), screens: [vis]) == Pt(0, 0) && bookClamp(Pt(5000, 5000), screens: [vis]) == Pt(1380, 791) && bookClamp(Pt(300, 200), screens: [vis]) == Pt(300, 200), "bookClamp: all four sides, and inside stays")
+        check(bookClamp(Pt(1500, 100), screens: [vis, side]) == Pt(1500, 100) && bookClamp(Pt(3400, 100), screens: [vis, side]).x == 3300, "bookClamp: the screen under the book's centre decides")
+        check(bookClamp(Pt(1400, 100), screens: [vis, side]).x == 1380 && bookClamp(Pt(1420, 100), screens: [vis, side]).x == 1440, "bookClamp: a book across the seam goes to the screen its centre is on")
+        check(bookClamp(Pt(5, 5), screens: []) == Pt(5, 5), "bookClamp: no screens, no change")
+        check(bookSpawn(sprite: Pt(1000, 0), visible: vis) == Pt(1110, 0), "bookSpawn: on his right, 8 pt from his edge, same y")
+        check(bookSpawn(sprite: Pt(1440 - 102 - 68, 0), visible: vis) == Pt(1380, 0), "bookSpawn: exactly 68 pt of room still goes right")
+        check(bookSpawn(sprite: Pt(1440 - 102 - 67, 0), visible: vis) == Pt(1440 - 102 - 67 - 8 - 60, 0), "bookSpawn: 67 pt of room goes to his left")
+        let tiny = bookSpawn(sprite: Pt(0, 0), visible: Rc(0, 0, 150, 875))
+        check(tiny.x >= 0 && tiny.x <= 90, "bookSpawn: even a tiny screen keeps the book inside (\(tiny.x))")
+    }
+    do { // bookRelease (B2, B8)
+        let b = bookBounds(vis)
+        check(bookRelease(speed: 199, pos: Pt(400, 300), bounds: b).action == .stay && bookRelease(speed: 199, pos: Pt(400, 300), bounds: b).pos == Pt(400, 300), "bookRelease: below throw speed it stays exactly where it was dropped")
+        check(bookRelease(speed: 200, pos: Pt(400, 300), bounds: b).action == .fly, "bookRelease: at throw speed it flies")
+        check(bookRelease(speed: 0, pos: Pt(-30, 9000), bounds: b).pos == Pt(0, 791), "bookRelease: a drop is clamped into the bounds")
+        var body = Body(p: Pt(300, 300), v: Pt(900, 600)); var ev = Flight.flying; var n = 0, inside = true
+        while ev == .flying && n < 3000 { ev = stepFly(&body, dt: 1.0 / 60, in: b); n += 1; if body.p.x < 0 || body.p.x > 1380 || body.p.y < 0 || body.p.y > 791 { inside = false } }
+        check(ev == .landed && inside && body.p.y == 0, "a thrown book lands on the floor of the visible frame, inside the bounds (\(body.p))")
+    }
+    do { // precedence (B5), ribbon (B4)
+        check(bookLook(open: true, hover: true, held: true, stale: 2) == .open, "book look: open beats hover, held and marked")
+        check(bookLook(open: false, hover: true, held: false, stale: 2) == .hover && bookLook(open: false, hover: false, held: true, stale: 0) == .hover, "book look: hover, and being held counts as hover")
+        check(bookLook(open: false, hover: false, held: false, stale: 1) == .marked && bookLook(open: false, hover: false, held: false, stale: 0) == .closed, "book look: marked with a stale item, else closed")
+        check(bookRibbon(look: .marked, stale: 1) && bookRibbon(look: .hover, stale: 1) && !bookRibbon(look: .open, stale: 1) && !bookRibbon(look: .closed, stale: 0) && !bookRibbon(look: .hover, stale: 0), "ribbon: shown with stale items except while open")
+    }
+    do { // press and overlap (B1, B12)
+        check(isBookPress(from: Pt(10, 10), to: Pt(12, 10), overBook: true) && !isBookPress(from: Pt(10, 10), to: Pt(13, 10), overBook: true) && !isBookPress(from: Pt(10, 10), to: Pt(10, 10), overBook: false), "book press: under 3 pt on an opaque pixel; 3 pt is a drag")
+        check(pressTarget(overBook: true, overBrote: false) == .book && pressTarget(overBook: false, overBrote: true) == .brote && pressTarget(overBook: true, overBrote: true) == .book && pressTarget(overBook: false, overBrote: false) == .none, "pressTarget: the book wins where both are under the pointer")
+        check(!ignoreMouse(overBody: pressTarget(overBook: true, overBrote: false) != .none, pressed: false, dragging: false) && ignoreMouse(overBody: pressTarget(overBook: false, overBrote: false) != .none, pressed: false, dragging: false), "click-through follows the union of both masks")
+    }
+    do { // which way he points (B7, B11)
+        check(bookOnLeft(bookOn: true, prevLeft: nil, bookCx: 100, broteCx: 200) && !bookOnLeft(bookOn: true, prevLeft: nil, bookCx: 300, broteCx: 200), "book side: the sign of the difference the first time")
+        check(!bookOnLeft(bookOn: false, prevLeft: true, bookCx: 100, broteCx: 200), "book side: no book on screen, no side")
+        check(bookOnLeft(bookOn: true, prevLeft: true, bookCx: 215, broteCx: 200) && !bookOnLeft(bookOn: true, prevLeft: false, bookCx: 185, broteCx: 200), "book side: inside 24 pt the previous side is kept")
+        check(!bookOnLeft(bookOn: true, prevLeft: true, bookCx: 225, broteCx: 200) && bookOnLeft(bookOn: true, prevLeft: false, bookCx: 175, broteCx: 200), "book side: 24 pt or more flips it")
+        check(faceFlip(pointing: true, bookOnLeft: true, facingLeft: false, walking: false) && !faceFlip(pointing: true, bookOnLeft: false, facingLeft: true, walking: true), "faceFlip: pointing mirrors only with the book on his left")
+        check(faceFlip(pointing: false, bookOnLeft: true, facingLeft: true, walking: true) && !faceFlip(pointing: false, bookOnLeft: true, facingLeft: true, walking: false) && !faceFlip(pointing: false, bookOnLeft: false, facingLeft: false, walking: true), "faceFlip: not pointing keeps the walking-facing rule")
+        check(spriteStale(real: 3, panelOpen: true) == 0 && spriteStale(real: 3, panelOpen: false) == 3, "the sprite gets stale 0 while the panel is open")
+    }
+    do { // the drag machine both bodies use (extracted from Brote; B2, B3, B8)
+        var d = Dragger()
+        check(!d.isHeld && !d.isFlying, "dragger: starts at rest")
+        d.press(at: Pt(110, 120), origin: Pt(100, 100), now: 0)
+        check(d.isHeld && !d.isDragging, "dragger: a press holds, it is not yet a drag")
+        check(d.drag(to: Pt(112, 120), now: 0.02) == .idle && !d.isDragging, "dragger: 2 pt is not a drag")
+        check(d.drag(to: Pt(113, 120), now: 0.04) == .started(Pt(103, 100)) && d.isDragging, "dragger: 3 pt starts the drag and gives the new origin (grab kept)")
+        check(d.drag(to: Pt(150, 130), now: 0.06) == .moving(Pt(140, 110)), "dragger: then it follows the pointer")
+        check(d.release(now: 0.07) == .moved(velocity: throwVelocity([Sample(t: 0, p: Pt(110, 120)), Sample(t: 0.04, p: Pt(113, 120)), Sample(t: 0.06, p: Pt(150, 130))], now: 0.07)) && !d.isHeld, "dragger: release gives the velocity of the last 0.1 s and goes back to rest")
+        d.press(at: Pt(5, 5), origin: Pt(0, 0), now: 1)
+        check(d.release(now: 1.1) == .click && d.release(now: 1.2) == .notHeld, "dragger: a press without a drag is a click; a second release is nothing")
+        d.fly(Body(p: Pt(300, 300), v: Pt(0, 0)), in: bookBounds(vis), dizzy: true)
+        check(d.isFlying, "dragger: flying")
+        var last: Dragger.FlightTick?; var steps = 0
+        while d.isFlying && steps < 3000 { last = d.step(dt: 1.0 / 60); steps += 1 }
+        check(last?.landed == true && last?.dizzy == true && last?.body.p.y == 0 && !d.isFlying, "dragger: a fall lands, reports the dizzy flag and goes back to rest")
+        check(d.step(dt: 0.016) == nil, "dragger: no step when not flying")
+        d.fly(Body(p: Pt(300, 300), v: Pt(0, 0)), in: bookBounds(vis), dizzy: false)
+        d.press(at: Pt(1, 1), origin: Pt(0, 0), now: 2)
+        check(d.isHeld && !d.isFlying, "dragger: a press catches a flying body")
+    }
+    do { // the stored place (B10, L14)
+        let st = MemStore(); st.setNumber("bookX", 700); st.setNumber("bookY", 20)
+        let bp = BookPlace(store: st)
+        check(!bp.on && bp.pos == nil, "book place: nothing on screen before the first feed")
+        let w0 = st.writes
+        bp.firstFeed(sprite: Pt(1000, 0), screens: [vis])
+        check(bp.on && bp.pos == Pt(700, 20) && st.writes == w0, "book place: the first feed puts it at the stored place, no write")
+        for i in 0..<100 { bp.move(to: Pt(Double(i), Double(i))) }
+        check(st.writes == w0 && bp.pos == Pt(99, 99), "book place: dragging never writes")
+        bp.land(at: Pt(5000, 5000), screens: [vis])
+        check(bp.pos == Pt(1380, 791) && st.writes == w0 + 2 && st.number("bookX") == 1380 && st.number("bookY") == 791, "book place: a landing is clamped and written once (two numbers)")
+        check(Set(st.d.keys) == ["bookX", "bookY"], "book place: the store holds bookX and bookY and nothing else")
+        let again = BookPlace(store: st)
+        again.firstFeed(sprite: Pt(1000, 0), screens: [vis])
+        check(again.pos == Pt(1380, 791), "book place: the next run finds it where it landed")
+        let fresh = MemStore(), fp = BookPlace(store: fresh)
+        fp.firstFeed(sprite: Pt(1000, 0), screens: [vis])
+        check(fp.pos == Pt(1110, 0) && fresh.writes == 0, "book place: with nothing stored it spawns on his right and writes nothing")
+        fp.firstFeed(sprite: Pt(200, 0), screens: [vis])
+        check(fp.pos == Pt(1110, 0), "book place: the spawn is used once")
+        let far = MemStore(); far.setNumber("bookX", 9000); far.setNumber("bookY", -40)
+        let farp = BookPlace(store: far); farp.firstFeed(sprite: Pt(0, 0), screens: [vis])
+        check(farp.pos == Pt(1380, 0), "book place: a stored place off screen is clamped")
+        let w1 = st.writes
+        check(again.screensChanged([Rc(0, 0, 800, 600)]) && again.pos == Pt(740, 516) && st.writes == w1 + 2, "book place: a display change that hides it moves it and counts as one landing write")
+        check(!again.screensChanged([Rc(0, 0, 800, 600)]) && st.writes == w1 + 2, "book place: and nothing more when it is already inside")
+    }
+    // the picture
+    let iconOpt = BookIcon(dir: assets)
+    check(iconOpt != nil, "book-icon.json loads from the assets folder")
+    if let icon = iconOpt {
+        func palette(_ s: String) -> [Character: RGBA] { bookPalette(bridge.palette(s)) }
+        let calm = palette("contento")
+        check(icon.w == 20 && icon.h == 28 && icon.ground == 26, "book icon: 20 x 28 art px, shadow row 26")
+        func opaqueRows(_ g: Grid) -> (lo: Int, hi: Int) {
+            var lo = 99, hi = -1
+            for y in 0..<g.h { for x in 0..<g.w { if let c = g[x, y], c.a == 255 { lo = min(lo, y); hi = max(hi, y) } } }
+            return (lo, hi)
+        }
+        for look in [BookLook.closed, .marked, .hover, .open] {
+            let g = icon.grid(look: look, ribbon: look == .marked, pal: calm)
+            check(g.w == 20 && g.h == 28, "book \(look): a 20 x 28 grid")
+            let want = look == .hover ? 24 : 25
+            check(opaqueRows(g).hi == want, "book \(look): the lowest opaque row is \(want) (base 25 minus the lift)")
+        }
+        let closed = icon.grid(look: .closed, ribbon: false, pal: calm), marked = icon.grid(look: .marked, ribbon: true, pal: calm), open = icon.grid(look: .open, ribbon: false, pal: calm)
+        check(closed[13, 26] != nil && (closed[13, 26]?.a ?? 255) < 128 && closed[3, 26] != nil, "book closed: a soft shadow on row 26, 14 wide (7 each side of the middle)")
+        check(closed[2, 26] == nil && closed[17, 26] == nil, "book closed: and nothing beyond it")
+        let hov = icon.grid(look: .hover, ribbon: false, pal: calm)
+        check(hov[16, 26] == nil && hov[4, 26] != nil, "book hover: the shadow shrinks to 6 each side")
+        check(open[1, 26] != nil && open[18, 26] != nil && open[0, 26] == nil, "book open: the shadow widens to 9 each side")
+        check(closed[13, 10] == nil && marked[13, 10] != nil && marked[14, 11] != nil && opaqueRows(marked).lo == 10, "book marked: the ribbon sits above the top edge (rows 10 and 11)")
+        check(icon.grid(look: .open, ribbon: true, pal: calm) == open, "book open: no ribbon, whatever the flag says")
+        check(hov[17, 10] != nil && closed[17, 10] == nil, "book hover: the spark")
+        check(closed[5, 12] == calm["o"] && closed[5, 13] == calm["C"], "book: the outline is the state's outline, the cover its cheek colour")
+        let tired = palette("dormido")
+        check(icon.grid(look: .closed, ribbon: false, pal: tired)[6, 13] == closed[6, 13] && closed[6, 13] == calm["c"], "book: the brown cover does not change with the state")
+        check(calm["k"] == parseColor("#bd7f55") && tired["k"] == calm["k"] && calm["C"] == parseColor("#a8683f") && calm["o"] == parseColor("#5f3b27") && calm["l"] == parseColor("#f0c862") && calm["W"] == parseColor("#fff3d6"), "book: brown cover #a8683f, border #5f3b27, label #f0c862, pages #fff3d6 in every state")
+        for s in states {
+            let p = bookPalette(bridge.palette(s))
+            for k in "cCWgGrRyolLsk" { check(p[k] != nil, "book palette \(s): key \(k)") }
+        }
+        let mask = HitMask(grid: closed)
+        check(mask.hit(x: 10 * 3 + 1.5, yTop: 18 * 3 + 1.5, flipped: false), "book hit mask: the cover hits")
+        check(mask.hit(x: 3 * 3 + 1.5, yTop: 15 * 3 + 1.5, flipped: false) && !mask.hit(x: 2 * 3 + 1.5, yTop: 15 * 3 + 1.5, flipped: false) && !mask.hit(x: 1.5, yTop: 1.5, flipped: false), "book hit mask: 1 art px of margin, then click-through")
+        check(!HitMask(grid: closed, margin: 0).hit(x: 10 * 3 + 1.5, yTop: 26 * 3 + 1.5, flipped: false), "book hit mask: the shadow never hits on its own")
+        let omask = HitMask(grid: open)
+        check(omask.hit(x: 1 * 3 + 1.5, yTop: 20 * 3 + 1.5, flipped: false) && !mask.hit(x: 1 * 3 + 1.5, yTop: 20 * 3 + 1.5, flipped: false), "book hit mask: rebuilt per state (the open book is 18 wide)")
+        for (name, rows) in icon.panel { check(rows.count == 8 && rows.allSatisfy { $0.count == 8 }, "panel icon \(name): 8 x 8") }
+        check(Set(icon.panel.keys) == ["doing", "next", "done", "later"] && icon.barW == 62 && icon.barH == 5, "panel art: four icons and the 62 x 5 bar")
+    }
+    do { // the shim on the real sprites.js (B7, B13)
+        let ctx = bridge.ctx
+        let g = PetGlue(bridge: bridge)
+        g.setData(state: "contento", h5: 0, stale: 3)
+        var pts = 0, bad = 0, withBook = 0
+        for _ in 0..<450 {
+            g.push(); g.tick()
+            guard let f = bridge.frameInfo() else { bad += 1; continue }
+            if f.pointing { pts += 1 }
+            if ctx.evaluateScript("__S().ex.some(function(e){return e[0]==='book'})")?.toBool() == true { withBook += 1 }
+            if f.grid.w != 34 || f.grid.h != 28 { bad += 1 }
+        }
+        check(bad == 0, "shim: __frame decodes as {g, pt} with a 34 x 28 grid")
+        check(pts >= 105 && pts <= 120, "shim: pt is true only inside the pointing window, 40 of 150 ticks (\(pts) of 450)")
+        check(withBook > 0, "shim: without bookOn the small book is still drawn in the window (\(withBook))")
+        g.bookOn = true
+        var pts2 = 0, withBook2 = 0
+        for _ in 0..<450 {
+            g.push(); g.tick()
+            if bridge.frameInfo()?.pointing == true { pts2 += 1 }
+            if ctx.evaluateScript("__S().ex.some(function(e){return e[0]==='book'})")?.toBool() == true { withBook2 += 1 }
+        }
+        check(pts2 >= 105 && pts2 <= 120 && withBook2 == 0, "shim: with bookOn the pose stays and the small book goes (\(pts2), \(withBook2))")
+        let hgOn = bridge.hitGrid()!
+        g.bookOn = false; g.push()
+        check(hgOn == bridge.hitGrid()!, "shim: the hit grid never held extras, with or without bookOn")
+        g.panelOpen = true; g.bookOn = true; g.push()
+        var pts3 = 0
+        for _ in 0..<300 { g.push(); g.tick(); if bridge.frameInfo()?.pointing == true { pts3 += 1 } }
+        check(pts3 == 0, "shim: with the panel open the sprite engine gets stale 0 and does not point")
+        g.panelOpen = false; g.push()
+        let calm0 = PetGlue(bridge: bridge); calm0.setData(state: "contento", h5: 0, stale: 0)
+        var pts4 = 0
+        for _ in 0..<300 { calm0.push(); calm0.tick(); if bridge.frameInfo()?.pointing == true { pts4 += 1 } }
+        check(pts4 == 0, "shim: no stale item, no pointing")
+        let sl = PetGlue(bridge: bridge); sl.setData(state: "dormido", h5: 0, stale: 3)
+        var pts5 = 0
+        for _ in 0..<300 { sl.push(); sl.tick(); if bridge.frameInfo()?.pointing == true { pts5 += 1 } }
+        check(pts5 == 0, "shim: asleep he does not point")
+        let hd = PetGlue(bridge: bridge); hd.setData(state: "contento", h5: 0, stale: 3); hd.setHeld(true)
+        var pts6 = 0
+        for _ in 0..<300 { hd.push(); hd.tick(); if bridge.frameInfo()?.pointing == true { pts6 += 1 } }
+        check(pts6 == 0, "shim: held he does not point")
+        let ac = PetGlue(bridge: bridge); ac.setData(state: "contento", h5: 0, stale: 3)
+        var pts7 = 0
+        for _ in 0..<300 { bridge.act("poke"); ac.push(); ac.tick(); if bridge.frameInfo()?.pointing == true { pts7 += 1 } }
+        check(pts7 == 0, "shim: acting he does not point")
+        for s in states {
+            let p = bridge.palette(s)
+            check(["c", "C", "l", "L", "s", "o"].allSatisfy { p[$0] != nil }, "shim: __pal(\(s)) has c C l L s o")
+        }
+        check(bridge.palette("raro") == bridge.palette("contento"), "shim: an invented state gets contento's palette")
+        check(PetBridge.shim.components(separatedBy: "spec()").count - 1 == 1, "shim: spec() is called once, in one helper that every consumer uses")
+        check(!PetBridge.shim.contains("__p.frame("), "shim: it never copies or calls the pet's frame()")
+    }
+
+    // the Libreta: where it opens, what it lists, the bar
+    do { // libretaRect (L1, L12, L13)
+        let c = Rc(200, 100, 900, 700)
+        check(libretaRect(claude: Rc(100, 100, 800, 600), visible: vis, bookCentre: nil) == Rc(912, 100, 380, 600), "libretaRect: 12 pt right of Claude, as tall as Claude")
+        check(libretaRect(claude: c, visible: vis, bookCentre: nil) == Rc(720, 100, 380, 700), "libretaRect: no room on the right, it sits inside Claude's right edge")
+        check(libretaRect(claude: Rc(0, -50, 400, 1200), visible: vis, bookCentre: nil) == Rc(412, 0, 380, 875), "libretaRect: never taller than the visible frame, never below it")
+        check(libretaRect(claude: Rc(100, 700, 400, 600), visible: vis, bookCentre: nil).maxY == 875, "libretaRect: kept under the top of the visible frame")
+        check(libretaRect(claude: Rc(-300, 100, 500, 600), visible: vis, bookCentre: nil).x == 212, "libretaRect: a window half off the left edge still puts it beside the window")
+        check(libretaRect(claude: Rc(1200, 100, 400, 600), visible: vis, bookCentre: nil) == Rc(1060, 100, 380, 600), "libretaRect: Claude half past the right edge: the panel stays inside the visible frame")
+        check(libretaRect(claude: Rc(-300, 100, 200, 600), visible: vis, bookCentre: nil).x >= 0, "libretaRect: Claude past the left edge: still inside")
+        check(libretaRect(claude: nil, visible: vis, bookCentre: Pt(100, 300)) == Rc(12, 0, 380, 875), "libretaRect: no Claude, book on the left half: 12 pt in from the left edge, full height")
+        check(libretaRect(claude: nil, visible: vis, bookCentre: Pt(1000, 300)) == Rc(1440 - 380 - 12, 0, 380, 875), "libretaRect: no Claude, book on the right half: 12 pt in from the right edge")
+        check(libretaRect(claude: nil, visible: vis, bookCentre: nil).x == 1440 - 380 - 12, "libretaRect: nothing to go by: the right edge")
+        check(libretaOpaque(Pt(190, 350), size: Pt(380, 700)) && !libretaOpaque(Pt(0, 0), size: Pt(380, 700)) && !libretaOpaque(Pt(3, 3), size: Pt(380, 700)) && libretaOpaque(Pt(5, 5), size: Pt(380, 700)) && libretaOpaque(Pt(190, 0), size: Pt(380, 700)), "libretaOpaque: the rounded rectangle, transparent corners")
+        check(!libretaOpaque(Pt(-1, 5), size: Pt(380, 700)) && !libretaOpaque(Pt(380, 5), size: Pt(380, 700)) && !libretaOpaque(Pt(5, 700), size: Pt(380, 700)) && !libretaOpaque(Pt(379.5, 699.5), size: Pt(380, 700)), "libretaOpaque: outside and the far corner click through")
+    }
+    do { // barFill (L4)
+        check(barFill(done: 5, total: 20) == 15 && barFill(done: 0, total: 20) == 0 && barFill(done: 20, total: 20) == 60 && barFill(done: 30, total: 20) == 60, "barFill: round(60 * done / total), never more than 60")
+        check(barFill(done: 1, total: 7) == 9 && barFill(done: 1, total: 0) == 0 && barFill(done: -3, total: 5) == 0, "barFill: rounds, and a zero total or a negative count is an empty bar")
+    }
+    do { // titles
+        check(capTitle("Rehacer el panel") == "Rehacer el panel" && capTitle(String(repeating: "a", count: 46)).count == 46, "capTitle: up to 46 characters is left alone")
+        let long = capTitle("Una tarea con un nombre larguísimo que no cabe en una sola línea del panel")
+        check(long.count <= 46 && long.hasSuffix("…") && !long.dropLast().hasSuffix(" "), "capTitle: cut at a word with … (\(long))")
+        check(capTitle(String(repeating: "x", count: 80)).count == 46, "capTitle: no space to cut at: 45 characters and …")
+        check(autoTitle("rehacer el panel (con notas y más)") == "Rehacer el panel" && autoTitle("Panel: lo que sea. Y más") == "Panel" && autoTitle("hola") == "Hola", "autoTitle: the first separator ends it, capitalised")
+        check(autoTitle("a: lo que importa de verdad aquí") == "Lo que importa de verdad aquí", "autoTitle: a head under 3 characters takes the text after the colon")
+    }
+    do { // libretaModel (L2, L3, L5, L6, L14, L16)
+        func it(_ id: String, _ title: String?, state: String = "active") -> Dict {
+            var d: Dict = ["id": id, "text": "texto de " + id + " (largo)", "state": state]
+            if let t = title { d["title"] = t }
+            return d
+        }
+        let feed: Dict = ["version": 2, "t": es, "total": 20, "done_total": 5, "stale": ["R-3"], "idle": ["R-4"],
+                          "counts": ["doing": 3, "next": 11, "later": 4, "done": 5],
+                          "doing": [it("R-2", "Dos"), it("R-3", "Tres"), it("R-4", "Cuatro", state: "idle")],
+                          "queue_recent": (0..<8).map { it("R-\(30 - $0)", "Próxima \($0)") }, "done_recent": [it("R-9", "Nueve"), it("R-8", "Ocho"), it("R-7", "Siete")],
+                          "queue": [it("R-1", "solo v1")]]
+        let m = libretaModel(feed: feed, old: false)
+        check(m.title == "Libreta" && m.sections.map { $0.key } == ["doing", "next", "done"], "model: Libreta, then En curso, Por empezar, Hecho")
+        check(m.sections[0].heading == "En curso" && m.sections[1].heading == "Por empezar" && m.sections[2].heading == "Hecho", "model: the headings come from the catalog")
+        check(m.sections[0].rows.map { $0.id } == ["R-3", "R-2", "R-4"], "model: the stale row comes first, the rest keep their order")
+        check(m.sections[0].rows.map { $0.stale } == [true, false, false] && m.sections[0].rows.map { $0.paused } == [false, false, true], "model: stale and paused flags")
+        check(m.sections[0].rows[0].caption == "estancada · más de 7 días" && m.sections[0].rows[2].caption == "en pausa" && m.sections[0].rows[1].caption == nil, "model: the stale caption and the paused caption")
+        check(m.sections[0].count == 3 && m.sections[1].count == 11 && m.sections[2].count == 5, "model: counts per section")
+        check(m.sections[1].rows.count == 8 && m.sections[1].rows[0].id == "R-30" && m.sections[1].rows[7].id == "R-23", "model: Por empezar lists the 8 newest first")
+        check(m.sections[1].more == "y 3 más, de nuevas a antiguas" && m.sections[2].more == "y 2 más" && m.sections[0].more == nil, "model: the 'and N more' lines")
+        check(m.sections[2].rows.map { $0.id } == ["R-9", "R-8", "R-7"], "model: Hecho lists the 3 most recent")
+        check(m.progress?.fill == 15 && m.progress?.caption == "5 de 20 hechas · 25 %", "model: the progress bar and its caption")
+        check(m.head == "Esta lleva más de 7 días sin moverse. ¿La miramos?" && m.old == nil, "model: one stale row in the header's voice, no 'old' line")
+        check(m.parked == "4 ideas aparcadas", "model: parked ideas as a count")
+        var two = feed; two["stale"] = ["R-3", "R-2"]
+        check(libretaModel(feed: two, old: false).head == "Llevan más de 7 días sin moverse. ¿Las miramos?", "model: stale, plural")
+        var calm = feed; calm["stale"] = []
+        check(libretaModel(feed: calm, old: false).head == "Hay 3 tareas en marcha.", "model: no stale rows: how many are in progress")
+        var one = calm; one["counts"] = ["doing": 1, "next": 11, "later": 1, "done": 5]; one["doing"] = [it("R-2", "Dos")]
+        check(libretaModel(feed: one, old: false).head == "Hay una tarea en marcha." && libretaModel(feed: one, old: false).parked == "1 idea aparcada", "model: singular forms")
+        var quiet = calm; quiet["counts"] = ["doing": 0, "next": 7, "later": 0, "done": 5]; quiet["doing"] = []
+        let qm = libretaModel(feed: quiet, old: false)
+        check(qm.head == "Todo quieto. Tienes 7 por empezar." && qm.parked == nil && qm.sections[0].rows.isEmpty && qm.sections[0].empty == "Nada en marcha.", "model: nothing in progress: the quiet header, the empty line, no parked line")
+        var none = feed; none["done_total"] = 0; none["done_recent"] = []; none["counts"] = ["doing": 3, "next": 11, "later": 4, "done": 0]
+        let nm = libretaModel(feed: none, old: false)
+        check(nm.progress?.fill == 0 && nm.progress?.caption == "0 de 20 hechas · 0 %", "model: tasks but none done: an empty bar and '0 de 20 hechas · 0 %' (only a zero total hides the bar)")
+        let empty = libretaModel(feed: ["version": 2, "t": es, "total": 0, "done_total": 0, "counts": ["doing": 0, "next": 0, "later": 0, "done": 0], "doing": [], "queue_recent": [], "done_recent": []], old: false)
+        check(empty.progress?.fill == nil && empty.progress?.caption == "Todavía nada hecho." && empty.head == "Todo quieto. Nada por empezar.", "model: nothing at all: no bar, 'Todavía nada hecho.'")
+        check(empty.sections.map { $0.empty ?? "" } == ["Nada en marcha.", "Nada por empezar.", "Todavía nada hecho."], "model: every empty section says so")
+        check(libretaModel(feed: feed, old: true).old == "Datos de hace un rato", "model: the dim line when the last call failed")
+        var longTitle = feed; longTitle["doing"] = [it("R-2", String(repeating: "palabra ", count: 12))]
+        let lt = libretaModel(feed: longTitle, old: false).sections[0].rows[0].title
+        check(lt.count <= 46 && lt.hasSuffix("…"), "model: a title over 46 characters is cut with … (a defence; the source rejects it)")
+        let v1: Dict = ["t": es, "counts": ["doing": 1, "next": 14, "later": 2, "done": 70], "doing": [it("R-2", nil)], "queue": (0..<12).map { it("R-\($0 + 1)", nil) }, "stale": [], "idle": []]
+        let m1 = libretaModel(feed: v1, old: false)
+        check(m1.sections.map { $0.key } == ["doing", "next"] && m1.progress == nil, "model: a version 1 feed has no Hecho and no bar")
+        check(m1.sections[0].rows[0].title == "Texto de R-2" && m1.sections[1].rows.count == 12 && m1.sections[1].more == "y 2 más", "model: version 1 rows use the automatic title and the oldest-first queue")
+        check(m1.head == "Hay una tarea en marcha." && m1.parked == "2 ideas aparcadas", "model: a version 1 feed still gets its header and parked count")
+        let oldCatalog: Dict = ["book.now": "Ahora", "book.queue": "En cola", "book.nothing": "nada", "book.more": "y {n} más"]
+        let m0 = libretaModel(feed: ["counts": ["doing": 0, "next": 1], "doing": [], "queue": [it("R-1", nil)], "t": oldCatalog], old: false)
+        check(m0.sections[0].heading == "Ahora" && m0.sections[1].heading == "En cola" && m0.head == "", "model: an old plugin's catalog still gives headings, and no header line rather than a wrong one")
+        check(libretaModel(feed: ["counts": [:], "doing": [], "queue": []], old: false).sections.count == 2, "model: a feed with no words at all does not crash")
+        for k in m.sections.flatMap({ $0.rows }).map({ $0.title }) { check(!k.unicodeScalars.contains { $0.value >= 0x1F300 && $0.value <= 0x1FAFF }, "model: no emoji in \(k)") }
+    }
+    if let icon = iconOpt {
+        let p = bookPalette(bridge.palette("contento"))
+        check(["o", "P", "l", "L"].allSatisfy { p[Character($0)] != nil }, "bar: the palette has o, P, l and L")
+        let b0 = icon.barGrid(fill: 0, pal: p), b30 = icon.barGrid(fill: 30, pal: p), b60 = icon.barGrid(fill: 60, pal: p)
+        check(b0.w == 62 && b0.h == 5, "bar: 62 x 5 art px")
+        check(b0[0, 0] == p["o"] && b0[61, 4] == p["o"] && b0[0, 2] == p["o"] && b0[61, 2] == p["o"] && b0[30, 0] == p["o"] && b0[30, 4] == p["o"], "bar: the outline on rows 0 and 4 and columns 0 and 61")
+        check(b0[1, 1] == p["P"] && b0[1, 3] == p["P"] && b0[60, 2] == p["P"], "bar: empty is the P key")
+        check(b30[30, 1] == p["l"] && b30[30, 2] == p["l"] && b30[30, 3] == p["L"] && b30[31, 1] == p["P"] && b30[1, 1] == p["l"], "bar: filled up to the count, l on rows 1-2 and L on row 3")
+        check(b60[60, 1] == p["l"] && b60[61, 1] == p["o"], "bar: full is 60 art px, the outline stays")
+        for (name, rows) in icon.panel.sorted(by: { $0.key < $1.key }) { check(icon.iconGrid(name, pal: p)?.w == 8 && rows.count == 8, "panel icon \(name) as a grid") }
+        check(icon.iconGrid("nope", pal: p) == nil, "panel icon: an unknown name is nil")
+    }
+
     finishSelftest()
 }
 
@@ -1130,6 +2020,32 @@ final class HostPanel: NSPanel {
     }
 }
 
+/// The book's window content: the picture at 3 pt per art px and the mouse, handed to the controller.
+final class BookView: NSView {
+    let imageLayer = CALayer()
+    weak var owner: Brote?
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        imageLayer.frame = CGRect(x: 0, y: 0, width: K.bookW, height: K.bookH)
+        imageLayer.magnificationFilter = .nearest; imageLayer.minificationFilter = .nearest; imageLayer.contentsGravity = .resize
+        layer?.addSublayer(imageLayer)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+    override var acceptsFirstResponder: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { owner?.bookPressed() }
+    override func mouseDragged(with event: NSEvent) { owner?.bookDragged() }
+    override func mouseUp(with event: NSEvent) { owner?.bookReleased() }
+    override func rightMouseDown(with event: NSEvent) { owner?.showMenu(event, in: self) }
+    func setImage(_ img: CGImage?, dropped: Bool) {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        imageLayer.contents = img
+        imageLayer.frame.origin.y = dropped ? -K.scale : 0         // a press drops it 1 art px for 100 ms
+        CATransaction.commit()
+    }
+}
+
 final class SpriteView: NSView {
     let imageLayer = CALayer()
     weak var owner: Brote?
@@ -1152,6 +2068,111 @@ final class SpriteView: NSView {
         imageLayer.contents = img
         CATransaction.commit()
     }
+}
+
+/// The Libreta's page: laid out from the model and drawn straight into the view (no subviews). Colours are semantic, so it follows the system appearance.
+final class LibretaContent: NSView {
+    enum Item { case text(NSAttributedString, CGRect), image(NSImage, CGRect), fill(NSColor, CGRect) }
+    var items: [Item] = []
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+
+    private func str(_ s: String, _ size: CGFloat, _ weight: NSFont.Weight = .regular, _ color: NSColor, mono: Bool = false, right: Bool = false, wrap: Bool = false) -> NSAttributedString {
+        let p = NSMutableParagraphStyle()
+        p.lineBreakMode = wrap ? .byWordWrapping : .byTruncatingTail
+        if right { p.alignment = .right }
+        let font = mono ? NSFont.monospacedSystemFont(ofSize: size, weight: weight) : NSFont.systemFont(ofSize: size, weight: weight)
+        return NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: p])
+    }
+    private func height(_ a: NSAttributedString, width: CGFloat) -> CGFloat {
+        ceil(a.boundingRect(with: NSSize(width: width, height: 10_000), options: [.usesLineFragmentOrigin]).height)
+    }
+
+    /// Lays the page out for `width` and returns its height.
+    func build(model m: LibretaModel, portrait: CGImage?, bar: CGImage?, icons: [String: CGImage], width W: CGFloat) -> CGFloat {
+        items = []
+        let pad: CGFloat = 20, px = CGFloat(K.scale)
+        func img(_ c: CGImage?, _ r: CGRect) { if let c = c { items.append(.image(NSImage(cgImage: c, size: NSSize(width: c.width, height: c.height)), r)) } }
+        var y = pad
+        // the header: his portrait, the title, what the notebook has to say
+        let pw = 34 * px, ph = 28 * px, tx = pad + pw + 14
+        img(portrait, CGRect(x: pad, y: y, width: pw, height: ph))
+        items.append(.text(str(m.title, 20, .semibold, .labelColor), CGRect(x: tx, y: y + 2, width: W - tx - pad, height: 26)))
+        var hy = y + 32
+        if !m.head.isEmpty {
+            let a = str(m.head, 13, .regular, .secondaryLabelColor, wrap: true), h = height(a, width: W - tx - pad)
+            items.append(.text(a, CGRect(x: tx, y: hy, width: W - tx - pad, height: h))); hy += h + 2
+        }
+        if let o = m.old { items.append(.text(str(o, 11, .regular, .tertiaryLabelColor), CGRect(x: tx, y: hy, width: W - tx - pad, height: 15))); hy += 15 }
+        y = max(y + ph, hy) + 18
+        // progress
+        if let pr = m.progress {
+            if pr.fill != nil, let bar = bar { img(bar, CGRect(x: pad, y: y, width: CGFloat(bar.width) * px, height: CGFloat(bar.height) * px)); y += CGFloat(bar.height) * px + 6 }
+            items.append(.text(str(pr.caption, 12, .regular, .secondaryLabelColor), CGRect(x: pad, y: y, width: W - 2 * pad, height: 16)))
+            y += 16 + 22
+        }
+        for s in m.sections {
+            img(icons[s.key], CGRect(x: pad, y: y, width: 8 * px, height: 8 * px))
+            items.append(.text(str(s.heading, 12, .semibold, .labelColor), CGRect(x: pad + 8 * px + 8, y: y + 4, width: W - 2 * pad - 8 * px - 8 - 46, height: 16)))
+            items.append(.text(str(String(s.count), 12, .regular, .secondaryLabelColor, right: true), CGRect(x: W - pad - 40, y: y + 4, width: 40, height: 16)))
+            y += 8 * px + 6
+            for r in s.rows {
+                let rh: CGFloat = r.caption == nil ? 26 : 42
+                if r.stale { items.append(.fill(.systemOrange, CGRect(x: pad - 8, y: y + 2, width: 3, height: rh - 6))) }
+                items.append(.text(str(r.id, 11, .regular, .tertiaryLabelColor, mono: true), CGRect(x: pad, y: y + 3, width: 46, height: 16)))
+                items.append(.text(str(r.title, 13, .regular, .labelColor), CGRect(x: pad + 48, y: y + 1, width: W - 2 * pad - 48, height: 18)))
+                if let c = r.caption { items.append(.text(str(c, 11, .regular, r.stale ? .systemOrange : .secondaryLabelColor), CGRect(x: pad + 48, y: y + 21, width: W - 2 * pad - 48, height: 15))) }
+                y += rh
+            }
+            if let e = s.empty { items.append(.text(str(e, 12, .regular, .tertiaryLabelColor), CGRect(x: pad + 48, y: y, width: W - 2 * pad - 48, height: 16))); y += 22 }
+            if let mo = s.more { items.append(.text(str(mo, 11, .regular, .tertiaryLabelColor), CGRect(x: pad + 48, y: y, width: W - 2 * pad - 48, height: 15))); y += 21 }
+            y += 12
+        }
+        if let pk = m.parked {
+            img(icons["later"], CGRect(x: pad, y: y, width: 8 * px, height: 8 * px))
+            items.append(.text(str(pk, 12, .regular, .secondaryLabelColor), CGRect(x: pad + 8 * px + 8, y: y + 4, width: W - 2 * pad - 8 * px - 8, height: 16)))
+            y += 8 * px + 8
+        }
+        frame.size = NSSize(width: W, height: y + pad - 8)
+        setAccessibilityLabel(m.title)
+        needsDisplay = true
+        return y + pad - 8
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSGraphicsContext.current?.imageInterpolation = .none
+        for it in items {
+            switch it {
+            case .text(let a, let r): if r.intersects(dirtyRect) { a.draw(with: r, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine]) }
+            case .image(let i, let r): if r.intersects(dirtyRect) { i.draw(in: r, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.none.rawValue]) }
+            case .fill(let c, let r): c.setFill(); NSBezierPath(roundedRect: r, xRadius: 1.5, yRadius: 1.5).fill()
+            }
+        }
+    }
+}
+
+/// The rounded page the panel shows: the system's window colour, a hairline edge, and the content under a scroll view that never takes the key.
+final class LibretaFrame: NSView {
+    let scroll = NSScrollView()
+    let content = LibretaContent(frame: .zero)
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = K.libretaRadius; layer?.masksToBounds = true; layer?.borderWidth = 0.5
+        scroll.frame = bounds; scroll.autoresizingMask = [.width, .height]
+        scroll.drawsBackground = false; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true; scroll.scrollerStyle = .overlay
+        scroll.borderType = .noBorder; scroll.documentView = content
+        addSubview(scroll)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+            layer?.borderColor = NSColor.separatorColor.cgColor
+        }
+    }
+    override func viewDidChangeEffectiveAppearance() { needsDisplay = true; content.needsDisplay = true }
 }
 
 func makeImage(_ g: Grid, flipped: Bool) -> CGImage? {
@@ -1179,8 +2200,6 @@ func windowList() -> [WinInfo] {
     }
 }
 
-enum Mode { case rest, held(grab: Pt, start: Pt, moved: Bool), flying(body: Body, bounds: Bounds, dizzy: Bool) }
-
 final class Brote: NSObject {
     let store = DefaultsStore()
     let probe: Probe
@@ -1190,31 +2209,57 @@ final class Brote: NSObject {
     let view: SpriteView
     var hubURL: URL?
     let dataOn: Bool
-    var mode = Mode.rest
+    let eventsOn: Bool                                   // read the plugin's event file (--no-events turns it off)
+    var eventsOffset: UInt64 = 0
+    var lastFront: Bool?, lastReduce: Bool?
+    static let eventsPath = NSHomeDirectory() + "/Library/Application Support/BroteWindow/events.log"
+    var dragger = Dragger()
     var stroll = Stroll()
-    var samples: [Sample] = []
     var pressedDown = false
     var mask: HitMask?
-    var cachedGrid: Grid?, cachedFlip = false
+    var cachedGrid: Grid?, cachedFlip = false, cachedKey: String?, cachedPointing = false
+    // the book: a second body with his physics, shown once a feed has been read in this run
+    let bookPanel = HostPanel(size: NSSize(width: K.bookW, height: K.bookH))
+    let bookView: BookView
+    let place: BookPlace
+    var icon: BookIcon?
+    var bookDrag = Dragger()
+    var bookMask: HitMask?
+    var bookKey: String?, bookPal: [Character: RGBA] = [:], bookPalState = ""
+    var bookHover = false, bookPressedDown = false, bookPressOnMask = false, bookStart = Pt(0, 0), bookDropped = false
+    var bookFlightTimer: Timer?, lastBookFlight = 0.0, lastBookOrigin: NSPoint?
+    var sideLeft: Bool?
+    // the Libreta: a panel made on the first press, below him and the book
+    var libretaPanel: HostPanel?, libretaFrameView: LibretaFrame?
+    var libretaVisible = false, libretaClosing = false, libretaAskedAt: Double?, libretaTarget: Rc?
+    var libretaModelShown: LibretaModel?, libretaPalKey = "", feedOld = false, feedFresh = false, panelTouched = false
     var status: Dict?
     var statusBusy = false, docsProbed = false
     var hitTimer: Timer?, flightTimer: Timer?
     var lastFlight = 0.0, lastOrigin: NSPoint?
-    var cpuMark = (wall: uptime(), cpu: 0.0), flightSeconds = 0.0, cpuFirst = true, touched = false
+    var cpuMark = (wall: uptime(), cpu: 0.0), flightSeconds = 0.0, cpuFirst = true, touched = false, threadMark: [ThreadCPU] = []
 
     init(args: [String], policyAccepted: Bool) {
         probe = Probe(path: NSHomeDirectory() + "/Library/Logs/BroteWindow/probe.log")
         probe.reset()
         dataOn = !args.contains("--no-data")
+        eventsOn = !args.contains("--no-events")
         let (bridge, why) = PetBridge.load(dir: Bundle.main.resourcePath ?? ".")
         guard let b = bridge else { fputs("brote: " + why + "\n", stderr); probe.plain("start failed: " + why); exit(1) }
         glue = PetGlue(bridge: b)
         let screens = NSScreen.screens.map { Brote.rc($0.visibleFrame) }
         layout = Layout(store: store, screens: screens, claude: nil)
         view = SpriteView(frame: NSRect(x: 0, y: 0, width: K.winW, height: K.winH))
+        bookView = BookView(frame: NSRect(x: 0, y: 0, width: K.bookW, height: K.bookH))
+        place = BookPlace(store: store)
+        icon = BookIcon(dir: Bundle.main.resourcePath ?? ".")
         super.init()
         view.owner = self
         panel.contentView = view
+        bookView.owner = self
+        bookPanel.contentView = bookView
+        bookPanel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)      // above him; the Libreta panel sits below both
+        if icon == nil { probe.plain("book-icon.json missing or unreadable: no book") }
 
         // hub: named on the command line, only with the data line on (stage 1 never touches ~/Documents), and only if the script is mine and not writable by others
         if dataOn {
@@ -1225,16 +2270,18 @@ final class Brote: NSObject {
         }
 
         probe.log("P4", [("policyAccepted", String(policyAccepted)), ("activationPolicy", String(NSApp.activationPolicy().rawValue))])
-        probe.log("START", [("dataOn", String(dataOn)), ("hub", hubURL?.path ?? "none"), ("pid", String(getpid()))])
+        probe.log("START", [("src", buildStamp(try? String(contentsOfFile: (Bundle.main.resourcePath ?? ".") + "/build.txt", encoding: .utf8))), ("dataOn", String(dataOn)), ("hub", hubURL?.path ?? "none"), ("pid", String(getpid()))])
         probeStartup(b)
         claudePoll()
         if dataOn { loadSaved() }
-        rebuildFrame()
+        rebuildFrame(key: nil)
         positionWindows()
         panel.orderFrontRegardless()
         probe.log("P1", [("opaque", String(panel.isOpaque)), ("bgAlpha", String(Double(panel.backgroundColor?.alphaComponent ?? -1))), ("shadow", String(panel.hasShadow)),
-                         ("level", String(panel.level.rawValue)), ("panels", "1"), ("ignoring", String(panel.ignoresMouseEvents))])
+                         ("level", String(panel.level.rawValue)), ("panels", String(visiblePanels())), ("ignoring", String(panel.ignoresMouseEvents))])
         installMonitors()
+        if let i = args.firstIndex(of: "--ambient"), i + 1 < args.count { glue.bridge.setAmbient(args[i + 1]) }
+        startEvents()
         schedule()
         if dataOn { refreshStatus() }
         probeHost(); probeResources()
@@ -1259,86 +2306,324 @@ final class Brote: NSObject {
 
     // MARK: the 10 fps tick
     func tick() {
-        if case .rest = mode {
+        if dragger.isRest {
             let r = layout.strollRange()
             var x = layout.pos.x
             stroll.tick(state: glue.bridge.state, busy: glue.busy || pressedDown, x: &x, home: r.home, lo: r.lo, hi: r.hi, rng: { Double.random(in: 0..<1) })
             if x != layout.pos.x { layout.pos.x = x; positionWindows() }
             glue.walking = stroll.walking
         } else { glue.walking = false }
-        glue.push(); glue.tick()
-        rebuildFrame()
+        if place.on, let bp = place.pos { sideLeft = bookOnLeft(bookOn: true, prevLeft: sideLeft, bookCx: bp.x + K.bookW / 2, broteCx: layout.pos.x + K.spriteW / 2) }
+        var key: String?
+        timed(3) { key = glue.step() }
+        rebuildFrame(key: key)
+        refreshBook()
     }
 
-    func rebuildFrame() {
-        guard let g = glue.bridge.frame() else { return }
-        let flip = stroll.facingLeft && stroll.walking
+    /// He mirrors toward a book on his left while he points; otherwise the walking-facing rule.
+    func currentFlip(pointing: Bool) -> Bool {
+        if glue.bridge.calling, let c = layout.claude { return c.x + c.w / 2 > layout.pos.x + K.spriteW / 2 }     // a call faces the Claude window
+        return faceFlip(pointing: pointing && place.on, bookOnLeft: place.on && sideLeft == true, facingLeft: stroll.facingLeft, walking: stroll.walking)
+    }
+
+    func rebuildFrame(key: String?) {
+        var flip = currentFlip(pointing: cachedPointing)
+        if frameUnchanged(key: key, cachedKey: cachedKey, flip: flip, cachedFlip: cachedFlip) { return }
+        var info: (grid: Grid, pointing: Bool)?
+        timed(3) { info = glue.bridge.frameInfo() }
+        guard let (g, pointing) = info else { return }
+        cachedKey = key; cachedPointing = pointing
+        flip = currentFlip(pointing: pointing)
         if g == cachedGrid && flip == cachedFlip { return }
         cachedGrid = g; cachedFlip = flip
-        view.setImage(makeImage(g, flipped: flip))
-        if let hg = glue.bridge.hitGrid() { mask = HitMask(grid: hg) }
+        var img: CGImage?
+        timed(5) { img = makeImage(g, flipped: flip) }
+        timed(6) { view.setImage(img) }
+        timed(4) { if let hg = glue.bridge.hitGrid() { mask = HitMask(grid: hg) } }
     }
 
     func positionWindows() {
         let o = NSPoint(x: layout.pos.x - K.margin, y: layout.pos.y - K.margin)
-        if lastOrigin != o { panel.setFrameOrigin(o); lastOrigin = o }
+        if lastOrigin != o { timed(7) { panel.setFrameOrigin(o) }; lastOrigin = o }
+    }
+
+    // MARK: the book
+    var bookRect: Rc? { place.pos.map { Rc($0.x, $0.y, K.bookW, K.bookH) } }
+    var feedStale: Int { (status?["stale"] as? [Any])?.count ?? 0 }
+    func visiblePanels() -> Int { 1 + (bookPanel.isVisible ? 1 : 0) + (libretaPanel?.isVisible == true ? 1 : 0) }
+
+    func positionBook() {
+        guard let p = place.pos else { return }
+        let o = NSPoint(x: p.x, y: p.y)
+        if lastBookOrigin != o { bookPanel.setFrameOrigin(o); lastBookOrigin = o }
+    }
+
+    /// The first feed of this run puts the book on screen (stored place, else on his right) and tells the sprite its own small book is no longer needed.
+    func showBookIfNeeded() {
+        guard icon != nil, !place.on else { return }
+        place.firstFeed(sprite: layout.pos, screens: layout.screens)
+        glue.bookOn = true
+        refreshBook()
+        positionBook()
+        bookPanel.orderFrontRegardless()
+        probe.log("BOOK", [("kind", "shown"), ("x", String(Int(place.pos?.x ?? -1))), ("y", String(Int(place.pos?.y ?? -1)))], cap: 200)
+        probe.log("P1", [("level", String(bookPanel.level.rawValue)), ("panels", String(visiblePanels())), ("ignoring", String(bookPanel.ignoresMouseEvents))])
+    }
+
+    /// Draws the book when its look changed (state, stale ribbon, hover, press drop, his palette); a key keeps the 10 Hz tick cheap.
+    func refreshBook() {
+        guard let icon = icon, place.on else { return }
+        let look = bookLook(open: libretaVisible, hover: bookHover, held: bookDrag.isHeld, stale: feedStale)
+        let ribbon = bookRibbon(look: look, stale: feedStale)
+        let key = "\(look.rawValue)|\(ribbon)|\(glue.state)|\(bookDropped)"
+        if key == bookKey { return }
+        if bookPalState != glue.state { bookPal = bookPalette(glue.bridge.palette(glue.state)); bookPalState = glue.state }
+        let g = icon.grid(look: look, ribbon: ribbon, pal: bookPal)
+        bookKey = key
+        bookMask = HitMask(grid: g)
+        bookView.setImage(makeImage(g, flipped: false), dropped: bookDropped)
+    }
+
+    func bookPressed() {
+        touched = true
+        guard let bp = place.pos else { return }
+        let m = mousePt()
+        bookPressOnMask = bookMask?.hit(x: m.x - bp.x, yTop: K.bookH - (m.y - bp.y), flipped: false) ?? false
+        stopBookFlight()
+        bookDrag.press(at: m, origin: bp, now: uptime())
+        bookStart = m
+        bookPressedDown = true
+        bookPanel.ignoresMouseEvents = false
+        refreshBook()
+    }
+
+    func bookDragged() {
+        switch bookDrag.drag(to: mousePt(), now: uptime()) {
+        case .idle: return
+        case .started(let p), .moving(let p): place.move(to: bookClamp(p, screens: layout.screens))
+        }
+        positionBook()
+    }
+
+    func bookReleased() {
+        bookPressedDown = false
+        let up = mousePt()
+        libretaAskedAt = uptime()
+        switch bookDrag.release(now: uptime()) {
+        case .notHeld: break
+        case .click:
+            if isBookPress(from: bookStart, to: up, overBook: bookPressOnMask) { bookPress() }
+        case .moved(let v):
+            guard let p = place.pos else { break }
+            let b = bookBounds(visibleFrame(for: p))
+            let r = bookRelease(speed: v.speed, pos: p, bounds: b)
+            switch r.action {
+            case .stay:
+                place.land(at: r.pos, screens: layout.screens); positionBook()
+                probe.log("BOOK", [("kind", "drop"), ("speed", String(Int(v.speed))), ("x", String(Int(r.pos.x))), ("y", String(Int(r.pos.y)))], cap: 200)
+            case .fly:
+                bookDrag.fly(Body(p: r.pos, v: v), in: b, dizzy: false)
+                probe.log("BOOK", [("kind", "throw"), ("speed", String(Int(v.speed)))], cap: 200)
+                startBookFlight()
+            }
+        }
+        refreshBook()
+    }
+
+    func visibleFrame(for book: Pt) -> Rc {
+        let c = Pt(book.x + K.bookW / 2, book.y + K.bookH / 2)
+        return layout.screens.isEmpty ? Rc(0, 0, 1440, 900) : layout.screens[screenIndex(for: c, in: layout.screens)]
+    }
+
+    /// A press on the book: it drops 1 art px for 100 ms (only the fade stays with "reduce motion"), then the Libreta toggles.
+    func bookPress() {
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            bookDropped = true; refreshBook()
+            Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [unowned self] _ in self.bookDropped = false; self.refreshBook() }
+        }
+        probe.log("BOOK", [("kind", "press")], cap: 200)
+        toggleLibreta()
+    }
+    // MARK: the Libreta panel (below him and the book, above Claude)
+    func libretaScreen() -> Rc {
+        let at = layout.claude?.center ?? place.pos.map { Pt($0.x + K.bookW / 2, $0.y + K.bookH / 2) } ?? layout.pos
+        return layout.screens.isEmpty ? Rc(0, 0, 1440, 900) : layout.screens[screenIndex(for: at, in: layout.screens)]
+    }
+    func libretaFrame() -> Rc {
+        libretaRect(claude: layout.claude, visible: libretaScreen(), bookCentre: place.pos.map { Pt($0.x + K.bookW / 2, $0.y + K.bookH / 2) })
+    }
+    func libretaIcons() -> [String: CGImage] {
+        guard let icon = icon else { return [:] }
+        var out: [String: CGImage] = [:]
+        for k in icon.panel.keys { if let g = icon.iconGrid(k, pal: bookPal), let i = makeImage(g, flipped: false) { out[k] = i } }
+        return out
+    }
+    /// Builds the page from the last feed. Returns false when nothing changed (same words, same pose, same colours).
+    @discardableResult func fillLibreta(force: Bool) -> Bool {
+        guard let st = status, let frame = libretaFrameView else { return false }
+        let model = libretaModel(feed: st, old: feedOld)
+        let key = glue.state
+        if !force, model == libretaModelShown, key == libretaPalKey { return false }
+        if bookPalState != glue.state { bookPal = bookPalette(glue.bridge.palette(glue.state)); bookPalState = glue.state }
+        let top = frame.scroll.contentView.bounds.origin.y
+        let bar = icon.flatMap { ic -> CGImage? in
+            guard case let f? = model.progress?.fill else { return nil }
+            return makeImage(ic.barGrid(fill: f, pal: bookPal), flipped: false)
+        }
+        let portrait = glue.bridge.hitGrid().flatMap { makeImage($0, flipped: false) }
+        let h = frame.content.build(model: model, portrait: portrait, bar: bar, icons: libretaIcons(), width: CGFloat(K.libretaW))
+        frame.content.frame.size.height = max(h, frame.scroll.bounds.height)
+        frame.scroll.contentView.scroll(to: NSPoint(x: 0, y: min(top, max(0, h - frame.scroll.bounds.height))))
+        libretaModelShown = model; libretaPalKey = key
+        return true
+    }
+    func ensureLibretaPanel() -> HostPanel {
+        if let p = libretaPanel { return p }
+        let p = HostPanel(size: NSSize(width: K.libretaW, height: 400))
+        p.level = NSWindow.Level(rawValue: 2)                       // above Claude's windows, below him (3) and the book (4)
+        let v = LibretaFrame(frame: NSRect(x: 0, y: 0, width: K.libretaW, height: 400))
+        p.contentView = v
+        libretaPanel = p; libretaFrameView = v
+        return p
+    }
+    var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    func toggleLibreta() { libretaVisible ? closeLibreta() : openLibreta() }
+
+    func openLibreta() {
+        guard status != nil, icon != nil else { return }
+        let created = libretaPanel == nil
+        let p = ensureLibretaPanel()
+        let r = libretaFrame()
+        let end = NSRect(x: r.x, y: r.y, width: r.w, height: r.h)
+        libretaTarget = r
+        libretaVisible = true; libretaClosing = false
+        glue.panelOpen = true; glue.push(); refreshBook()
+        let slide: CGFloat = reduceMotion ? 0 : 14 * ((layout.claude.map { $0.center.x < r.x + r.w / 2 } ?? true) ? -1 : 1)
+        p.setFrame(end.offsetBy(dx: slide, dy: 0), display: false)      // size first: the page is laid out against the scroll view's height
+        fillLibreta(force: true)
+        p.alphaValue = 0
+        p.orderFrontRegardless()
+        if let up = libretaAskedAt { probe.log("P17", [("ms", String(Int((uptime() - up) * 1000)))], cap: 60) }
+        if created { probe.log("P1", [("level", String(p.level.rawValue)), ("panels", String(visiblePanels())), ("ignoring", String(p.ignoresMouseEvents))]) }
+        probe.log("BOOK", [("kind", "libreta"), ("open", "true")], cap: 200)
+        NSAnimationContext.runAnimationGroup { c in
+            c.duration = reduceMotion ? 0.12 : 0.2
+            c.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+            p.animator().alphaValue = 1
+            if slide != 0 { p.animator().setFrame(end, display: true) }
+        }
+    }
+
+    func closeLibreta() {
+        guard libretaVisible, let p = libretaPanel else { return }
+        libretaVisible = false; libretaClosing = true
+        glue.panelOpen = false; glue.push(); refreshBook()
+        probe.log("BOOK", [("kind", "libreta"), ("open", "false")], cap: 200)
+        NSAnimationContext.runAnimationGroup({ c in
+            c.duration = reduceMotion ? 0.1 : 0.14
+            c.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            p.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self = self, self.libretaClosing else { return }
+            p.orderOut(nil); self.libretaClosing = false
+        })
+    }
+
+    /// Claude moved or a display changed: the open panel follows without a slide.
+    func repositionLibreta() {
+        guard libretaVisible, let p = libretaPanel else { return }
+        // with no Claude window the place was computed at open: the book moving does not move the panel, only a lost display does
+        if layout.claude == nil, layout.screens.contains(where: { $0.contains(Pt(Double(p.frame.midX), Double(p.frame.midY))) }) { return }
+        let r = libretaFrame()
+        guard r != libretaTarget else { return }                  // against the last target, not the frame: an open slide in flight is not cut
+        libretaTarget = r
+        p.setFrame(NSRect(x: r.x, y: r.y, width: r.w, height: r.h), display: true); fillLibreta(force: true)
+    }
+
+    /// The panel's own click-through: only its rounded rectangle takes the pointer.
+    func libretaOverPointer(_ m: Pt) -> Bool {
+        guard let p = libretaPanel, p.isVisible else { return false }
+        let f = p.frame
+        return libretaOpaque(Pt(m.x - Double(f.origin.x), m.y - Double(f.origin.y)), size: Pt(Double(f.width), Double(f.height)))
+    }
+
+    func startBookFlight() {
+        lastBookFlight = uptime()
+        let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [unowned self] _ in self.bookFlightStep() }
+        RunLoop.main.add(t, forMode: .common); bookFlightTimer = t
+    }
+    func stopBookFlight() { bookFlightTimer?.invalidate(); bookFlightTimer = nil }
+    func bookFlightStep() {
+        let now = uptime(), dt = min(now - lastBookFlight, 1.0 / 30)
+        lastBookFlight = now; flightSeconds += dt
+        guard let t = bookDrag.step(dt: dt) else { stopBookFlight(); return }
+        place.move(to: t.body.p); positionBook()
+        if t.landed {
+            stopBookFlight()
+            place.land(at: t.body.p, screens: layout.screens); positionBook()
+            probe.log("BOOK", [("kind", "land"), ("x", String(Int(t.body.p.x))), ("y", String(Int(t.body.p.y)))], cap: 200)
+        }
     }
 
     // MARK: click-through: an adaptive poll of the pointer, never an event tap
     func hitPoll() {
         let m = mousePt(), p = layout.pos
-        let over = mask?.hit(x: m.x - p.x, yTop: K.spriteH - (m.y - p.y), flipped: cachedFlip) ?? false
-        var dragging = false
-        if case .held(_, _, let moved) = mode { dragging = moved }
-        let ignore = ignoreMouse(overBody: over, pressed: pressedDown, dragging: dragging)
+        let overBrote = mask?.hit(x: m.x - p.x, yTop: K.spriteH - (m.y - p.y), flipped: cachedFlip) ?? false
+        var overBook = false
+        if let bp = place.pos { overBook = bookMask?.hit(x: m.x - bp.x, yTop: K.bookH - (m.y - bp.y), flipped: false) ?? false }
+        let target = pressTarget(overBook: overBook, overBrote: overBrote)
+        let ignore = ignoreMouse(overBody: target == .brote, pressed: pressedDown, dragging: dragger.isDragging)
         if panel.ignoresMouseEvents != ignore { panel.ignoresMouseEvents = ignore }
-        if case .rest = mode, !pressedDown { glue.setHover(over) }
-        let near = Rc(p.x, p.y, K.spriteW, K.spriteH).inflated(40).contains(m)
+        if place.on {
+            let bignore = ignoreMouse(overBody: target == .book, pressed: bookPressedDown, dragging: bookDrag.isDragging)
+            if bookPanel.ignoresMouseEvents != bignore { bookPanel.ignoresMouseEvents = bignore }
+            let hov = target == .book && !bookPressedDown && !bookDrag.isFlying
+            if hov != bookHover { bookHover = hov; refreshBook() }
+        }
+        if let lp = libretaPanel, lp.isVisible {
+            let want = !libretaOverPointer(m)
+            if lp.ignoresMouseEvents != want { lp.ignoresMouseEvents = want }
+        }
+        if dragger.isRest, !pressedDown { glue.setHover(target == .brote) }
+        var near = Rc(p.x, p.y, K.spriteW, K.spriteH).inflated(40).contains(m)
+        if let br = bookRect, br.inflated(40).contains(m) { near = true }               // the fast poll covers both bodies
+        if let lp = libretaPanel, lp.isVisible, lp.frame.insetBy(dx: -20, dy: -20).contains(NSPoint(x: m.x, y: m.y)) { near = true; panelTouched = true }       // and the open panel
         if near { touched = true }
-        var flying = false
-        if case .flying = mode { flying = true }
-        scheduleHit(near || pressedDown || flying || NSEvent.pressedMouseButtons != 0 ? 1.0 / 60 : 1.0 / 20)
+        scheduleHit(near || pressedDown || bookPressedDown || dragger.isFlying || bookDrag.isFlying || NSEvent.pressedMouseButtons != 0 ? 1.0 / 60 : 1.0 / 20)
     }
 
     // MARK: the mouse
     func pressed() {
         touched = true
         stopFlight()
-        let m = mousePt()
-        mode = .held(grab: m - layout.pos, start: m, moved: false)
-        samples = [Sample(t: uptime(), p: m)]
+        dragger.press(at: mousePt(), origin: layout.pos, now: uptime())
         pressedDown = true
         panel.ignoresMouseEvents = false
     }
 
     func dragged() {
-        guard case .held(let grab, let start, var moved) = mode else { return }
-        let m = mousePt()
-        if !moved {
-            guard isDrag(from: start, to: m) else { return }
-            moved = true; glue.setHeld(true); stroll.target = nil; stroll.walking = false
+        switch dragger.drag(to: mousePt(), now: uptime()) {
+        case .idle: return
+        case .started(let p): glue.setHeld(true); stroll.target = nil; stroll.walking = false; layout.pos = layout.clamped(p)
+        case .moving(let p): layout.pos = layout.clamped(p)
         }
-        mode = .held(grab: grab, start: start, moved: moved)
-        layout.pos = layout.clamped(m - grab)
-        let now = uptime()
-        samples.append(Sample(t: now, p: m)); samples.removeAll { now - $0.t > 0.25 }
         positionWindows()
     }
 
     func released() {
         pressedDown = false
-        guard case .held(_, _, let moved) = mode else { return }
-        mode = .rest
+        let rel = dragger.release(now: uptime())
+        guard rel != .notHeld else { return }
         glue.setHeld(false)
-        guard moved else {
-            let c = glue.click(now: uptime())
+        guard case .moved(let v) = rel else {
+            let m = mousePt(), away = m.x < layout.pos.x + K.spriteW / 2 ? 1 : -1       // agotado runs away from the pointer
+            let c = glue.click(now: uptime(), away: away)
             probe.log("CLICK", [("result", String(describing: c))], cap: 200)
             return
         }
-        let v = throwVelocity(samples, now: uptime())
         if isThrow(speed: v.speed) {
             let bounds = layout.beginThrow(from: layout.pos)
-            mode = .flying(body: Body(p: layout.pos, v: v), bounds: bounds, dizzy: dizzyAfter(speed: v.speed))
+            dragger.fly(Body(p: layout.pos, v: v), in: bounds, dizzy: dizzyAfter(speed: v.speed))
             probe.log("THROW", [("speed", String(Int(v.speed))), ("anchored", String(layout.anchor != nil))], cap: 200)
             startFlight()
         } else {
@@ -1356,17 +2641,16 @@ final class Brote: NSObject {
     func stopFlight() { flightTimer?.invalidate(); flightTimer = nil }
 
     func flightStep() {
-        guard case .flying(var body, let bounds, let dizzy) = mode else { stopFlight(); return }
         let now = uptime(), dt = min(now - lastFlight, 1.0 / 30)
         lastFlight = now; flightSeconds += dt
-        let ev = stepFly(&body, dt: dt, in: bounds)
-        layout.pos = body.p
+        guard let t = dragger.step(dt: dt) else { stopFlight(); return }
+        layout.pos = t.body.p
         positionWindows()
-        if ev == .landed {
-            mode = .rest; stopFlight()
-            glue.bridge.dizzyNext(dizzy); glue.bridge.act("land")
-            probe.log("LAND", [("x", String(Int(layout.pos.x))), ("y", String(Int(layout.pos.y))), ("dizzy", String(dizzy))], cap: 200)
-        } else { mode = .flying(body: body, bounds: bounds, dizzy: dizzy) }
+        if t.landed {
+            stopFlight()
+            glue.bridge.dizzyNext(t.dizzy); glue.bridge.act("land")
+            probe.log("LAND", [("x", String(Int(layout.pos.x))), ("y", String(Int(layout.pos.y))), ("dizzy", String(t.dizzy))], cap: 200)
+        }
     }
 
     func showMenu(_ event: NSEvent, in v: NSView) {
@@ -1376,17 +2660,50 @@ final class Brote: NSObject {
         menu.addItem(item)
         NSMenu.popUpContextMenu(menu, with: event, for: v)
     }
-    @objc func quit() { probe.plain("quit from the menu"); NSApp.terminate(nil) }
+    @objc func quit() { probe.plain("quit from the menu"); try? FileManager.default.removeItem(atPath: Brote.eventsPath); NSApp.terminate(nil) }
+
+    // MARK: what Claude is doing: the plugin's hooks append one short line per event to a file that only this app creates
+    func startEvents() {
+        guard eventsOn else { return }
+        let dir = (Brote.eventsPath as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        FileManager.default.createFile(atPath: Brote.eventsPath, contents: Data(), attributes: [.posixPermissions: 0o600])     // empty: no backlog
+        eventsOffset = 0
+        probe.plain("events: " + Brote.eventsPath)
+        // killed from outside (pkill, a closed Terminal tab): the file goes too, or the hooks would keep appending to it. DispatchSource
+        // handlers run on the main queue like any other code here, so nothing unsafe happens inside a raw signal handler.
+        for sig in [SIGTERM, SIGHUP, SIGINT] {
+            signal(sig, SIG_IGN)
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            src.setEventHandler { [weak self] in self?.probe.plain("signal \(sig): cleaning up"); try? FileManager.default.removeItem(atPath: Brote.eventsPath); NSApp.terminate(nil) }
+            src.resume()
+            signalSources.append(src)
+        }
+    }
+    var signalSources: [DispatchSourceSignal] = []
+    func pollEvents() {
+        if eventsOn, let r = eventsRead(path: Brote.eventsPath, offset: eventsOffset) {
+            eventsOffset = r.offset
+            if !r.text.isEmpty { glue.bridge.feed(r.text) }
+        }
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == K.claudeBundle      // free: no permission
+        if front != lastFront { lastFront = front; glue.bridge.setFront(front) }
+        let rm = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if rm != lastReduce { lastReduce = rm; glue.bridge.setReduceMotion(rm) }
+    }
 
     // MARK: Claude's window
     func claudePoll() {
+        pollEvents()
         let pids = Set(NSRunningApplication.runningApplications(withBundleIdentifier: K.claudeBundle).map { Int($0.processIdentifier) })
         let primary = Double(NSScreen.screens.first?.frame.height ?? 0)
         let c = pickClaude(windowList(), pids: pids, primaryHeight: primary)
         layout.screens = NSScreen.screens.map { Brote.rc($0.visibleFrame) }
+        if bookDrag.isRest, place.screensChanged(layout.screens) { positionBook() }         // a display went away: the book is back on screen
+        defer { repositionLibreta() }
         guard c != layout.claude else { return }
         let before = layout.pos, old = layout.claude
-        if case .rest = mode { layout.claudeChanged(to: c) } else { layout.claude = c }
+        if dragger.isRest { layout.claudeChanged(to: c) } else { layout.claude = c }
         positionWindows()
         probe.log("P10", [("claude", c.map { "\(Int($0.x)),\(Int($0.y)),\(Int($0.w))x\(Int($0.h))" } ?? "none"),
                           ("claudeDelta", old != nil && c != nil ? "\(Int(c!.x - old!.x)),\(Int(c!.y - old!.y))" : "n/a"),
@@ -1403,6 +2720,8 @@ final class Brote: NSObject {
         status = st
         let n = { (k: String) -> Int in (st[k] as? NSNumber)?.intValue ?? 0 }
         glue.setData(state: (st["state"] as? String) ?? "contento", h5: n("h5"), stale: (st["stale"] as? [Any])?.count ?? 0)
+        refreshBook()
+        if libretaVisible { fillLibreta(force: false) }
     }
 
     func refreshStatus() {
@@ -1422,7 +2741,12 @@ final class Brote: NSObject {
                     let merged = mergeStatus(prev: self.status, new: d)
                     state = (merged["state"] as? String) ?? "?"
                     if let j = try? JSONSerialization.data(withJSONObject: persistable(merged)), let s = String(data: j, encoding: .utf8) { self.store.setString("lastStatus", s) }
+                    self.feedFresh = true; self.feedOld = false
                     self.apply(merged)
+                    self.showBookIfNeeded()
+                } else if self.feedFresh {
+                    self.feedOld = true
+                    if self.libretaVisible { self.fillLibreta(force: false) }
                 }
                 self.probe.log("P9", [("ms", String(r.ms)), ("exit", String(r.exit)), ("timedOut", String(r.timedOut)), ("state", state),
                                       ("pycacheBefore", String(before)), ("pycacheAfter", String(after))], cap: 60)
@@ -1486,11 +2810,11 @@ final class Brote: NSObject {
         let wall = uptime(), span = max(0.001, wall - cpuMark.wall)
         let pct = (cpu - cpuMark.cpu) / span * 100
         // "idle" means nobody touched him or came near for the whole interval and he did not fly; the first sample spans the whole start (JavaScriptCore, sprites)
-        let state = cpuFirst ? "startup" : flightSeconds > 0.5 ? "flight" : touched ? "touched" : "idle"
-        let part = { (i: Int) in String(format: "%.2f", cpuBuckets[i] / span * 100) }
-        probe.log("P7", [("state", state), ("cpu", String(format: "%.2f", pct)), ("tick", part(0)), ("hit", part(1)), ("claude", part(2)),
-                         ("rssMB", String(Int(ru.ru_maxrss) / 1_048_576))], cap: 120)
-        cpuMark = (wall, cpu); flightSeconds = 0; cpuFirst = false; touched = false; cpuBuckets = [0, 0, 0]
+        let nowThreads = threadCPU()
+        let state = cpuFirst ? "startup" : flightSeconds > 0.5 ? "flight" : panelTouched || libretaVisible ? "panel" : touched ? "touched" : "idle"
+        let other = pct - (cpuBuckets[0] + cpuBuckets[1] + cpuBuckets[2]) / span * 100      // everything the three timers do not account for: the run loop, the data child, the window server
+        probe.log("P7", [("state", state), ("cpu", String(format: "%.2f", pct))] + cpuParts(cpuBuckets, span: span) + [("book", place.on ? "on" : "off"), ("other", String(format: "%.2f", other)), ("threads", threadShares(before: threadMark, after: nowThreads, span: span, mainID: mainThreadID, top: 4)), ("rssMB", String(Int(ru.ru_maxrss) / 1_048_576))], cap: 120)
+        cpuMark = (wall, cpu); threadMark = nowThreads; flightSeconds = 0; cpuFirst = false; touched = false; panelTouched = false; cpuBuckets = [Double](repeating: 0, count: cpuBucketNames.count)
     }
 }
 
@@ -1514,10 +2838,10 @@ if cli.contains("--selftest") {
     if let i = cli.firstIndex(of: "--assets"), i + 1 < cli.count { assets = cli[i + 1] }
     runSelftest(assets: assets)
 }
-if cli.contains("--bench") {                                  // GUI-free cost of one tick's work, in CPU microseconds (R-151 idle CPU)
+if cli.contains("--bench") {                                  // GUI-free cost of one tick's work, in CPU microseconds
     var assets = Bundle.main.resourcePath ?? "."
     if let i = cli.firstIndex(of: "--assets"), i + 1 < cli.count { assets = cli[i + 1] }
-    runBench(assets: assets)
+    runBench(assets: assets, pacedSeconds: cli.firstIndex(of: "--paced").flatMap { i in i + 1 < cli.count ? Double(cli[i + 1]) : nil })
 }
 #if CORE_ONLY
 fputs("brote core build: only --selftest and --bench are available\n", stderr)

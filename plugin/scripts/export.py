@@ -32,12 +32,12 @@ SCRUB_RE = (
 )
 FLOAT_SRC = os.path.join("tools", "brote", "float")      # R-175: the floating Brote, shipped as source under experimental/
 FLOAT_DST = os.path.join("experimental", "brote-float")
-FLOAT_FILES = ("brote.swift", "sprites.js", "say.js", "menu.json", "Info.plist", "build.sh")
+FLOAT_FILES = ("brote.swift", "sprites.js", "say.js", "personality.js", "director.js", "menu.json", "book-icon.json", "Info.plist", "build.sh")
 SHARE_DIR = "share"          # hub-root folder with the shareable README.md and pixel-art svgs (never in the plugin)
 MIN_CLI = "2.1.292"
 
 
-VOICE_RE = re.compile(r"\b(?:her|hers|herself|she)\b", re.I)  # voice-ok: the rule itself; the owner's voice: the plugin speaks to "you" / "the user"
+VOICE_RE = re.compile(r"\b(?:her|hers|herself|she)\b|\bis_her_\w+", re.I)  # voice-ok: the rule itself; the owner's voice: the plugin speaks to "you" / "the user"
 VOICE_OK = "voice-ok"                                    # a line carrying this marker is allowed (a compatibility alias)
 SPANISH_RE = re.compile(r"[áéíóúñ¿¡]|\b(?:%s)\b" % "|".join(
     "nada ahora versión primera compartida semana cuota llegas hasta sesión carpeta proyecto".split()), re.I)
@@ -90,7 +90,9 @@ def public_rules(stage_dir):
             if m:
                 hits.append(leak.Hit(name, n, "spanish", m.group(0)))
     plugin = os.path.join(stage_dir, "plugin")
-    files = [os.path.join(d, f) for d, dirs, names in os.walk(plugin)
+    changelog = os.path.join(stage_dir, "CHANGELOG.md")
+    files = [changelog] if os.path.isfile(changelog) else []
+    files += [os.path.join(d, f) for d, dirs, names in os.walk(plugin)
              if not dirs.__setitem__(slice(None), sorted(x for x in dirs if x not in lint.SKIP_DIRS))
              for f in sorted(names)]
     return hits + voice_hits(files, stage_dir)
@@ -112,6 +114,10 @@ def release_check(root):
     if not lines or not lines[-1].startswith("- v%s " % version):
         raise ExportRefused("not a release: the newest CHANGELOG line is not v%s (plugin.json) — cut the release "
                             "first" % version)
+    public = os.path.join(root, SHARE_DIR, "CHANGELOG.md")
+    if version not in (vendor._read(public) if os.path.isfile(public) else ""):
+        raise ExportRefused("not a release: %s/CHANGELOG.md does not mention v%s — write the public notes first"
+                            % (SHARE_DIR, version))
     dirty = _git(root, "status", "--porcelain", "--", "plugin", "skills", SHARE_DIR)
     if dirty is None or dirty:
         raise ExportRefused("not a release: plugin/, skills/ or %s/ has uncommitted changes — commit them first"
@@ -202,8 +208,10 @@ def build(stage_dir, version, config, repo="OWNER/REPO", author=None):
         if name.endswith(".svg"):                                                # the version strip carries fields
             vendor._write(os.path.join(stage_dir, "assets", name), fill(vendor._read(os.path.join(share, name))))
     _copy_float(os.path.dirname(root), stage_dir)
-    vendor._write(os.path.join(stage_dir, "CHANGELOG.md"),
-                  "# Changelog\n\n- v%s — first shared version\n" % version)
+    changelog = os.path.join(share, "CHANGELOG.md")                              # written by hand, shipped as it is
+    if not os.path.isfile(changelog):
+        raise ExportRefused("%s/CHANGELOG.md not found next to the plugin: the public tree needs a changelog" % SHARE_DIR)
+    vendor._write(os.path.join(stage_dir, "CHANGELOG.md"), fill(vendor._read(changelog)))   # {repo}, {version}...
 
 
 def _copy_float(hub, stage_dir):

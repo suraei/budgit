@@ -1,0 +1,178 @@
+{
+  "id": "Libreta icon",
+  "version": 1,
+  "unit": "1 art px = 3 screen px, the same unit as Brote (34 x 28 art px = 102 x 84 px). The icon's Svg box is 20 x 28 art px = 60 x 84 px, so it shares Brote's baseline: body base row 25, ground shadow row 26.",
+  "box": {
+    "w": 20,
+    "h": 28,
+    "base_row": 25,
+    "ground_row": 26
+  },
+  "keys": {
+    "o": "outline = the current Brote state's outline colour (PALS[state].o), so tired states fade it like his",
+    "k": "NEW key, cover highlight #fcdbe4 (light from the top left, as Brote's h)",
+    "c": "cover #f8bccb (already in COMMON: his cheeks)",
+    "C": "cover shade #f292ab (already in COMMON)",
+    "W": "page #fffaf2 (COMMON)",
+    "g": "page text line #c9c1d1 (COMMON)",
+    "G": "gutter shade #b7a8e0 (COMMON)",
+    "l": "emblem leaf, the current state's leaf light (PALS[state].l): the cover sprout is Brote's own leaf",
+    "L": "emblem leaf dark (PALS[state].L)",
+    "s": "emblem stem (PALS[state].s)",
+    "r": "bookmark ribbon #ec7f94 (COMMON)",
+    "R": "bookmark ribbon shade #c95c74 (COMMON)",
+    "y": "sparkle #f5d683 (COMMON)"
+  },
+  "parts": {
+    "closed": {
+      "w": 13,
+      "h": 14,
+      "x": 4,
+      "y": 12,
+      "rows": [
+        ".ooooooooooo.",
+        "oCckkkkkkkcCo",
+        "oCcCkkkkkccCo",
+        "oCcCclccclcCo",
+        "oCcCclLcLlcCo",
+        "oCcCccLsLccCo",
+        "oCcCcccscccCo",
+        "oCcCcccccccCo",
+        "oCcCcccccccCo",
+        "oCcCcccccccCo",
+        "oCCCCCCCCCCCo",
+        "ogWWWWWWWWWgo",
+        "ogggggggggggo",
+        ".ooooooooooo."
+      ]
+    },
+    "open": {
+      "w": 18,
+      "h": 11,
+      "x": 1,
+      "y": 15,
+      "rows": [
+        ".ooooooo..ooooooo.",
+        "oWWWWWWWGGWWWWWWWo",
+        "oWgggggWGGWgggggWo",
+        "oWWWWWWWGGWWWWWWWo",
+        "oWggggggGGWgggWWWo",
+        "oWWWWWWWGGWWWWWWWo",
+        "oWgggggWGGWggggWWo",
+        "oWWWWWWWGGWWWWWWWo",
+        "ocWWWWWWGGWWWWWWco",
+        "occcccccCCccccccco",
+        ".oooooooooooooooo."
+      ]
+    },
+    "ribbon": {
+      "w": 2,
+      "h": 2,
+      "x": 13,
+      "y": 10,
+      "rows": [
+        "rr",
+        "Rr"
+      ]
+    },
+    "spark": {
+      "w": 3,
+      "h": 3,
+      "rows": [
+        ".y.",
+        "yWy",
+        ".y."
+      ]
+    }
+  },
+  "states": {
+    "closed": {
+      "parts": [
+        "closed"
+      ],
+      "lift": 0,
+      "shadow_half": 7
+    },
+    "marked": {
+      "parts": [
+        "closed",
+        "ribbon"
+      ],
+      "lift": 0,
+      "shadow_half": 7,
+      "when": "stale items > 0"
+    },
+    "hover": {
+      "parts": [
+        "closed"
+      ],
+      "lift": 1,
+      "shadow_half": 6,
+      "spark": [
+        16,
+        9
+      ],
+      "when": "pointer over the icon (optional, assumption A4)"
+    },
+    "open": {
+      "parts": [
+        "open"
+      ],
+      "lift": 0,
+      "shadow_half": 9,
+      "spark": [
+        16,
+        12
+      ],
+      "when": "the Libreta pane is open (read from $.ui.panes())"
+    }
+  },
+  "panel_icons": {
+    "note": "8 x 8 art px, particle-class (no outline); keys l L s n N y come from the current Brote state palette / COMMON; drawn at 3 pt per art px",
+    "doing": [
+      "..l..l..",
+      ".lLl.lL.",
+      ".lLLllL.",
+      "..LsLL..",
+      "...ss...",
+      "...ss...",
+      "...ss...",
+      "........"
+    ],
+    "next": [
+      "........",
+      "...nn...",
+      "..nNNn..",
+      ".nnNNnn.",
+      ".nnnNnn.",
+      "..nnnn..",
+      "...nn...",
+      "........"
+    ],
+    "done": [
+      "........",
+      "......ll",
+      ".....lL.",
+      "l...lL..",
+      "lL.lL...",
+      ".LlL....",
+      "..L.....",
+      "........"
+    ],
+    "later": [
+      "..yy....",
+      ".yy.....",
+      "yy......",
+      "yy......",
+      "yy......",
+      ".yy.....",
+      "..yy....",
+      "........"
+    ]
+  },
+  "progress_bar": {
+    "w": 62,
+    "h": 5,
+    "note": "outline o on rows 0 and 4 and columns 0 and 61; fill l (rows 1-2) and L (row 3) up to round(60 * done / total); empty P; 3 pt per art px"
+  }
+}

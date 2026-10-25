@@ -115,8 +115,13 @@ def violations(r):
     return sum(r[k] for k in COUNTERS)
 
 
-# the user's standing rule: CTF/pentest material stays out of corpora and listings
-EXCLUDE_DIRS = re.compile(r"ctf|pentest", re.I)
+def excluded_dirs():
+    """Words from `exclude_dirs` in ~/.budgit/config.json (a list, empty by default): a transcript folder whose name
+    contains one is skipped by `comply` and `retro-mine`. A pattern or None."""
+    words = sl.load_config().get("exclude_dirs")
+    words = [words] if isinstance(words, str) else words
+    words = [w for w in words if isinstance(w, str) and w] if isinstance(words, list) else []
+    return re.compile("|".join(re.escape(w) for w in words), re.I) if words else None
 
 
 def claude_dir_name(path):
@@ -127,13 +132,14 @@ def claude_dir_name(path):
 def sessions(root, days=7, project=None):
     """Main-session transcripts modified in the last `days`, oldest first, as (path, claude dir name).
     All projects, or only `project`: its own transcript dir plus sessions bound to it from elsewhere.
-    Keeps the CTF/pentest exclusion; shared by `comply` and `retro-mine`."""
+    Skips the folders named in config `exclude_dirs`; shared by `comply` and `retro-mine`."""
     cutoff = time.time() - days * 86400
     want = os.path.realpath(project) if project else None
     out = []
+    skip = excluded_dirs()
     for main in sorted(glob.glob(os.path.join(root, "*", "*.jsonl")), key=os.path.getmtime):
         d = os.path.basename(os.path.dirname(main))
-        if EXCLUDE_DIRS.search(d) or os.path.getmtime(main) < cutoff:
+        if (skip and skip.search(d)) or os.path.getmtime(main) < cutoff:
             continue
         if want:
             bound = sl.project_for_session(os.path.basename(main)[:-6])

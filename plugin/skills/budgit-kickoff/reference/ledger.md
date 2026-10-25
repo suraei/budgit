@@ -19,13 +19,13 @@ Every message the user sends (mid-turn ones and the user's answers to your quest
 | `budgit new <slug> [--rigor mini\|standard]` | create project folder + git (noreply) + `.budgit/` + hub card |
 | `budgit idea "<text>"` | park an idea in the hub (`ideas/IDEA-NNN-*.md`, status inbox) |
 | `budgit image "<prompt>" --name <file>` | generate ONE image via the official Codex CLI on the ChatGPT lane (if set up) → `assets/generated/<file>.png` + `MANIFEST.jsonl` (prompt, sha256, tokens, time). Never ask the user to generate images by hand |
-| `budgit prepare` | fresh state before verifying (commands approved by the user: `--approve`, a guard asks the user) |
+| `budgit prepare` | fresh state before verifying (commands approved by the user at a terminal: `--approve`; the error prints the exact command to show in a bash block) |
 
 A claimed item leaves `doing` when its session closes (SessionEnd releases it; `/clear` and `resume` release nothing, and a
 resumed session claims again what its own end released). A session that died without the hook is found by the next
 SessionStart, which reopens its claims and writes one progress line. Idle claims (no prompt for 12 h) are shown and kept;
 legacy `doing` items with no owner are never reopened by a sweep. A `doing` item not updated for more than 7 days is *stale*:
-the status line says `· N estancadas`, the notebook lists it first and Brote points at it.
+the notebook lists it first and Brote points at it (`budgit status --line --extras` adds `· N estancadas` to the status line; off by default).
 
 Never edit `.budgit/ledger.json` by hand (`accept-edit` exists for real accidents and is shown to the user).
 `.budgit/ledger.md` WITHOUT `.budgit/ledger.json` = hand-kept v0 ledger: don't activate/migrate it —

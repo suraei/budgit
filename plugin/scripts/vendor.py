@@ -198,11 +198,14 @@ def hook_groups():
             new = {k: v for k, v in group.items() if k != "hooks"}
             new["hooks"] = []
             for h in group["hooks"]:
+                if "hooks/brote-event.sh" in h.get("command", ""):
+                    continue   # R-232: the Brote event channel feeds the local floating app; a cloud project has none
                 m = _PLUGIN_ARG.search(h.get("command", ""))
                 if not m:
                     raise sl.StudioError("hooks.json %s: cannot vendor command %r" % (event, h.get("command")))
                 new["hooks"].append(dict(h, command=GUARD + RUN + m.group(1)))
-            out.setdefault(event, []).append(new)
+            if new["hooks"]:
+                out.setdefault(event, []).append(new)
     return out
 
 

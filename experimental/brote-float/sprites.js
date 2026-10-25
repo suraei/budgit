@@ -67,7 +67,7 @@ const ARM = {   // tiny nubs, only when he does something
   side:[[9,18,'o'],[10,18,'b'],[10,19,'o'],[11,18,'o']],
   up:  [[5,19,'o'],[6,18,'o'],[6,19,'b'],[6,20,'o'],[7,18,'b'],[7,19,'o'],[8,18,'o']],
   up2: [[7,19,'o'],[7,20,'o'],[8,18,'b'],[8,19,'b'],[8,20,'o'],[9,18,'o'],[9,19,'o']],
-  point:[[8,18,'o'],[8,19,'o'],[8,20,'o'],[9,18,'b'],[9,19,'b'],[9,20,'b'],[9,21,'o'],[10,18,'o'],[10,19,'o'],[10,20,'o']],  // R-115: points at the notebook
+  point:[[8,18,'o'],[8,19,'o'],[8,20,'o'],[9,18,'b'],[9,19,'b'],[9,20,'b'],[9,21,'o'],[10,18,'o'],[10,19,'o'],[10,20,'o']],  // points at the notebook
 };
 const mirror = l => l.map(([r,c,k])=>[r,17-c,k]);
 const THERMO = [...[10,11,12,13,14,15,16,17].map(c=>[11,c,'W']), [10,16,'g'],[10,17,'g'],[12,16,'g'],[12,17,'g'],
@@ -222,7 +222,7 @@ class Pet {
         for(let i=0;i<3;i++){ const p=(t+i*13)%39; if(p<33) S.ex.push([i===1?'z':'Z',-3-(p/3|0),17+(p/7|0),false]) }
         break;
     }
-    if(this.stale>0&&s!=='dormido'&&!this.held&&!this.act){   // R-115: stale doing items — he points at the notebook for 4 s every 15 s
+    if(this.stale>0&&s!=='dormido'&&!this.held&&!this.act){   // stale doing items — he points at the notebook for 4 s every 15 s
       const cyc=t%150; if(cyc>=96&&cyc<136){ S.armR='point'; S.look=1; S.dx=0; S.ex.push(['book',(cyc>>2)%2?5:6,22,true]) } }
     if(this.h5>=70&&s!=='dormido'&&s!=='enfermo') S.ex.push(['sweat',2+((t>>2)%4),17,false]);
     if(this.h5>=90&&s!=='dormido'){ S.ex.push(['puff',-6-((t>>1)%2),2,false],['puff',-6-(((t>>1)+1)%2),13,false]); S.stretch=t%2 }

@@ -15,17 +15,20 @@ DAYS = {
     "en": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
     "es": ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"],
 }
+DAYS_SHORT = {                      # R-206: three letters, for the status line's "fin dom 23h"
+    "en": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    "es": ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"],
+}
 
 CATALOG = {
     "en": {
-        "status.doing": "{n} doing",
-        "status.queued": "{n} queued",
+        "status.doing": "{n} in progress",
+        "status.todo": "{n} to do",
+        "status.idea_one": "{n} idea",
+        "status.idea_many": "{n} ideas",
         "status.nothing": "nothing pending",
-        "status.week": "week {used} %",
-        "status.week_arrow": "week {used} % → {word}",
-        "status.until": "quota until {day}",
-        "status.just_until": "just until {day}",
-        "status.reach": "lasts to {day}",
+        "status.end": "ends {day} {hour}h",
+        "status.arrive": "you make it",
         "status.stale_one": "{n} stalled",
         "status.stale_many": "{n} stalled",
         "status.five_hour": "5 h at {used} %",
@@ -65,6 +68,25 @@ CATALOG = {
         "book.more": "and {n} more",
         "book.nothing": "nothing",
         "book.no_data": "No data yet.",
+        "book.head_empty": "All quiet. Nothing to start.",
+        "book.head_quiet": "All quiet. You have {n} to start.",
+        "book.head_one": "One task in progress.",
+        "book.head_many": "{n} tasks in progress.",
+        "book.head_stale_one": "This one has not moved in over 7 days. Shall we look at it?",
+        "book.head_stale_many": "They have not moved in over 7 days. Shall we look at them?",
+        "book.old": "Data from a while ago",
+        "book.progress": "{done} of {total} done · {pct} %",
+        "book.progress_none": "Nothing done yet.",
+        "book.h_doing": "In progress",
+        "book.h_next": "To start",
+        "book.h_done": "Done",
+        "book.empty_doing": "Nothing in progress.",
+        "book.empty_next": "Nothing to start.",
+        "book.empty_done": "Nothing done yet.",
+        "book.stale_cap": "stalled · over 7 days",
+        "book.more_newest": "and {n} more, newest to oldest",
+        "book.parked_one": "{n} parked idea",
+        "book.parked_many": "{n} parked ideas",
         "cmd.still_on": "Brote stays still.",
         "cmd.still_off": "Brote moves again.",
         "cmd.no_project": "budgit: no Budgit project here (run: budgit activate <dir>)",
@@ -75,6 +97,8 @@ CATALOG = {
         "ledger.empty": "Nothing in the ledger yet. Add the first item: budgit ledger add --text \"what you want built\"",
         "cmd.limits_live": "plan limits (live)",
         "cmd.desc_status": "Show the Budgit status (ledger, budget)",
+        "cmd.desc_colour_probe": "Show the status line in colour once (does this screen draw colours?)",
+        "cmd.colour_probe": "Look at the line under the prompt: green, pink, lilac and blue segments mean this screen draws colour; odd codes or one grey line mean it does not. The plain line comes back within a minute.",
         "cmd.desc_brote": "Open Brote's notebook (/brote still stops his animation)",
         "cmd.lang_show": "Language: {name}. Change it with: budgit lang en|es|auto",
         "cmd.lang_set": "Language saved: {name}.",
@@ -105,14 +129,13 @@ CATALOG = {
                      "(.budgit/progress.md holds the state).",
     },
     "es": {
-        "status.doing": "{n} ahora",
-        "status.queued": "{n} en cola",
+        "status.doing": "{n} en curso",
+        "status.todo": "{n} por hacer",
+        "status.idea_one": "{n} idea",
+        "status.idea_many": "{n} ideas",
         "status.nothing": "nada pendiente",
-        "status.week": "semana {used} %",
-        "status.week_arrow": "semana {used} % → {word}",
-        "status.until": "cuota hasta el {day}",
-        "status.just_until": "justo hasta el {day}",
-        "status.reach": "llegas al {day}",
+        "status.end": "fin {day} {hour}h",
+        "status.arrive": "llegas",
         "status.stale_one": "{n} estancada",
         "status.stale_many": "{n} estancadas",
         "status.five_hour": "5 h al {used} %",
@@ -152,6 +175,25 @@ CATALOG = {
         "book.more": "y {n} más",
         "book.nothing": "nada",
         "book.no_data": "Sin datos todavía.",
+        "book.head_empty": "Todo quieto. Nada por empezar.",
+        "book.head_quiet": "Todo quieto. Tienes {n} por empezar.",
+        "book.head_one": "Hay una tarea en marcha.",
+        "book.head_many": "Hay {n} tareas en marcha.",
+        "book.head_stale_one": "Esta lleva más de 7 días sin moverse. ¿La miramos?",
+        "book.head_stale_many": "Llevan más de 7 días sin moverse. ¿Las miramos?",
+        "book.old": "Datos de hace un rato",
+        "book.progress": "{done} de {total} hechas · {pct} %",
+        "book.progress_none": "Todavía nada hecho.",
+        "book.h_doing": "En curso",
+        "book.h_next": "Por empezar",
+        "book.h_done": "Hecho",
+        "book.empty_doing": "Nada en marcha.",
+        "book.empty_next": "Nada por empezar.",
+        "book.empty_done": "Todavía nada hecho.",
+        "book.stale_cap": "estancada · más de 7 días",
+        "book.more_newest": "y {n} más, de nuevas a antiguas",
+        "book.parked_one": "{n} idea aparcada",
+        "book.parked_many": "{n} ideas aparcadas",
         "cmd.still_on": "Brote se queda quieto.",
         "cmd.still_off": "Brote vuelve a moverse.",
         "cmd.no_project": "budgit: no hay proyecto Budgit aquí (ejecuta: budgit activate <carpeta>)",
@@ -162,6 +204,8 @@ CATALOG = {
         "ledger.empty": "Todavía no hay nada en el registro. Añade el primer elemento: budgit ledger add --text \"lo que quieres construir\"",
         "cmd.limits_live": "límites del plan (en vivo)",
         "cmd.desc_status": "Muestra el estado de Budgit (registro, presupuesto)",
+        "cmd.desc_colour_probe": "Muestra la línea de estado en color una vez (¿esta pantalla dibuja colores?)",
+        "cmd.colour_probe": "Mira la línea de debajo del prompt: si ves segmentos verde, rosa, lila y azul, esta pantalla dibuja color; si ves códigos raros o una sola línea gris, no. La línea normal vuelve en menos de un minuto.",
         "cmd.desc_brote": "Abre la libreta de Brote (/brote still detiene su animación)",
         "cmd.lang_show": "Idioma: {name}. Cámbialo con: budgit lang en|es|auto",
         "cmd.lang_set": "Idioma guardado: {name}.",
@@ -228,10 +272,40 @@ def _default_claude_settings():
     return _read_json(os.path.join(base, "settings.json"))
 
 
-def detect(env=None, config=None, claude_settings=None):
-    """BUDGIT_LANG env, then config.json `lang`, then Claude Code's `language` setting, then English. Never raises."""
+def _known(value):
+    """The catalog language a name or locale stands for ('es-FR', 'Spanish'), None when the catalog has none (gl, fr, ...)."""
+    if not isinstance(value, str):
+        return None
+    word = re.split(r"[\s(_.@-]", value.strip().lower(), maxsplit=1)[0]
+    return _ALIASES.get(word)
+
+
+def _apple_languages():
+    """macOS's preferred languages in order, read from the user's global preferences file (no subprocess); [] anywhere else."""
     try:
-        env = os.environ if env is None else env
+        import plistlib
+        path = os.path.join(os.path.expanduser("~"), "Library", "Preferences", ".GlobalPreferences.plist")
+        with open(path, "rb") as f:
+            langs = plistlib.load(f).get("AppleLanguages")
+        return [x for x in langs if isinstance(x, str)] if isinstance(langs, list) else []
+    except Exception:
+        return []
+
+
+def _system_languages(env, real):
+    """The system's preferred languages, best first: the Mac's list (only for the real environment), then LANGUAGE, LC_ALL, LC_MESSAGES, LANG."""
+    out = _apple_languages() if real else []
+    for key in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+        out += [x for x in str(env.get(key) or "").split(":") if x and x not in ("C", "POSIX")]
+    return out
+
+
+def detect(env=None, config=None, claude_settings=None, system=None):
+    """BUDGIT_LANG env, then config.json `lang`, then Claude Code's `language` setting, then the system's preferred
+    languages (the first one the catalog has), then English. Never raises."""
+    try:
+        real = env is None
+        env = os.environ if real else env
         for value in (env.get("BUDGIT_LANG"),):
             if value and value.strip().lower() != "auto":
                 return normalize(value)
@@ -241,7 +315,12 @@ def detect(env=None, config=None, claude_settings=None):
             return normalize(value)
         settings = _default_claude_settings() if claude_settings is None else claude_settings
         value = settings.get("language") if isinstance(settings, dict) else None
-        return normalize(value) if value else "en"
+        if value:
+            return normalize(value)
+        for lang in (_system_languages(env, real) if system is None else system):
+            if _known(lang):
+                return _known(lang)
+        return "en"
     except Exception:
         return "en"
 
@@ -270,6 +349,12 @@ def set_language(value):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     sl.atomic_write(path, json.dumps(config, indent=2) + "\n")
     return value
+
+
+def day_abbr(tm_wday, lang=None):
+    """Three-letter weekday given Python's tm_wday (Monday = 0)."""
+    lang = lang if lang in LANGS else detect()
+    return DAYS_SHORT[lang][(tm_wday + 1) % 7]
 
 
 def day_name(tm_wday, lang=None):

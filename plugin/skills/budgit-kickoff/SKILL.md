@@ -105,6 +105,11 @@ reference/ledger.md). Record `CORRECTION #n` + root cause whenever the user corr
   and in hub tasks: load `impeccable` before drawing (if not installed: use lenses/design.md and the rubric); show 2 small rendered directions before a full build; one
   visual language per page; preview as the real host renders it (light + dark + narrow); the user's OK before anything
   public. A correction from the user on a design → re-run impeccable's critique (if not installed: the rubric) before the next round.
+  Every mock, preview or file you mention must be where the user can see it right then. Send it as a file card
+  (SendUserFile, display render), or as a published page with its link. Never leave it only in an inline widget or as a
+  path in prose. Then say where it is ("arriba, en la tarjeta del archivo") AND put a clickable link to the file in the
+  same message. A question about a mock goes in a LATER turn than the mock itself, and each option names its mock by
+  link, so the question card never hides the file.
 - **Ask in rounds:** ≤4 independent decisions per AskUserQuestion, recommended option first.
 - **Never shrink the user's requested scope to fit a budget without asking.** Decision artefacts as
   rich as the decision; never ask the user to judge a style on placeholders.
@@ -113,6 +118,13 @@ reference/ledger.md). Record `CORRECTION #n` + root cause whenever the user corr
 - Simple and robust. Noreply commits; push when the project's CLAUDE.md says so (default: ask the user first). Read and verify anything before installing it.
 - **Knowledge:** Markdown in git is the source of truth; descriptive paths, one concept per file, YAML
   frontmatter, an `INDEX.md` per knowledge folder. No vector DB unless Budgit's benchmark says so.
+
+## Lanes (several sessions on one project)
+- **Independent work goes to its own session at once**: a build lane, a research lane, a design lane. The coordinating session decides, talks to the user and relays every lane question and update; it does no lane work itself. The user never has to open a lane.
+- **Every brief starts the same way:** bind first with `budgit activate --since-now <project dir>`, then `budgit ledger start R-n` for the item. An unbound session cannot claim anything. Say in the brief: never ask the user in the lane, send the need to the coordinator.
+- **One writer per set of files.** Two lanes never edit the same files. Lanes commit only the paths they changed, by explicit path.
+- **Mocks reach the user as a file card plus a clickable link**, one mock per question, and the question to choose goes in a later turn than the mock.
+- **A finished lane is closed by the coordinator.** When its report has been checked and nothing waits on it, the coordinator archives that session without asking, says so in one line, and the user can reopen it later.
 
 ## Reporting to the user: reply in the user's language
 - Decision/result first, then at most 3 bullets; no recap or closer.
