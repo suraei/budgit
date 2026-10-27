@@ -362,7 +362,7 @@ _ANSI_COLOURS = {"doing": "9ed36a", "todo": "f2a7c3", "ideas": "c9b6ff", "bar": 
 
 def status_line(sit, lang, ansi=False, extras=False):
     """`budgit  \u273f <doing> \u2058 <todo> \u2727 <ideas> \u250a <bar of 6> <used> % \u00b7 <ends day hour | arrives>`, <= 80 columns.
-    `sit`: doing/next/later counts; week (percent, or None: no bar and no tail); forecast ('out': the week runs out at
+    `sit`: doing/next/later counts (or noproject: True, R-238); week (percent, or None: no bar and no tail); forecast ('out': the week runs out at
     out_day/out_hour; 'ok': it reaches the reset; None: too early in the week to tell, no tail). `ansi` wraps each
     segment in a 24-bit colour; with the escapes stripped it is the plain line. `extras` (R-209: off by default) appends
     the stalled-item count (stale > 0) and the 5-hour window (h5 >= 70), so the line may then pass 80 columns."""
@@ -376,7 +376,9 @@ def status_line(sit, lang, ansi=False, extras=False):
         return "\x1b[38;2;%d;%d;%dm%s\x1b[0m" % (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), text)
 
     dim = lambda text: paint("dim", text)
-    if sit["doing"] or sit["next"] or sit["later"]:
+    if sit.get("noproject"):             # R-238: no ledger here: the account part (plan limit) still shows
+        head = dim(t("status.no_project"))
+    elif sit["doing"] or sit["next"] or sit["later"]:
         later = t("status.idea" + ("_one" if sit["later"] == 1 else "_many"), n=sit["later"])
         head = " ".join((paint("doing", "\u273f " + t("status.doing", n=sit["doing"])),
                          paint("todo", "\u2058 " + t("status.todo", n=sit["next"])),
@@ -644,6 +646,8 @@ def set_status(project, data, item_id, status, evidence="", by_user=None):
     if status in ("dropped", "verified"):
         audit(project, "%s %s: «%s»%s" % (item_id, status, item["text"][:60].replace("\n", " "),
                                           " (asked in %s)" % by_user if by_user else ""))
+    was_closed = item.get("status") in ("done", "verified")
+    before = item.get("updated")
     item["status"] = status
     if status != "doing":
         item.pop("doing_by", None)      # R-115: a claim lives only while the item is doing
@@ -651,6 +655,10 @@ def set_status(project, data, item_id, status, evidence="", by_user=None):
     if evidence:
         item["evidence"] = evidence
     item["updated"] = now()
+    if status in ("done", "verified") and not item.get("done_at"):
+        # R-199: when it was first closed; never moved by later edits. An item closed before done_at existed keeps
+        # its last `updated` as that time (R-303): verifying a legacy item must not make it "closed today".
+        item["done_at"] = before if was_closed and before else item["updated"]
     return item
 
 
@@ -1479,6 +1487,29 @@ def resolve_project(explicit=None):
         here = parent
 
 
+FIND_PROJECT_LEVELS = 8
+
+
+def find_project(path):
+    """R-238: the project a folder belongs to, for the READ-ONLY status lines: `path` itself, then at most 8 folders up. The
+    home folder, and everything above it when `path` is inside it, are never tested (a stray ledger there is not this
+    folder's project); outside the home folder only the 8 levels bound the walk. Never `/`. None when nothing is found.
+    Writes keep `resolve_project`'s exact-folder rule."""
+    try:
+        here = os.path.realpath(path)
+        home = os.path.realpath(os.path.expanduser("~"))
+    except (OSError, ValueError, TypeError):
+        return None
+    for _ in range(FIND_PROJECT_LEVELS + 1):
+        parent = os.path.dirname(here)
+        if parent == here or here == home:        # `/` and the home folder are never tested, and the walk ends there
+            return None
+        if os.path.isfile(_ledger_path(here)):
+            return here
+        here = parent
+    return None
+
+
 # ---------------------------------------------------------------- v0 markdown import
 
 _STATUS_MAP = {"open": "open", "doing": "doing", "done": "done", "verified": "verified",
@@ -1577,6 +1608,25 @@ def oneline(text, n=None):
     text = " ".join(_UNSAFE_CHARS.sub(" ", _unicodedata.normalize("NFKC", str(text))).split())
     text = _FENCE_WORDS.sub("[fence]", text)
     return text if n is None or len(text) <= n else text[:n - 1] + "…"
+
+
+def release_scope(data, ids=None):
+    """R-252: what a release must account for. -> {"built": [items], "blocking": [items], "deferred": [items]}: blocking = open or doing and
+    not parked (phase `later`); deferred = open or doing and parked by the user; dropped items are neither. `ids` is the release request:
+    only those items plus every item being worked on (doing) are looked at; an id that is not in the ledger is an error."""
+    known = {it["id"] for it in data["items"]}
+    missing = [i for i in ids or () if i not in known]
+    if missing:
+        raise StudioError("not in the ledger: %s" % ", ".join(missing))
+    out = {"built": [], "blocking": [], "deferred": []}
+    for it in data["items"]:
+        if ids is not None and it["id"] not in ids and it["status"] != "doing":
+            continue
+        if it["status"] in ("done", "verified"):
+            out["built"].append(it)
+        elif it["status"] in ("open", "doing"):
+            out["deferred" if it.get("phase") == LATER_PHASE else "blocking"].append(it)
+    return out
 
 
 def short(text, n=90):
@@ -1800,6 +1850,38 @@ def _git(repo, *args):
 
 SETUP_HINT = ("Budgit is not set up on this machine: run `budgit setup --hub <dir> --projects-root <dir>` "
               "(reference/setup.md)")
+
+
+COLOUR_CHOICES = ("on", "off", "auto")
+
+
+def _home_config():
+    try:
+        data = json.loads(read_text(os.path.join(home_state(), "config.json")))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def status_colour():
+    """R-206: whether the line under the prompt is coloured when the mod asks `--colour auto`: on unless the user chose
+    `budgit colour off` (a garbled saved value counts as on)."""
+    return _home_config().get("status_colour") != "off"
+
+
+def set_status_colour(value):
+    """Save `status_colour` (on, off or auto) in the home config.json; other keys are kept. -> the stored choice."""
+    value = str(value).strip().lower()
+    if value not in COLOUR_CHOICES:
+        raise StudioError("unknown colour setting %r (use on, off or auto)" % value)
+    config = _home_config()
+    if value == "auto":
+        config.pop("status_colour", None)
+    else:
+        config["status_colour"] = value
+    os.makedirs(home_state(), exist_ok=True)
+    atomic_write(os.path.join(home_state(), "config.json"), json.dumps(config, indent=2) + "\n")
+    return value
 
 
 def load_config():
@@ -3142,14 +3224,24 @@ def _write_approval(project, cmds):
     approvals[os.path.realpath(project)] = _prepare_digest(project, cmds)
     os.makedirs(home_state(), exist_ok=True)
     atomic_write(_approvals_path(), json.dumps(approvals, indent=2) + "\n")
-    audit(project, "prepare commands approved: %s" % "; ".join(cmds))
+    audit(project, "prepare commands approved: %s" % "; ".join(_show_safe(c) for c in cmds))   # the Stop hook shows this line to the user
+
+
+def _show_safe(text):
+    """A command from a repo file, for the screen: every control character (ESC, \\r, BEL, tab, newline...) becomes visible
+    escape text, so nothing in it can move the cursor, overwrite the line or retitle the window while the person reads."""
+    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode("ascii") if ord(c) > 255
+                   else "\\x%02x" % ord(c) for c in text)
 
 
 def approve_prepare(project):
     """Record the user's approval of the CURRENT prepare commands, outside the repo (a cloned repo cannot
-    pre-approve itself). They run as shell and come from a repo file, so only a person at a terminal can approve: the
+    pre-approve itself). They run as shell and come from a repo file, so a person at a terminal approves: the
     model's Bash tool has no terminal on stdin and stdout, and the commands are shown before the question.
-    Returns the approved commands."""
+    The terminal check is a speed bump against the model approving by accident, NOT a security boundary: code that
+    can run arbitrary programs (a script that opens its own pty) could pass it, and such code could run the commands
+    directly anyway. The commands are printed with control characters made visible, with the digest of exactly what
+    gets approved. Returns the approved commands."""
     cmds = load_project_config(project).get("verify", {}).get("prepare") or []
     import sys
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -3158,7 +3250,8 @@ def approve_prepare(project):
                           + approve_command(project))
     print("budgit: %d prepare command(s) from this repo will run as shell in %s:" % (len(cmds), os.path.realpath(project)))
     for c in cmds:
-        print("  " + c)
+        print("  " + _show_safe(c))
+    print("digest: %s" % _prepare_digest(project, cmds)[:16])
     if input("Approve them? [y/N] ").strip().lower() not in ("y", "yes"):
         raise StudioError("not approved")
     _write_approval(project, cmds)

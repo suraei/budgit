@@ -13,3 +13,4 @@ against what happened, the agents' notes in `.budgit/friction.md` — then clear
 it?"). Check `<hub>/lessons/INDEX.md` first (`budgit hub` prints `<hub>`): a repeat → propose promotion to a
 rule/checklist/hook (the user approves). Never write Budgit files yourself: propose in
 `<hub>/lessons/inbox/<date>-<project>-<slug>.md` and tell the user.
+Tools the user named this phase: each has a row (skills registry `unresolved` entry or ledger item). A name with no row is added now and counted as a miss in the retro.

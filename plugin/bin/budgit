@@ -11,6 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "scripts"))
 import studiolib as sl  # noqa: E402
+import donerepair  # noqa: E402
 
 SESSION = os.environ.get("CLAUDE_CODE_SESSION_ID")
 
@@ -135,9 +136,17 @@ def _record_live_limits(raw):
 
 
 def _open_project(args):
-    """The project's ledger data, or None outside a budgit project (a status call must never break its caller)."""
+    """The project's ledger data, or None outside a budgit project (a status call must never break its caller). R-238: a
+    folder inside a project (up to 8 levels, never the home folder) belongs to it; this is for the read-only status
+    lines. Writes keep the exact-folder rule of `resolve_project`."""
     try:
-        project = sl.resolve_project(args.project)
+        try:
+            project = sl.resolve_project(args.project)
+        except Exception:
+            found = sl.find_project(args.project) if args.project else None
+            if not found:
+                raise
+            project = found
         return project, sl.load_ledger(project)
     except Exception:
         return None
@@ -165,21 +174,45 @@ def _counts(data):
             "next": sum(1 for i in items if i["status"] == "open") - later, "later": later}
 
 
+def _ansi(args):
+    """R-206: `--colour on|off` is explicit; `auto` (what the mod sends) follows the user's saved choice, coloured by default;
+    without the flag the CLI stays plain (scripts and tests read plain text). `--ansi` still forces colour."""
+    mode = getattr(args, "colour", None)
+    return bool(args.ansi or mode == "on" or (mode == "auto" and sl.status_colour()))
+
+
+def _update_tail(args, lang):
+    """R-241: the reopen hint when the version loaded in this chat is behind the version on disk, " ↑<version>" when a newer release is
+    already in the marketplace clone; empty otherwise (and on any problem)."""
+    try:
+        import i18n
+        import updatelib
+        return updatelib.suffix(updatelib.update_state(loaded=args.loaded), lambda key: i18n.t(key, lang))
+    except Exception:
+        return ""
+
+
 def _status_line(args):
     """One line (<= 80 chars, plain unless --ansi) in the user's language, no emoji (a 2026-10-21 decision; text glyphs only), starting with the product
-    name; the mod shows it as is. Empty and exit 0 when there is nothing to show."""
+    name; the mod shows it as is. Outside a project: the account part only (R-238)."""
     opened = _open_project(args)
-    if not opened:
-        return   # not a budgit project: show nothing
-    project, data = opened
     import budget
     import i18n
     import time
     try:
         lang = i18n.detect()
         limits, _fresh = _live_snapshot(args)
-        n = _counts(data)
         now = time.time()
+        if not opened:            # R-238: the bar never vanishes; without a ledger it shows the account part only
+            o = budget.week_outlook(limits, now=now)
+            out = time.localtime(o["runs_out"]) if o and o["runs_out"] else None
+            forecast = None if not o or o["projected"] is None else "out" if out else "ok"
+            print(sl.status_line({"noproject": True, "week": o["used"] if o else None, "forecast": forecast,
+                                  "out_day": i18n.day_abbr(out.tm_wday, lang) if out else "", "out_hour": out.tm_hour if out else 0},
+                                 lang, ansi=_ansi(args), extras=False) + _update_tail(args, lang))
+            return
+        project, data = opened
+        n = _counts(data)
         o = budget.week_outlook(limits, now=now)
         out = time.localtime(o["runs_out"]) if o and o["runs_out"] else None
         five = limits.get("five_hour")
@@ -190,8 +223,8 @@ def _status_line(args):
                                "out_day": i18n.day_abbr(out.tm_wday, lang) if out else "",
                                "out_hour": out.tm_hour if out else 0,
                                "stale": len(sl.stale_doing(data, at=now)), "h5": five["used"] if live5 else 0},
-                              lang, ansi=args.ansi, extras=args.extras)
-        print(line)
+                              lang, ansi=_ansi(args), extras=args.extras)
+        print(line + _update_tail(args, lang))
     except Exception:
         pass   # a status line must never break its caller
 
@@ -216,6 +249,15 @@ def _brote_json(args):
         now = time.time()
         out = budget.brote_state(limits, now=now)
         lang = i18n.detect()
+        try:
+            import updatelib
+            state = updatelib.update_state(loaded=args.loaded)
+            if state:
+                if state["kind"] == "available":
+                    state = dict(state, **updatelib.target())       # what the floating Brote runs after the user's click
+                out["update"] = state
+        except Exception:
+            pass
         out.update({"lang": lang, "t": i18n.brote_strings(lang)})   # the mod and the floating window carry no catalog of their own
         item = lambda i: {"id": i["id"], "text": i["text"][:90].replace("\n", " "), "title": sl.item_title(i), "state": sl.claim_state(i)}
         doing = [i for i in data["items"] if i["status"] == "doing"]
@@ -231,6 +273,21 @@ def _brote_json(args):
                     "idle": [i["id"] for i in doing if sl.claim_state(i) == "idle"],
                     "doing": [item(i) for i in doing][:20], "queue": [item(i) for i in queue][:12],
                     "later": [item(i) for i in later][:12]})
+        import livework
+        try:
+            private = livework.is_private(project)
+        except Exception:
+            private = True                  # cannot tell: say counts only
+        if private:                         # a protected project shows counts, never a title
+            livework.scrub_v2(out)
+        if getattr(args, "live", False):    # R-199: only the Libreta asks for this; the mod's plain call keeps the v2 keys
+            out.update(livework.live_feed(project, v2=out))      # the feed knows every private project's name
+            out["version"] = 3
+        else:
+            try:
+                livework.shield_v2(out, livework.private_names())    # a title naming a protected project reads "private"
+            except Exception:
+                livework.scrub_v2(out)
         print(_json.dumps(out, ensure_ascii=False))
     except Exception:
         pass
@@ -323,7 +380,186 @@ def cmd_lang(args):
     return 0
 
 
+def cmd_float(args):
+    """The floating Brote window (macOS): on [--yes] / off / stop / status / uninstall. All logic lives in scripts/floatctl.py."""
+    import floatctl
+    return floatctl.main(["floatctl"] + (args.rest or ["status"]))
+
+
+def cmd_colour(args):
+    """Show or set whether the line under the prompt is coloured (the default is on where the screen draws it)."""
+    import i18n
+    if args.value is None:
+        print(i18n.t("cmd.colour_show", state=i18n.t("cmd.colour_on" if sl.status_colour() else "cmd.colour_off")))
+        return 0
+    saved = sl.set_status_colour(args.value)
+    print(i18n.t("cmd.colour_set", state=i18n.t("cmd.colour_off" if saved == "off" else "cmd.colour_on")))
+    return 0
+
+
+def _clean(text, limit):
+    """Probe fields come from the mod and the host: printable characters only, bounded."""
+    text = "".join(c if c.isprintable() else " " for c in str(text or ""))
+    return text if len(text) <= limit else text[:limit - 1] + "\u2026"
+
+
+def _bar_probe(args):
+    """R-238 / F5: what this surface and folder do with the line under the prompt, as the text of `/budgit-bar-probe`. Read-only."""
+    import i18n
+    lang = i18n.detect()
+    opened = _open_project(args)
+    plugin, version = "budgit", "?"
+    try:
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+            manifest = json.load(f)
+        plugin, version = manifest.get("name", plugin), manifest.get("version", version)
+    except (OSError, ValueError):
+        pass
+    folder = os.path.realpath(args.project or os.getcwd())
+    print(i18n.t("cmd.bar_probe", lang, surface=_clean(args.surface, 24), engine=_clean(args.engine, 32),
+                 plugin=_clean(plugin, 24), version=_clean(version, 16), folder=_clean(folder, 200),
+                 project=_clean(opened[0], 200) if opened else i18n.t("cmd.bar_probe_none", lang),
+                 line=_clean(args.shown, 160) or "-"))
+    return 0
+
+
+def cmd_update(args):
+    """R-241: `budgit update` prints the two commands that update the plugin; `--check` asks the public repo once.
+    This command never runs `claude plugin` itself; the Brote update button runs the same commands only after the user says yes."""
+    import i18n
+    import updatelib
+    lang = i18n.detect()
+    if args.check:
+        try:
+            latest = updatelib.fetch_public_version()
+        except updatelib.UpdateError:
+            sys.stderr.write(i18n.t("cmd.update_check_failed", lang) + "\n")
+            return 1
+        current = updatelib.current_version() or "?"
+        print(i18n.t("cmd.update_check_new" if updatelib.is_newer(latest, current) else "cmd.update_check_same", lang,
+                     latest=latest, current=current))
+        if not updatelib.is_newer(latest, current):
+            return 0
+    print(i18n.t("cmd.update_commands", lang, commands="\n".join("  " + c for c in updatelib.commands())))
+    return 0
+
+
+def cmd_migrate_install(args):
+    """R-241 / O1: move a live-folder install to the public marketplace. Shows the commands and runs them only when the
+    person at a terminal answers yes (no flag can answer for them); the old plugin is disabled, not deleted."""
+    import i18n
+    import shutil
+    import subprocess
+    import updatelib
+    lang = i18n.detect()
+    repo = args.repo or updatelib.public_repo()
+    try:
+        plan = updatelib.migration_plan(repo)
+    except updatelib.UpdateError:
+        sys.stderr.write(i18n.t("cmd.migrate_need_repo", lang) + "\n")
+        return 1
+    if not plan:
+        print(i18n.t("cmd.migrate_nothing", lang))
+        return 0
+    print(i18n.t("cmd.migrate_plan", lang, old=plan["old"], commands="\n".join("  " + " ".join(c) for c in plan["commands"]),
+                 undo="claude plugin enable " + plan["old"]))
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        sys.stderr.write(i18n.t("cmd.migrate_terminal", lang) + "\n")
+        return 1
+    if not shutil.which("claude"):
+        sys.stderr.write(i18n.t("cmd.migrate_no_claude", lang) + "\n")
+        return 1
+    if input(i18n.t("cmd.migrate_ask", lang)).strip().lower() not in ("y", "yes", "s", "si", "s\u00ed"):
+        print(i18n.t("cmd.migrate_declined", lang))
+        return 1
+    for argv in plan["commands"]:
+        if subprocess.run(argv).returncode != 0:
+            sys.stderr.write(i18n.t("cmd.migrate_failed", lang, step=" ".join(argv), undo="claude plugin enable " + plan["old"]) + "\n")
+            return 1
+    print(i18n.t("cmd.migrate_done", lang))
+    return 0
+
+
+def cmd_release_check(args):
+    """R-252: the release phase's scope gate. With --items it looks only at the release request plus every item in progress.
+    Lists what is built (with its evidence), unbuilt and deferred; non-zero while any item is unbuilt."""
+    project = sl.resolve_project(args.project)
+    scope = sl.release_scope(sl.load_ledger(project), set(args.items) if args.items else None)
+    line = lambda it: "  %s [%s] %s" % (it["id"], it["status"], sl.oneline(it.get("title") or it["text"], 80))
+    shown = lambda items, f=line: [f(it) for it in items[:sl.MAX_LISTED]] + (["  … +%d" % (len(items) - sl.MAX_LISTED)] if len(items) > sl.MAX_LISTED else [])
+    built = lambda it: "%s -> %s" % (line(it), sl.oneline(it.get("evidence") or "-", 70))
+    print(_t("release.head", built=len(scope["built"]), blocking=len(scope["blocking"]), deferred=len(scope["deferred"])))
+    if args.items and scope["built"]:
+        print(_t("release.built"))
+        print("\n".join(shown(scope["built"], built)))
+    if scope["blocking"]:
+        print(_t("release.blocking"))
+        print("\n".join(shown(scope["blocking"])))
+    if scope["deferred"]:
+        print(_t("release.deferred"))
+        print("\n".join(shown(scope["deferred"])))
+    _print_graph_check(project, scope, args.since, line, shown)
+    _print_hidden_check(project)
+    if scope["blocking"]:
+        print(_t("release.next"))
+        return 1
+    print(_t("release.clear"))
+    return 0
+
+
+def _print_hidden_check(project):
+    """R-287: advice only. Hidden characters (zero-width, tags, exotic spaces ...) in the tracked files of a git project."""
+    import lint
+    paths = lint.tracked_paths(project, links=True)
+    if not paths:
+        return
+    found = [f for f in lint.scan(paths, project) if f.kind in HIDDEN_KINDS]
+    if found:
+        print(_t("release.hidden", n=len(found), files=len({f.path for f in found})))
+
+
+def _print_graph_check(project, scope, since, line, shown):
+    """R-273: the ledger read as a graph (ledgergraph.py). Advice only: it prints, it never changes the exit code or a file."""
+    import ledgergraph
+    data = sl.load_ledger(project)
+    by_id = {it["id"]: it for it in data["items"]}
+    f = ledgergraph.findings(project, data, scope, since=since)
+    if not ledgergraph.any_findings(f):
+        return
+    count = sum(len(f[k]) for k in ("unverified", "orphans", "cites_unbuilt", "unlinked_commits", "commit_open")) + (1 if f["git"] else 0)
+    print(_t("graph.head", n=count))
+    row = lambda i, extra="": line(by_id[i]) + extra
+    cap = lambda rows: rows[:sl.MAX_LISTED] + (["  … +%d" % (len(rows) - sl.MAX_LISTED)] if len(rows) > sl.MAX_LISTED else [])
+    sections = [
+        ("graph.unverified", [row(i) for i in f["unverified"]]),
+        ("graph.orphans", [row(i, " (%s)" % _t("graph.state_" + st)) for i, st in f["orphans"]]),
+        ("graph.cites", [row(i, " -> " + ", ".join(t)) for i, t in f["cites_unbuilt"]]),
+        ("graph.unlinked", ["  %s %s" % (sha, sl.oneline(subject, 80)) for sha, subject in f["unlinked_commits"]]),
+        ("graph.commit_open", ["  %s -> %s" % (sha, i) for sha, i in f["commit_open"]]),
+    ]
+    for key, rows in sections:
+        if rows:
+            print(_t(key))
+            print("\n".join(cap(rows)))
+    if f["git"]:
+        print(_t("graph." + f["git"].replace("-", "_")))
+
+
+def cmd_chat_link(args):
+    """R-239: print the desktop-app link of the chat whose session id starts with PREFIX (the 12 characters the Brote channel carries)."""
+    import chatlink
+    link = chatlink.chat_link(args.prefix)
+    if link:
+        print(link)
+        return 0
+    if chatlink.layout_problem():
+        sys.stderr.write(_t("cmd.chat_link_layout") + "\n")        # fail closed: one line, no paths, no titles
+    return 1
+
+
 def cmd_status(args):
+    if args.probe:
+        return _bar_probe(args)
     if args.line:
         return _status_line(args)
     if args.brote:
@@ -381,6 +617,9 @@ def cmd_ledger(args):
             diff = sl.accept_edit(project)
             print(diff or "budgit: no differences against the last CLI-written version")
             return
+        if args.op == "repair-done-at":
+            _repair_done_at(project, args)
+            return
         data = sl.load_ledger(project)
         if args.op == "list":
             if not data["items"]:
@@ -435,6 +674,25 @@ def cmd_ledger(args):
             result = "%s -> %s" % (it["id"], it["status"])
         sl.save_ledger(project, data)
     print(result)
+
+
+def _repair_done_at(project, args):
+    """R-311: counts only, dry run unless --apply; --rollback puts the times of one of its own backups back."""
+    if args.rollback:
+        if args.apply:
+            raise sl.StudioError("--apply and --rollback cannot be combined")
+        print("budgit: rolled back %d done_at fields from %s" % (donerepair.rollback(project, args.rollback),
+                                                                  os.path.basename(args.rollback)))
+        return
+    out = donerepair.plan(project)
+    if not args.apply:
+        print(donerepair.report(out, False))
+        print("Nothing was written. Run again with --apply to write it (a backup is kept).")
+        return
+    backup = donerepair.apply(project, out)
+    print(donerepair.report(out, True))
+    if backup:
+        print("Rollback: budgit ledger repair-done-at --rollback %s" % backup)
 
 
 def cmd_import(args):
@@ -520,8 +778,14 @@ def cmd_codex(args):
 def cmd_comply(args):
     import comply
     project = sl.resolve_project(args.project) if getattr(args, "project", None) else None
-    rows = comply.scan(os.path.expanduser(args.root), days=args.days, level=args.level, project=project)
+    registry = None
+    if getattr(args, "skills", False):
+        import skills
+        registry = skills.load_registry()
+    rows = comply.scan(os.path.expanduser(args.root), days=args.days, level=args.level, project=project, registry=registry)
     print(comply.table(rows))
+    if registry:
+        print(comply.skills_table(rows))
     print("level used for limits: %s · rules: reference/budget.md · 0 model tokens" % (
         rows[0]["level"] if rows else args.level or "current"))
 
@@ -628,12 +892,75 @@ def _repo_root(args):
     return os.path.realpath(repo)
 
 
+HIDDEN_KINDS = ("invisible", "hidden-name", "hidden-target", "non-regular-file", "binary-text-file")   # what --hidden and the release check keep
+
+
 def cmd_lint(args):
+    """Read-only by default. --fix rewrites the hidden characters (and prints the diff first of each file);
+    --preview prints that diff and writes nothing; --tracked scans every git-tracked file; --log scans commit messages."""
     import lint
     repo = _repo_root(args)
-    findings = lint.scan([os.path.realpath(p) for p in args.paths] or None, repo)
+    if args.log is not None:
+        findings = lint.scan_log(repo, args.log)
+        if args.hidden:
+            findings = [f for f in findings if f.kind in HIDDEN_KINDS]
+        print(lint.report(findings, repo))
+        return 1 if findings else 0
+    paths = [os.path.realpath(p) for p in args.paths]
+    if args.tracked:
+        paths = lint.tracked_paths(repo, links=True)
+        if paths is None:
+            print(lint.report(lint.scan_tracked(repo), repo))
+            return 1
+    if args.tracked:
+        scan_paths = paths                                  # no tracked text file means nothing to scan, not the default folders
+    else:
+        scan_paths = paths or [os.path.join(repo, r) for r in lint.DEFAULT_ROOTS if os.path.isdir(os.path.join(repo, r))]
+    if args.fix or args.preview:
+        changes, skipped = lint.fix_files(scan_paths, write=not args.preview)
+        for path, old, new in changes:
+            print(lint.diff(path, old, new, repo), end="")
+        for path, why in skipped:
+            print("%s: not fixed (%s)" % (lint.show(os.path.relpath(path, repo) if path.startswith(repo + os.sep) else path, ""), why))
+        verb = "would change" if args.preview else "changed"
+        print("budgit lint --fix: %s %d file(s)" % (verb, len(changes)))
+    skipped = []
+    findings = lint.scan(scan_paths, repo, skipped) if scan_paths else []
+    if args.hidden:
+        findings = [f for f in findings if f.kind in HIDDEN_KINDS]
+    for line in lint.skipped_lines(skipped, repo):
+        print(line)
     print(lint.report(findings, repo))
     return 1 if findings else 0
+
+
+def cmd_humanize_lint(args):
+    """R-267: the mechanical half of the humanize skill. Reads files, prints findings, changes nothing; exit 1 on a content-gate finding."""
+    import humanizelint
+    argv = [os.path.realpath(p) for p in args.paths] + ["--lang", args.lang, "--kind", args.kind]
+    if args.require_limits:
+        argv.append("--require-limits")
+    for a in args.allow:
+        argv += ["--allow", a]
+    return humanizelint.main(argv)
+
+
+def cmd_skills(args):
+    """R-258: the skills registry and selector. Reads the registry and the installed skills; prints; the only file it appends to is the project's selection log."""
+    import skills
+    return skills.run(args, _nearest_project(args))
+
+
+def cmd_security(args):
+    """R-258: which security reviewers a trigger calls for. Prints a plan and runs nothing; the only file it appends to is the selection log."""
+    import secplan
+    return secplan.run(args, _nearest_project(args))
+
+
+def cmd_hypotheses(args):
+    """R-258 D33: the claims a simulated user made, each with the real data that would settle it; scored later."""
+    import hypotheses
+    return hypotheses.run(args, _nearest_project(args))
 
 
 def cmd_audit_mcp(args):
@@ -825,6 +1152,7 @@ def build_parser():
     c = sub.add_parser("comply", parents=[common], help="audit transcripts against the team's own rules (offline)")
     c.add_argument("--days", type=int, default=7); c.add_argument("--root", default="~/.claude/projects")
     c.add_argument("--level", choices=("ample", "normal", "tight", "critical"))
+    c.add_argument("--skills", action="store_true", help="also count registered skills used without `budgit skills why`, and rejected or off ones")
     c.set_defaults(func=cmd_comply)
     c = sub.add_parser("retro-mine", parents=[common],
                        help="mine your corrections from the transcripts into a private report (offline, 0 tokens)")
@@ -861,7 +1189,34 @@ def build_parser():
                        help="hidden bidi/zero-width/tag chars and personal home paths (default: skills plugin lessons)")
     c.add_argument("paths", nargs="*", help="files/folders to scan instead (e.g. a skill copied in before install)")
     c.add_argument("--repo", default=None)
+    c.add_argument("--fix", action="store_true", help="remove the hidden characters (exotic spaces become a space); prints each file's diff; emoji sequences and joiners in context stay")
+    c.add_argument("--preview", action="store_true", help="with --fix: print the diff and write nothing")
+    c.add_argument("--hidden", action="store_true", help="report only hidden characters (no personal paths, no encoding findings)")
+    c.add_argument("--tracked", action="store_true", help="scan every git-tracked file of the repo instead of the default folders")
+    c.add_argument("--log", nargs="?", const="HEAD", default=None, metavar="RANGE",
+                   help="scan commit messages (report-only; default HEAD; e.g. old..HEAD, or `all` for every branch)")
     c.set_defaults(func=cmd_lint)
+    c = sub.add_parser("humanize-lint", parents=[common],
+                       help="writing checks for prose (README, wiki, posts): content gate and word hygiene; exit 1 on a gate finding")
+    c.add_argument("paths", nargs="+")
+    c.add_argument("--lang", choices=("auto", "en", "es"), default="auto")
+    c.add_argument("--kind", choices=("doc", "ui"), default="doc", help="ui = short strings: only H5, H8 and word hygiene")
+    c.add_argument("--require-limits", action="store_true", help="also check that a README or feature page has a limits section (H9)")
+    c.add_argument("--allow", action="append", default=[], metavar="RULE[:text]", help="keep a reviewed hit, e.g. H8:nunca")
+    c.set_defaults(func=cmd_humanize_lint)
+    c = sub.add_parser("skills", parents=[common],
+                       help="which skill for which job: list, show, why (the selector, logged), check, build, load-plan; prints only")
+    skills_mod = __import__("skills")
+    skills_mod.add_arguments(c)
+    c.set_defaults(func=cmd_skills)
+    c = sub.add_parser("security", parents=[common],
+                       help="which security reviewers a trigger calls for (budgit security plan --trigger T1..T4 --paths ...); prints only")
+    __import__("secplan").add_arguments(c)
+    c.set_defaults(func=cmd_security)
+    c = sub.add_parser("hypotheses", parents=[common],
+                       help="a simulated user's claims, each testable and scored later against real data (list, add, score, import)")
+    __import__("hypotheses").add_arguments(c)
+    c.set_defaults(func=cmd_hypotheses)
     c = sub.add_parser("audit-mcp", parents=[common],
                        help="static check of MCP server configs: pinned vs floating, literal secrets, broad allow rules")
     c.add_argument("paths", nargs="*", help="project dirs to scan (default: current dir)")
@@ -931,12 +1286,41 @@ def build_parser():
     s = sub.add_parser("lang", parents=[common], help="show or set the language of the status line, Brote and notices")
     s.add_argument("value", nargs="?", help="en, es or auto (follow Claude Code's language setting)")
     s.set_defaults(func=cmd_lang)
+    s = sub.add_parser("brote", parents=[common], help="the floating Brote window on macOS: on, off, stop, status, uninstall")
+    s.add_argument("rest", nargs=argparse.REMAINDER)
+    s.set_defaults(func=cmd_float)
+    s = sub.add_parser("float", parents=[common], help="the old name of `budgit brote`")
+    s.add_argument("rest", nargs=argparse.REMAINDER)
+    s.set_defaults(func=cmd_float)
+    s = sub.add_parser("update", parents=[common], help="how to update Budgit (prints the commands; this command runs nothing)")
+    s.add_argument("--check", action="store_true", help="ask the public repo once whether a newer version exists")
+    s.set_defaults(func=cmd_update)
+    s = sub.add_parser("release-check", parents=[common], help="release gate: every item must be built or deferred by the user")
+    s.add_argument("--items", nargs="+", metavar="R-n", help="the release request: look only at these items plus everything in progress")
+    s.add_argument("--since", metavar="REF", help="also check the commits since this git ref for ones that name no item (advice only)")
+    s.set_defaults(func=cmd_release_check)
+    s = sub.add_parser("chat-link", parents=[common], help="print the desktop-app link of the chat whose session id starts with PREFIX (read-only)")
+    s.add_argument("prefix", help="the first characters of the session id (at least 8)")
+    s.set_defaults(func=cmd_chat_link)
+    s = sub.add_parser("migrate-install", parents=[common], help="move a live-folder install to the public marketplace (asks before running)")
+    s.add_argument("--repo", help="the public repo OWNER/NAME (read from the exported manifest when it has one)")
+    s.set_defaults(func=cmd_migrate_install)
+    s = sub.add_parser("colour", parents=[common], help="show or set the colour of the line under the prompt")
+    s.add_argument("value", nargs="?", help="on, off or auto (colour unless you turned it off)")
+    s.set_defaults(func=cmd_colour)
     s = sub.add_parser("status", parents=[common])
+    s.add_argument("--colour", choices=("on", "off", "auto"), help="with --line: colour on or off; auto follows `budgit colour` (coloured by default)")
     s.add_argument("--ansi", action="store_true", help="with --line: colour each segment (24-bit ANSI); plain without it")
     s.add_argument("--extras", action="store_true", help="with --line: also the stalled count and the 5 h window (off by default, R-209)")
     s.add_argument("--line", action="store_true", help="one short line for the Claude Code mod (empty outside a project)")
     s.add_argument("--brote", action="store_true", help="JSON for the Brote module and its notebook (empty outside a project)")
+    s.add_argument("--live", action="store_true", help="with --brote: also what is happening now in every project (working, paused, projects, week, watch)")
     s.add_argument("--limits-json", help="with --line/--brote: the mod's live $.session.usage().rateLimits, recorded first")
+    s.add_argument("--loaded", default="", help="with --line/--brote: the plugin version this chat loaded (the mod reads it at start); a different disk version adds the reopen hint")
+    s.add_argument("--probe", action="store_true", help="what the line under the prompt does on this surface and folder (the text of /budgit-bar-probe)")
+    s.add_argument("--surface", default="", help="with --probe: the surface the mod runs on")
+    s.add_argument("--engine", default="", help="with --probe: the Claude Code version")
+    s.add_argument("--shown", default="", help="with --probe: the line the mod set")
     s.set_defaults(func=cmd_status)
 
     led = sub.add_parser("ledger", parents=[common])
@@ -959,6 +1343,9 @@ def build_parser():
     o = ops.add_parser("drop", parents=[common]); o.add_argument("id"); o.add_argument("--by-user", required=True)
     o = ops.add_parser("list", parents=[common]); o.add_argument("--open", action="store_true")
     ops.add_parser("accept-edit", parents=[common])
+    o = ops.add_parser("repair-done-at", parents=[common], help="move the done_at of old closures earlier, only to a time git proves (dry run unless --apply)")
+    o.add_argument("--apply", action="store_true", help="write the repair (a backup is kept and its rollback command printed)")
+    o.add_argument("--rollback", metavar="BACKUP", help="put back the done_at fields of a backup this command made")
     _no_abbrev(p)
     return p
 

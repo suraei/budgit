@@ -1,6 +1,7 @@
 # Lens: writing (docs, UI copy, messages, store/landing text)
 Source: blader/humanizer v3.1.0 patterns (MIT, built on Wikipedia "Signs of AI writing").
-The aim is clear writing for the user's readers; it does not beat AI detectors (measured). Apply it while writing: that costs less than a rewrite pass. Public English text (README, landing, store copy): run `stop-slop` on the draft as a second pass (optional; if not installed: the patterns below). Not for Spanish text, legal or security wording.
+Which skill runs: `budgit skills why --job writing/<public-prose|ui-copy|docs-structure> --traits language=<en|es>` names it; the rest of this line is the last resort when the command is not available.
+The aim is clear writing for the user's readers; it does not beat AI detectors (measured). Apply it while writing: that costs less than a rewrite pass. Which runs first (use both together): long prose (README, wiki, release note, landing, store copy, post), English or Spanish → `humanize/humanize.md` first (content gate, then word hygiene; `budgit humanize-lint <file>`), then `stop-slop` as an optional second pass (if not installed: skip it, the patterns below cover it); short UI strings (a button, one error line) → `design:ux-copy` first (if not installed: the patterns below), `humanize` only for H5, H8 and word hygiene (`--kind ui`). Its Spanish lists are UNREVIEWED: say so once per project. Not for legal or security wording.
 
 **Rules that never bend**
 - **No new facts.** A rewrite keeps every number, name, caveat and link, and adds none. Unsure → leave it as it was.

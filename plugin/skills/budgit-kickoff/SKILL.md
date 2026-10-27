@@ -15,7 +15,8 @@ This file is the must-keep core. Load the phase file and the lenses you need, wh
 `phases/1-validate.md · 2-design.md · 3-plan-build.md · 5-qa.md · 6-launch.md · 7-retro.md`,
 `lenses/{product,design,writing,a11y,security,marketing-devrel,game,motion,data-safety,edge}.md`,
 `reference/ledger.md` (CLI), `reference/budget.md` (budget levels), `reference/brain.md` (typed [[links]] between
-notes; before trusting an old note: `budgit brain current <note>`).
+notes; before trusting an old note: `budgit brain current <note>`), `reference/coordination.md` (the coordinating session),
+`reference/routing.md` (which skill or agent for which task).
 
 ## First action of every session on a project
 New project → `budgit new <slug> [--rigor mini|standard]` (folder in the projects root, git with noreply
@@ -60,7 +61,8 @@ reference/ledger.md). Record `CORRECTION #n` + root cause whenever the user corr
   artefact. A brief with >4 deliverables or an exhaustive per-row judgement is split into sequential agents
   (build → wire → verify), and every brief states a hard stop ("at 55 calls commit and report what is left")
   — agents in a pilot project ran 91–92 calls on 60-call briefs. Files >1500 lines that agents re-read are a cost bug → split them.
-  Check with `python3 <hub>/tools/tokens/tokens.py --agents` when the hub has it.
+  Check with `python3 <hub>/tools/tokens/tokens.py --agents` when the hub has it. Until a big file is split, give the agent its outline
+  (`python3 <hub>/tools/index/fnindex.py FILE`, generated on demand) and have it read only the line ranges it needs.
 - **Budget level (automatic; `budgit budget`):** ample · normal · tight · critical, from the user's plan limits'
   pace (weekly % used vs % of the week elapsed, 5-hour window, extra usage) — hooks announce changes, the user's
   word (`budgit budget set <level>` / `auto`) overrides. The level changes HOW you work (subagent count and
@@ -105,11 +107,13 @@ reference/ledger.md). Record `CORRECTION #n` + root cause whenever the user corr
   and in hub tasks: load `impeccable` before drawing (if not installed: use lenses/design.md and the rubric); show 2 small rendered directions before a full build; one
   visual language per page; preview as the real host renders it (light + dark + narrow); the user's OK before anything
   public. A correction from the user on a design → re-run impeccable's critique (if not installed: the rubric) before the next round.
-  Every mock, preview or file you mention must be where the user can see it right then. Send it as a file card
-  (SendUserFile, display render), or as a published page with its link. Never leave it only in an inline widget or as a
-  path in prose. Then say where it is ("arriba, en la tarjeta del archivo") AND put a clickable link to the file in the
-  same message. A question about a mock goes in a LATER turn than the mock itself, and each option names its mock by
-  link, so the question card never hides the file.
+  Whenever you ask the user to review a file (a mock, preview, report or plan): send it first as a clickable file card,
+  then ask with an interactive question card in the same turn; each question names the file by the same short name as its
+  card. Never put a markdown link inside a question: the card shows it as raw text. A file that exists only in an inline
+  widget or as a bare path in prose has not been shown. A mock shows only what the end user will see.
+- **Asking the user to test something:** write out each step in plain words: what to do and what they should see. Never name a test by a code, row or section ("V1 to V14", "Stage 4"), never "the file from before", never "test whenever you like" without the steps; hand-test files keep their codes inside.
+- **Every choice is a record:** a pick the user makes becomes a ledger item the same turn, in their words.
+- **Serious or broad work starts with a proposed method:** the approach and tools, and what they may miss, before the first step.
 - **Ask in rounds:** ≤4 independent decisions per AskUserQuestion, recommended option first.
 - **Never shrink the user's requested scope to fit a budget without asking.** Decision artefacts as
   rich as the decision; never ask the user to judge a style on placeholders.
@@ -122,8 +126,9 @@ reference/ledger.md). Record `CORRECTION #n` + root cause whenever the user corr
 ## Lanes (several sessions on one project)
 - **Independent work goes to its own session at once**: a build lane, a research lane, a design lane. The coordinating session decides, talks to the user and relays every lane question and update; it does no lane work itself. The user never has to open a lane.
 - **Every brief starts the same way:** bind first with `budgit activate --since-now <project dir>`, then `budgit ledger start R-n` for the item. An unbound session cannot claim anything. Say in the brief: never ask the user in the lane, send the need to the coordinator.
+- **Every brief has a `Skills:` line** from reference/routing.md; the coordinator's habits (evidence, stop orders, release table) are in reference/coordination.md.
 - **One writer per set of files.** Two lanes never edit the same files. Lanes commit only the paths they changed, by explicit path.
-- **Mocks reach the user as a file card plus a clickable link**, one mock per question, and the question to choose goes in a later turn than the mock.
+- **A file the user must review is a file card first, then a question card in the same turn** that names the file; no link inside a question (reference/coordination.md).
 - **A finished lane is closed by the coordinator.** When its report has been checked and nothing waits on it, the coordinator archives that session without asking, says so in one line, and the user can reopen it later.
 
 ## Reporting to the user: reply in the user's language

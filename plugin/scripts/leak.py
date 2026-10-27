@@ -15,7 +15,7 @@ import lint
 import studiolib as sl
 
 MIN_LEN = 4
-GENERIC = {"index", "readme", "changelog", "license", "template", "inbox"}   # file names every hub has
+GENERIC = {"index", "readme", "changelog", "license", "template", "inbox", "processed", "archive", "done"}   # names every hub has
 QUOTE = re.compile(r"«(?:[^»\s]+[ \t]+){2,}[^»\s]+»")      # the user's quotes: 3+ words («MVP n/m» is a label)
 Hit = namedtuple("Hit", "path line kind term")
 
@@ -112,10 +112,43 @@ def scan(root, found=None, allow=()):
     return hits
 
 
+_PRINTABLE = re.compile(rb"[\x20-\x7e]{4,}")
+MAX_BINARY = 64 * 1024 * 1024
+
+
+def scan_binary_strings(root, found=None, allow=()):
+    """The text scanners skip any file with a NUL byte, so a compiled binary is read here as `strings -a` would: every run of 4+
+    printable bytes is checked for the owner's words and home paths. Hit.line is the byte offset of the run. [Hit]"""
+    found = terms() if found is None else found
+    pat = _pattern(found)
+    allowed = {a.lower() for a in allow}
+    hits = []
+    for d, dirs, names in os.walk(root):
+        dirs.sort()
+        for name in sorted(names):
+            path = os.path.join(d, name)
+            if os.path.islink(path) or not os.path.isfile(path):
+                continue
+            rel = os.path.relpath(path, root)
+            if os.path.getsize(path) > MAX_BINARY:
+                hits.append(Hit(rel, 0, "too large to read", str(os.path.getsize(path))))
+                continue
+            with open(path, "rb") as f:
+                data = f.read()
+            for m in _PRINTABLE.finditer(data):
+                text = m.group(0).decode("ascii")
+                got = [(found[w.group(0).lower()], w.group(0)) for w in pat.finditer(text)] if pat else []
+                got += [("home path", w.group(0)) for w in lint.PERSONAL.finditer(text) if w.group(1).lower() not in lint.PLACEHOLDERS]
+                for kind, term in got:
+                    if ("%s:%s" % (rel, term)).lower() not in allowed:
+                        hits.append(Hit(rel, m.start(), kind, term))
+    return hits
+
+
 def report(hits):
     if not hits:
         return "leak check: clean"
-    lines = ["%s:%d: %s %r" % h for h in hits[:200]]
+    lines = ["%s:%d: %s %r" % ((lint.show(h.path, ""),) + tuple(h[1:])) for h in hits[:200]]      # a path never shapes the report
     if len(hits) > 200:
         lines.append("… %d more" % (len(hits) - 200))
     return "leak check: %d hit(s) — nothing private may leave\n%s" % (len(hits), "\n".join(lines))

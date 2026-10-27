@@ -22,6 +22,15 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "env -u PYTHONDONTWRITEBYTECODE python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/floatctl.py\" ensure --prompt",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -75,6 +84,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "env -u PYTHONDONTWRITEBYTECODE python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/floatctl.py\" ensure",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "SessionEnd": [
@@ -83,6 +102,15 @@
           {
             "type": "command",
             "command": "env -u PYTHONDONTWRITEBYTECODE python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" session-end",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "env -u PYTHONDONTWRITEBYTECODE python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/floatctl.py\" session-end",
             "timeout": 5
           }
         ]
@@ -147,6 +175,17 @@
           {
             "type": "command",
             "command": "f=\"$HOME/Library/Application Support/BroteWindow/events.log\"; [ -f \"$f\" ] || exit 0; s=/bin/dash; [ -x \"$s\" ] || s=sh; exec \"$s\" \"${CLAUDE_PLUGIN_ROOT}/hooks/brote-event.sh\" fail",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$HOME/Library/Application Support/BroteWindow/events.log\"; [ -f \"$f\" ] || exit 0; s=/bin/dash; [ -x \"$s\" ] || s=sh; exec \"$s\" \"${CLAUDE_PLUGIN_ROOT}/hooks/brote-event.sh\" apifail",
             "timeout": 5
           }
         ]

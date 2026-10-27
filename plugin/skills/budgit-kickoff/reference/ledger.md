@@ -19,6 +19,7 @@ Every message the user sends (mid-turn ones and the user's answers to your quest
 | `budgit new <slug> [--rigor mini\|standard]` | create project folder + git (noreply) + `.budgit/` + hub card |
 | `budgit idea "<text>"` | park an idea in the hub (`ideas/IDEA-NNN-*.md`, status inbox) |
 | `budgit image "<prompt>" --name <file>` | generate ONE image via the official Codex CLI on the ChatGPT lane (if set up) → `assets/generated/<file>.png` + `MANIFEST.jsonl` (prompt, sha256, tokens, time). Never ask the user to generate images by hand |
+| `budgit release-check [--items R-n …] [--since REF]` | release scope gate (non-zero while an item is unbuilt and not deferred) plus a read-only graph check: built items with no PASS receipt, orphaned claims, commits since REF that name no item. The graph part is advice and never changes the exit code |
 | `budgit prepare` | fresh state before verifying (commands approved by the user at a terminal: `--approve`; the error prints the exact command to show in a bash block) |
 
 A claimed item leaves `doing` when its session closes (SessionEnd releases it; `/clear` and `resume` release nothing, and a

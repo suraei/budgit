@@ -1,0 +1,439 @@
+{
+  "_note": "R-271 registry rows for the skills-flow lane (R-258). Schema = docs/plans/2026-10-25-r258-skills-selector.md section 5.2, kind 'rule'. All five: status draft, enabled false, wired into nothing until the user approves wiring. Data, not instructions.",
+  "rules": [
+    {
+      "id": "rule/pixel-art-1x",
+      "kind": "rule",
+      "status": "draft",
+      "enabled": false,
+      "source": {
+        "repo": "budgit (this repo)",
+        "path": "skills/budgit-kickoff/reference/rules/pixel-art-1x.md",
+        "version": "0.0.1-draft",
+        "licence": "MIT (Budgit)"
+      },
+      "security": {
+        "verdict": "n/a (text only, no code, no network)",
+        "unchecked": [
+          "not read by studio:security-reviewer"
+        ]
+      },
+      "flags": {
+        "telemetry": false,
+        "hooks": false,
+        "mcp": false,
+        "auto_update": false,
+        "writes_outside_project": false
+      },
+      "cost": {
+        "read_lines": 52,
+        "agents": 0,
+        "class": 0
+      },
+      "fits": {
+        "pixel/sprite-prop-scene": {
+          "fit": 3,
+          "check": 1,
+          "ev": "PX1-PX7 backed by audit-sprites.mjs, audit-book.mjs, compare-frames.mjs; PX8-PX11 manual"
+        },
+        "pixel/readme-art": {
+          "fit": 2,
+          "ev": "same pixel scale rule; SVG delivery belongs to rule/svg-light-dark"
+        }
+      },
+      "not_for": [
+        "vector UI",
+        "photos",
+        "web layout"
+      ],
+      "overlaps": [],
+      "strengths": [
+        "11 MUST rules each tied to a user correction or an existing audit",
+        "names the 1x strip next to a 4x zoom plus a fresh critic, the step users corrected three times"
+      ],
+      "weaknesses": [
+        "PX8-PX11 have no script; the 1x strip lived in a scratchpad",
+        "PX12 (2 px features) has no source",
+        "audits were read, not run"
+      ],
+      "when_selector_picks": "job surface is pixel-sprite, pixel-prop, pixel-icon or pixel-scene and no installed skill has fit 2 for it (flow plan 3.2). Attach with the lens, not instead of it.",
+      "fallback": [
+        "project rules + critic at 1x"
+      ],
+      "win_test": "kept only if it beats 'project rules + critic at 1x' in a real task and the user does not correct the style again (my criterion from the R-258 review, not a user statement)",
+      "history": [
+        {
+          "date": "2026-10-25",
+          "event": "drafted from the user's choice of all five rules (ledger I-148, R-271)"
+        }
+      ],
+      "uses": {
+        "total": 0,
+        "last": null
+      }
+    },
+    {
+      "id": "rule/frame-timing",
+      "kind": "rule",
+      "status": "draft",
+      "enabled": false,
+      "source": {
+        "repo": "budgit (this repo)",
+        "path": "skills/budgit-kickoff/reference/rules/frame-timing.md",
+        "version": "0.0.1-draft",
+        "licence": "MIT (Budgit)"
+      },
+      "security": {
+        "verdict": "n/a (text only, no code, no network)",
+        "unchecked": [
+          "not read by studio:security-reviewer"
+        ]
+      },
+      "flags": {
+        "telemetry": false,
+        "hooks": false,
+        "mcp": false,
+        "auto_update": false,
+        "writes_outside_project": false
+      },
+      "cost": {
+        "read_lines": 58,
+        "agents": 0,
+        "class": 0
+      },
+      "fits": {
+        "motion/sprite-animation": {
+          "fit": 3,
+          "check": 1,
+          "ev": "FT1-FT10 from director.js, sprites.js, behaviour-check.mjs, perf-frame.mjs; FT10 has no script"
+        },
+        "motion/animated-svg": {
+          "fit": 1,
+          "ev": "tick and hold vocabulary only; web motion belongs to emil-design-eng"
+        }
+      },
+      "not_for": [
+        "CSS or web UI motion",
+        "the web 300 ms rule"
+      ],
+      "overlaps": [
+        "emil-design-eng",
+        "impeccable animate",
+        "lens:motion.md"
+      ],
+      "strengths": [
+        "converts motion rules into ticks and a per-clip table",
+        "records three conflicts the Brote lane must settle before any number is hard"
+      ],
+      "weaknesses": [
+        "no measurement script for FT10",
+        "FT11-FT13 have no measurement behind them",
+        "ambient 20 s doc vs 60 s code, fidget gap 5-11 s vs 15-30 s unresolved"
+      ],
+      "when_selector_picks": "job writes or reviews a frame-by-frame clip (sprite, pet, README animated SVG). Never for CSS transitions.",
+      "fallback": [
+        "project rules + critic at 1x"
+      ],
+      "win_test": "same as rule/pixel-art-1x",
+      "history": [
+        {
+          "date": "2026-10-25",
+          "event": "drafted from the user's choice of all five rules (ledger I-148, R-271)"
+        }
+      ],
+      "uses": {
+        "total": 0,
+        "last": null
+      }
+    },
+    {
+      "id": "rule/terminal-status-line",
+      "kind": "rule",
+      "status": "draft",
+      "enabled": false,
+      "source": {
+        "repo": "budgit (this repo)",
+        "path": "skills/budgit-kickoff/reference/rules/terminal-status-line.md",
+        "version": "0.0.1-draft",
+        "licence": "MIT (Budgit)"
+      },
+      "security": {
+        "verdict": "n/a (text only, no code, no network)",
+        "unchecked": [
+          "not read by studio:security-reviewer"
+        ]
+      },
+      "flags": {
+        "telemetry": false,
+        "hooks": false,
+        "mcp": false,
+        "auto_update": false,
+        "writes_outside_project": false
+      },
+      "cost": {
+        "read_lines": 46,
+        "agents": 0,
+        "class": 0
+      },
+      "fits": {
+        "terminal/status-line": {
+          "fit": 3,
+          "check": 1,
+          "ev": "SL1-SL10 each tied to a user correction and a test (test_brote_status, test_cli, test_colour_default, test_bar_colour_surface, test_i18n)"
+        }
+      },
+      "not_for": [
+        "README hero pictures of the line"
+      ],
+      "overlaps": [],
+      "strengths": [
+        "best-evidenced of the five: ten MUSTs, each with a test"
+      ],
+      "weaknesses": [
+        "NO_COLOR unsupported (SL11)",
+        "80-column test uses len(), Spanish only (SL12)",
+        "no light-terminal palette (SL14)",
+        "desktop colour claim has no source link"
+      ],
+      "when_selector_picks": "job changes or designs the one-line status text or its colours on any host surface.",
+      "fallback": [
+        "project tests"
+      ],
+      "win_test": "SL1-SL10 already have tests; the win test applies only to SL11-SL14 (kept if it fixes a real user report)",
+      "history": [
+        {
+          "date": "2026-10-25",
+          "event": "drafted from the user's choice of all five rules (ledger I-148, R-271)"
+        }
+      ],
+      "uses": {
+        "total": 0,
+        "last": null
+      }
+    },
+    {
+      "id": "rule/readme-structure",
+      "kind": "rule",
+      "status": "draft",
+      "enabled": false,
+      "source": {
+        "repo": "budgit (this repo)",
+        "path": "skills/budgit-kickoff/reference/rules/readme-structure.md",
+        "version": "0.0.1-draft",
+        "licence": "MIT (Budgit)"
+      },
+      "security": {
+        "verdict": "n/a (text only, no code, no network)",
+        "unchecked": [
+          "not read by studio:security-reviewer"
+        ]
+      },
+      "flags": {
+        "telemetry": false,
+        "hooks": false,
+        "mcp": false,
+        "auto_update": false,
+        "writes_outside_project": false
+      },
+      "cost": {
+        "read_lines": 60,
+        "agents": 0,
+        "class": 0
+      },
+      "fits": {
+        "docs/readme-wiki-structure": {
+          "fit": 3,
+          "check": 1,
+          "ev": "RM1, RM4-RM7 have tests (test_export_public.py); RM2, RM3, RM8-RM10 manual"
+        },
+        "writing/readme-wiki-docs": {
+          "fit": 1,
+          "ev": "structure only; prose belongs to budgit-humanize"
+        }
+      },
+      "not_for": [
+        "marketing landing pages",
+        "prose quality"
+      ],
+      "overlaps": [
+        "budgit-humanize"
+      ],
+      "strengths": [
+        "10 MUSTs from user, ledger R-250, R-218, R-157 corrections and tests",
+        "marks the 150-line research rule as contradicted by the README the user approved"
+      ],
+      "weaknesses": [
+        "RM11-RM19 are pattern-copying from 8 READMEs, no reader-outcome evidence",
+        "no wiki tests exist",
+        "the docs lane owns the shipped files; this rule changes none"
+      ],
+      "when_selector_picks": "job writes or restructures a README, wiki page, getting-started or FAQ. Run with budgit-humanize as the prose gate.",
+      "fallback": [
+        "project rules + critic at column width"
+      ],
+      "win_test": "same as rule/pixel-art-1x, judged on the rendered mock at 836 px and 375 px",
+      "history": [
+        {
+          "date": "2026-10-25",
+          "event": "drafted from the user's choice of all five rules (ledger I-148, R-271)"
+        }
+      ],
+      "uses": {
+        "total": 0,
+        "last": null
+      }
+    },
+    {
+      "id": "rule/svg-light-dark",
+      "kind": "rule",
+      "status": "draft",
+      "enabled": false,
+      "source": {
+        "repo": "budgit (this repo)",
+        "path": "skills/budgit-kickoff/reference/rules/svg-light-dark.md",
+        "version": "0.0.1-draft",
+        "licence": "MIT (Budgit)"
+      },
+      "security": {
+        "verdict": "n/a (text only, no code, no network)",
+        "unchecked": [
+          "not read by studio:security-reviewer"
+        ]
+      },
+      "flags": {
+        "telemetry": false,
+        "hooks": false,
+        "mcp": false,
+        "auto_update": false,
+        "writes_outside_project": false
+      },
+      "cost": {
+        "read_lines": 48,
+        "agents": 0,
+        "class": 0
+      },
+      "fits": {
+        "svg/readme-art": {
+          "fit": 3,
+          "check": 0,
+          "ev": "SV1-SV8 from the shipped 12 light/dark pairs the user approved; almost no test enforces them"
+        },
+        "svg/diagram": {
+          "fit": 1,
+          "ev": "delivery and contrast only; type choice belongs to diagram-design"
+        }
+      },
+      "not_for": [
+        "pixel sprites",
+        "choosing a diagram type"
+      ],
+      "overlaps": [
+        "diagram-design",
+        "dataviz"
+      ],
+      "strengths": [
+        "codifies the shipped picture pair delivery",
+        "reports a real contrast near-miss in the shipped art"
+      ],
+      "weaknesses": [
+        "no checker (check_art.py does not exist)",
+        "SV9 contrast is SHOULD: shipped generators fail it",
+        "wiki <picture> unverified",
+        "contrast figures are an agent's computation"
+      ],
+      "when_selector_picks": "job makes an SVG for a README, wiki or page that is shown in light and dark. Attach next to diagram-design.",
+      "fallback": [
+        "diagram-design"
+      ],
+      "win_test": "same as rule/pixel-art-1x; SV9 becomes a rule only after an assertion exists in a shipped generator",
+      "history": [
+        {
+          "date": "2026-10-25",
+          "event": "drafted from the user's choice of all five rules (ledger I-148, R-271)"
+        }
+      ],
+      "uses": {
+        "total": 0,
+        "last": null
+      }
+    },
+    {
+      "id": "rule/odd-data-probes",
+      "kind": "rule",
+      "status": "draft",
+      "enabled": false,
+      "source": {
+        "repo": "budgit (this repo)",
+        "path": "skills/budgit-kickoff/reference/rules/odd-data-probes.md",
+        "version": "0.0.1-draft",
+        "licence": "MIT (Budgit); method adapted from emilkowalski/break-ui (MIT, pin 2d22863), read not run, nothing copied"
+      },
+      "security": {
+        "verdict": "n/a (text only, no code, no network)",
+        "unchecked": [
+          "not read by studio:security-reviewer"
+        ]
+      },
+      "flags": {
+        "telemetry": false,
+        "hooks": false,
+        "mcp": false,
+        "auto_update": false,
+        "writes_outside_project": false
+      },
+      "cost": {
+        "read_lines": 62,
+        "agents": 0,
+        "class": 0
+      },
+      "fits": {
+        "any-screen/odd-data-pass": {
+          "fit": 3,
+          "check": 1,
+          "ev": "OD4, OD5 have tests; OD1-OD3, OD6-OD13 are method"
+        },
+        "web/worst-case-data-pass": {
+          "fit": 2,
+          "ev": "break-ui scores 3 for web; this rule is the host-neutral form"
+        },
+        "native-cli-game/sample-data": {
+          "fit": 3,
+          "ev": "per-host 'how to look' table; Spanish names and glyph coverage added"
+        }
+      },
+      "not_for": [
+        "pure visual styling",
+        "animation (rule/frame-timing)"
+      ],
+      "overlaps": [
+        "impeccable harden",
+        "emilkowalski/break-ui (reference only)"
+      ],
+      "strengths": [
+        "catches the tidy-sample-data blind spot on hosts break-ui cannot reach",
+        "Spanish and French name probes and glyph coverage that the catalog lacks"
+      ],
+      "weaknesses": [
+        "OD1 cites a pain known only second-hand",
+        "most rows are third-party method, not shown to win here",
+        "no script: the probes are written by hand per project"
+      ],
+      "when_selector_picks": "job renders data on any host and is about to be called done. Attach with the screen's own skill; report first, fix on the user's word.",
+      "fallback": [
+        "project rules + critic at 1x",
+        "impeccable harden (web)"
+      ],
+      "win_test": "same as rule/pixel-art-1x",
+      "history": [
+        {
+          "date": "2026-10-26",
+          "event": "written after the user approved a rule from break-ui (ledger I-154/I-155)"
+        }
+      ],
+      "uses": {
+        "total": 0,
+        "last": null
+      }
+    }
+  ]
+}

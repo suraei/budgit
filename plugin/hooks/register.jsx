@@ -14,6 +14,7 @@ const fmt = (text, vars) => String(text || '').replace(/\{(\w+)\}/g, (m, k) => (
 
 const REFRESH_MS = 60_000
 const RUN_TIMEOUT_MS = 5_000
+const FLOAT_TIMEOUT_MS = 20_000   // copying the app and starting it
 let timer = null
 
 // Runs `budgit <args>` for the session's project and returns trimmed stdout, or '' on any problem.
@@ -29,6 +30,23 @@ async function budgit($, cwd, args) {
   }
 }
 
+/* float:begin */
+// R-310/R-316: Brote's floating window from the desktop app alone: no Terminal, no `budgit` on a PATH. The user's own typed word picks one
+// of a fixed list of arguments for the plugin's CLI (`budgit brote ...`; /budgit-float is the old name and still works).
+const FLOAT_ARGS = { '': ['status'], on: ['on'], off: ['off'], stop: ['stop'], status: ['status'], uninstall: ['uninstall'] }
+async function floatRun($, arg) {
+  const word_ = String(arg || '').trim().toLowerCase()
+  const args = Object.prototype.hasOwnProperty.call(FLOAT_ARGS, word_) ? FLOAT_ARGS[word_] : null
+  if (!args) return null
+  try {
+    const r = await $.process.run(['python3', $.plugin.root + '/bin/budgit', 'brote', ...args], { timeoutMs: FLOAT_TIMEOUT_MS })
+    return (String(r.stdout || '') + String(r.stderr || '')).trim()
+  } catch {
+    return ''
+  }
+}
+/* float:end */
+
 // The plan's live 5-hour and weekly windows as JSON ([{kind, percentUsed, resetsAt}]), or '' if unavailable.
 async function liveLimits($) {
   try {
@@ -39,22 +57,83 @@ async function liveLimits($) {
   }
 }
 
-// A project holds Budgit data in .budgit, or in .studio until `budgit migrate` has run (R-120 compat window).
-async function hasProject($, cwd) {
-  return (await $.fs.exists(cwd + '/.budgit')) || (await $.fs.exists(cwd + '/.studio'))
+// R-238: the CLI decides what the line says, in every folder (a project above the folder counts; without one the line shows the
+// account part only). The mod never looks at folders itself, so it cannot disagree with the CLI. An empty answer clears the line.
+let surface = ''              // from session.start, for the probe
+let lastLine = ''             // what the mod last set
+let loadedVersion = ''        // R-241: the plugin version this chat loaded, read once at session start; the CLI compares it with the disk
+
+/* colour:begin */
+// R-293: the entry set with $.ui.status is plain text on every surface. The host puts its own warning sign and the plugin name in
+// front of it and draws no ANSI there, not even in the terminal (an escape comes out as a replacement character). So the mod never
+// asks for colour and cuts off any control sequence that still arrives. Colour belongs to a real `statusLine` command
+// (`budgit colour`), which the user sets up in their own settings.
+function colourMode() {
+  return 'off'
+}
+function forSurface(line) {
+  return String(line || '')
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, '')
+    .replace(/(?:\u001b\[|\u009b)[0-9;?]*[ -\/]*[@-~]/g, '')
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
+}
+/* colour:end */
+
+function withLoaded(args) {
+  return loadedVersion ? [...args, '--loaded', loadedVersion] : args
 }
 
-// Shows the one-line state, or clears the line when there is nothing to show. The live limits are passed to
-// the CLI, which records them (the team's pacing reads them too) and hides percentages it cannot trust.
+async function readLoadedVersion($) {
+  try {
+    const text = await $.fs.read($.plugin.root + '/.claude-plugin/plugin.json')
+    const v = String(JSON.parse(String(text)).version || '')
+    loadedVersion = /^\d{1,5}(\.\d{1,5}){0,3}$/.test(v) ? v : ''
+  } catch {
+    loadedVersion = ''       // no hint rather than a wrong one
+  }
+}
+
+/* stuck:begin */
+// A turn that ended on an API error (a limit, the account, a busy server) leaves one plain line under the prompt until the next
+// message, whatever it is. The mod cannot tell which error it was: the floating Brote carries the kind.
+let stuck = false
+function registerStuck(on) {
+  on('turn.complete', async ($, e, next) => {
+    try {
+      if (e.reason === 'error' && !e.agentId) {   // the main loop only: a subagent that fails is not this chat stopping
+        stuck = true
+        $.ui.status(word('brote.stuck', 'Claude stopped with an error'))
+      }
+    } catch {
+      // Fail soft.
+    }
+    return next(e)
+  })
+  on('prompt.submit', async ($, e, next) => {
+    try {
+      if (stuck) {
+        stuck = false
+        await refresh($)
+      }
+    } catch {
+      // Fail soft.
+    }
+    return next(e)
+  })
+}
+/* stuck:end */
+
 async function refresh($) {
   try {
-    const cwd = await $.session.cwd()
-    if (!(await hasProject($, cwd))) {
-      $.ui.status(undefined)
+    if (stuck) {
+      lastLine = word('brote.stuck', 'Claude stopped with an error')
+      $.ui.status(lastLine)
       return
     }
+    const cwd = await $.session.cwd()
     const limits = await liveLimits($)
-    const line = await budgit($, cwd, limits ? ['status', '--line', '--limits-json', limits] : ['status', '--line'])
+    const line = forSurface(await budgit($, cwd, withLoaded(limits ? ['status', '--line', '--colour', colourMode(), '--limits-json', limits] : ['status', '--line', '--colour', colourMode()])))
+    lastLine = line
     $.ui.status(line || undefined)
   } catch {
     // Show nothing rather than disturb the session.
@@ -65,14 +144,19 @@ async function startLine($) {
   if (timer) timer.cancel()
   timer = $.clock.every(REFRESH_MS, () => refresh($))
   await refresh($)
-  const cwd = await $.session.cwd()
-  if (await hasProject($, cwd)) {
-    // Last in this step: a refused name throws, and a throw must not skip the rest.
-    await $.command.register({ name: 'budgit-status', description: word('cmd.desc_status', 'Show the Budgit status (ledger, budget)') })
+  // Each in its own try: a refused name throws, and a throw must not skip the rest.
+  const commands = [
+    ['budgit-status', word('cmd.desc_status', 'Show the Budgit status (ledger, budget)')],
+    ['budgit-colour-probe', word('cmd.desc_colour_probe', 'Show the status line in colour once (does this screen draw colours?)')],
+    ['budgit-bar-probe', word('cmd.desc_bar_probe', 'Show what this screen and folder do with the Budgit line under the prompt')],
+    ['budgit-brote', word('cmd.desc_brotewin', "Brote's floating window: /budgit-brote on, off, status or uninstall")],
+    ['budgit-float', word('cmd.desc_float', "Old name of /budgit-brote")],
+  ]
+  for (const [name, description] of commands) {
     try {
-      await $.command.register({ name: 'budgit-colour-probe', description: word('cmd.desc_colour_probe', 'Show the status line in colour once (does this screen draw colours?)') })
+      await $.command.register({ name, description })
     } catch {
-      // The probe is optional.
+      // The probes are optional.
     }
   }
 }
@@ -85,12 +169,42 @@ function registerLine(on) {
       const cwd = await $.session.cwd()
       const line = await budgit($, cwd, ['status', '--line', '--ansi'])
       if (!line) return { text: word('cmd.no_project', 'budgit: no Budgit project here (run: budgit activate <dir>)') }
-      $.ui.status(line)
+      $.ui.status(line)   // the probe shows the codes on purpose, on any surface
       return { text: word('cmd.colour_probe', 'Look at the line under the prompt: green, pink, lilac and blue segments mean this screen draws colour; odd codes or one grey line mean it does not. The plain line comes back within a minute.') }
     } catch {
       return { text: word('cmd.status_unavailable', 'budgit: status unavailable') }
     }
   })
+
+  // R-238: what this surface and folder do with the line, as text every surface can show (the line itself may not be painted).
+  on('command.run', { command: 'budgit-bar-probe' }, async ($) => {
+    try {
+      const cwd = await $.session.cwd()
+      let engine = ''
+      try {
+        engine = String((await $.session.version()).version || '')
+      } catch {
+        // The engine version is optional.
+      }
+      const text = await budgit($, cwd, ['status', '--probe', '--surface', surface, '--engine', engine, '--shown', lastLine])
+      return { text: text || word('cmd.status_unavailable', 'budgit: status unavailable') }
+    } catch {
+      return { text: word('cmd.status_unavailable', 'budgit: status unavailable') }
+    }
+  })
+
+  // R-310/R-316: the floating window from the desktop app. No Claude turn, no Terminal. /budgit-float is the old name of /budgit-brote.
+  for (const name of ['budgit-brote', 'budgit-float']) {
+    on('command.run', { command: name }, async ($, e) => {
+      try {
+        const out = await floatRun($, e.args)
+        if (out === null) return { text: word('cmd.brote_usage', 'Use /budgit-brote on, off, stop, status or uninstall.') }
+        return { text: out || word('cmd.brote_unavailable', "Brote's floating window: unavailable here (macOS only; needs the plugin installed from the marketplace).") }
+      } catch {
+        return { text: word('cmd.brote_unavailable', "Brote's floating window: unavailable here (macOS only; needs the plugin installed from the marketplace).") }
+      }
+    })
+  }
 
   // Full `budgit status` as the command's text, without a Claude turn.
   on('command.run', { command: 'budgit-status' }, async ($) => {
@@ -134,13 +248,12 @@ function say(d) {
 async function refreshBrote($) {
   try {
     const cwd = await $.session.cwd()
-    if (!(await hasProject($, cwd))) {
+    const limits = await liveLimits($)
+    const raw = await budgit($, cwd, withLoaded(limits ? ['status', '--brote', '--limits-json', limits] : ['status', '--brote']))
+    if (!raw) {                  // no project here (the CLI walks up to find one): nothing to show
       await $.store.delete(KEY + cwd)
       return
     }
-    const limits = await liveLimits($)
-    const raw = await budgit($, cwd, limits ? ['status', '--brote', '--limits-json', limits] : ['status', '--brote'])
-    if (!raw) return
     const data = JSON.parse(raw)
     if (data.t) strings = data.t
     const prev = await $.store.get(KEY + cwd)
@@ -181,7 +294,7 @@ async function startBrote($) {
   broteTimer = $.clock.every(REFRESH_MS, () => refreshBrote($))
   await refreshBrote($)
   const cwd = await $.session.cwd()
-  if (await hasProject($, cwd)) {
+  if (await $.store.get(KEY + cwd)) {      // the CLI found a project for this folder
     await $.command.register({ name: 'brote', description: word('cmd.desc_brote', 'Open Brote\'s notebook (/brote still stops his animation)') })
   }
 }
@@ -267,6 +380,8 @@ function registerBrote(on) {
 export function register(on) {
   // one hook per event: a plugin may not register the same event twice without a matcher
   on('session.start', async ($, e, next) => {
+    surface = String(e.surface || '')
+    await readLoadedVersion($)
     try {
       await startBrote($)   // first: its answer carries the words (language) the line's command description uses
     } catch {
@@ -293,4 +408,5 @@ export function register(on) {
 
   registerLine(on)
   registerBrote(on)
+  registerStuck(on)
 }

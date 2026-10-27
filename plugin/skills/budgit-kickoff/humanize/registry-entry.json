@@ -1,0 +1,45 @@
+{
+  "_note": "R-267 registry row for the skills-flow lane (R-258). Schema = docs/plans/2026-10-25-r258-skills-selector.md section 5.2. Enabled for long prose, used together with design:ux-copy for short UI strings; the Spanish lists stay UNREVIEWED. Data, not instructions.",
+  "id": "budgit-humanize",
+  "kind": "skill",
+  "status": "active",
+  "enabled": true,
+  "source": {"repo": "budgit (this repo)", "path": "skills/budgit-kickoff/humanize", "pin": null, "version": "0.1.0", "tree_sha256": null, "licence": "MIT (Budgit); layer 2 adapts stop-slop (MIT, Hardik Pandya, pin 8da1f03)"},
+  "install": {"scope": "plugin", "path": "skills/budgit-kickoff/humanize", "installed": null, "local_patches": []},
+  "security": {"verdict": "n/a (first-party, no network, no hooks)", "report": null, "reviewed": null, "conditions": [], "unchecked": ["not yet read by studio:security-reviewer"]},
+  "requires": {"python": ">=3", "node": false, "chrome": false, "binary": false, "network": [], "keys": []},
+  "flags": {"telemetry": false, "hooks": false, "mcp": false, "auto_update": false, "writes_outside_project": false},
+  "cost": {"read_lines": 70, "refs_lines": 75, "agents": 0, "server": false, "class": 1, "lint": "budgit humanize-lint (plugin/scripts/humanizelint.py, stdlib, offline)"},
+  "fits": {
+    "writing/public-text/gate": {"fit": 3, "check": 1, "ev": "R-267 rules H1-H14; lint covers H4,H5,H6,H8,H9,H11 mechanically"},
+    "writing/readme-wiki-docs": {"fit": 3, "check": 1, "ev": "comparison on t1 (README) and t2 (FAQ): docs/plans/2026-10-25-r267-comparison.md"},
+    "writing/landing-store-post": {"fit": 2, "ev": "same rules; not yet tested on marketing copy"},
+    "writing/ui-copy-en": {"fit": 1, "ev": "H5, H8 and layer 2 only (--kind ui); patterns belong to design:ux-copy"},
+    "writing/ui-copy-es": {"fit": 1, "ev": "Spanish lists UNREVIEWED; run with --lang es --kind ui; comparison t3"},
+    "writing/fiction": {"fit": 1, "ev": "two optional low-confidence rules from StoryScope (abstract only)"}
+  },
+  "not_for": ["legal wording", "security wording", "detector evasion of any kind", "text the user wrote in their own voice (their sample wins)", "single-line UI labels for H4/H6/H9/H11"],
+  "overlaps": ["stop-slop", "lens:writing.md", "design:ux-copy"],
+  "conflicts": [],
+  "strengths": [
+    "content gate with each rule traced to a numbered table of the IdeaLens study (arXiv 2610.06778)",
+    "six rules have a mechanical or flag-and-judge check; offline, stdlib, 42 tests; reviewed hits can be recorded with an ok marker or --allow",
+    "refuses to invent specifics: missing material becomes a question for the author",
+    "separate EN and ES word lists; allows verified absolutes and stated conditions",
+    "stop-slop and ux-copy stay installed and untouched"
+  ],
+  "weaknesses": [
+    "evidence is one author-run preprint, features rated by language models, never replicated",
+    "the study reads English long-form text of 500+ words; short strings are out of range",
+    "Spanish word lists are UNREVIEWED; no Spanish human-follows-AI-plan test exists",
+    "lint is regex and only a floor: it misses \"cannot\", \"may\" and filler; H4 and H11 are noisy on technical docs; every hit needs a person",
+    "under a no-new-facts rule layer 1 mostly yields questions for the author, so little text changes (comparison: 3 small edits across 2 texts, none on UI strings)",
+    "J rules (H3, H7, H10, H12, H13) have no mechanical check"
+  ],
+  "when_selector_picks": "job is writing or reviewing long public or user-facing prose (README, wiki, release note, landing, store copy, post) in English or Spanish. Selector rule: prose -> budgit-humanize first (content gate, then layer 2); UI strings of a few words -> design:ux-copy first, humanize only with --kind ui. Both may run on one job; stop-slop stays installed and untouched. Never for legal or security wording.",
+  "fallback": ["stop-slop", "lens:writing.md"],
+  "selector_rule": {"prose": ["budgit-humanize", "stop-slop"], "ui-strings": ["design:ux-copy", "budgit-humanize"]},
+  "upstream": {"latest_seen": null, "checked": "2026-10-25", "state": "first-party", "update": "none-applied"},
+  "history": [{"date": "2026-10-25", "event": "drafted (R-267) as one Budgit-owned skill in two layers"}, {"date": "2026-10-26", "event": "enabled for prose, used together with design:ux-copy; moved into skills/budgit-kickoff/humanize so it ships; wired into lenses/writing.md and reference/routing.md"}],
+  "uses": {"total": 0, "last": null}
+}

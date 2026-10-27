@@ -10,3 +10,4 @@
   promotion needs a replay result, a data-freshness bound, explicit risk limits and the user's approval, recorded in
   the ledger.
 - Secrets never in tracked files; personal/diet/health data = special category (GDPR art. 9).
+- A read-only or security brief forbids commands that raise an operating-system password or permission prompt (keychain reads, `sudo`, system settings).

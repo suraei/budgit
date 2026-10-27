@@ -1,0 +1,7284 @@
+{
+ "version": "2026-10-26.1",
+ "generated_by": "seed 2026-10-26; entries are edited by hand and by `budgit skills build` (unread skills only)",
+ "surfaces": {
+  "app-ui": {
+   "generic_ok": true
+  },
+  "landing": {
+   "generic_ok": true
+  },
+  "docs": {
+   "generic_ok": true
+  },
+  "diagram": {
+   "generic_ok": true
+  },
+  "chart": {
+   "generic_ok": true
+  },
+  "deck": {
+   "generic_ok": true
+  },
+  "web": {
+   "generic_ok": true
+  },
+  "pixel": {
+   "generic_ok": false,
+   "note": "a pixel sprite never inherits what a skill knows about web pages"
+  },
+  "terminal": {
+   "generic_ok": false,
+   "note": "text on a terminal line, no web rules"
+  },
+  "native-macos": {
+   "generic_ok": false,
+   "note": "AppKit or SwiftUI panels; web and iOS analogies are fit 1 at most"
+  }
+ },
+ "jobs": {
+  "design/shape": {
+   "role": "author",
+   "continuity": true,
+   "bakeoff": true,
+   "checks": [
+    "design/critique",
+    "design/a11y",
+    "design/lint"
+   ],
+   "policy_kind": {
+    "app-ui": "app-screen",
+    "landing": "landing",
+    "native-macos": "native-panel",
+    "*": "app-screen"
+   }
+  },
+  "design/build": {
+   "role": "author",
+   "continuity": true,
+   "bakeoff": true,
+   "checks": [
+    "design/critique",
+    "design/a11y",
+    "design/lint"
+   ],
+   "policy_kind": {
+    "app-ui": "app-screen",
+    "landing": "landing",
+    "native-macos": "native-panel",
+    "*": "app-screen"
+   }
+  },
+  "design/polish": {
+   "role": "author",
+   "continuity": true,
+   "bakeoff": true,
+   "checks": [
+    "design/critique",
+    "design/a11y",
+    "design/lint"
+   ],
+   "policy_kind": "tokens-polish"
+  },
+  "design/tokens": {
+   "role": "author",
+   "policy_kind": "tokens-polish"
+  },
+  "design/critique": {
+   "role": "checker"
+  },
+  "design/a11y": {
+   "role": "checker"
+  },
+  "design/lint": {
+   "role": "instrument"
+  },
+  "design/diagram": {
+   "role": "author",
+   "policy_kind": "diagram"
+  },
+  "design/chart": {
+   "role": "author",
+   "policy_kind": "diagram"
+  },
+  "design/deck": {
+   "role": "author",
+   "policy_kind": "deck"
+  },
+  "motion/micro-interaction": {
+   "role": "author",
+   "policy_kind": "motion"
+  },
+  "motion/hero": {
+   "role": "author",
+   "policy_kind": "motion"
+  },
+  "motion/timeline": {
+   "role": "author",
+   "policy_kind": "motion"
+  },
+  "motion/scroll": {
+   "role": "author",
+   "policy_kind": "motion"
+  },
+  "motion/3d": {
+   "role": "author",
+   "policy_kind": "3d"
+  },
+  "writing/public-prose": {
+   "role": "author",
+   "policy_kind": "copy"
+  },
+  "writing/ui-copy": {
+   "role": "author",
+   "policy_kind": "copy"
+  },
+  "writing/docs-structure": {
+   "role": "author",
+   "policy_kind": "copy"
+  },
+  "process/spec": {
+   "role": "author"
+  },
+  "process/plan": {
+   "role": "author"
+  },
+  "process/plan-critique": {
+   "role": "checker"
+  },
+  "process/execute": {
+   "role": "author"
+  },
+  "process/debug": {
+   "role": "author"
+  },
+  "process/verify": {
+   "role": "checker"
+  },
+  "process/close": {
+   "role": "checker"
+  },
+  "process/review": {
+   "role": "checker"
+  },
+  "security/own-diff": {
+   "role": "checker"
+  },
+  "security/third-party": {
+   "role": "checker"
+  },
+  "security/release": {
+   "role": "checker"
+  },
+  "research/web": {
+   "role": "author"
+  },
+  "research/urls": {
+   "role": "author"
+  },
+  "research/video": {
+   "role": "author"
+  },
+  "research/js-site": {
+   "role": "author"
+  },
+  "research/browser": {
+   "role": "author"
+  },
+  "validate/reaction": {
+   "role": "author",
+   "runs_by_level": {
+    "ample": 5,
+    "normal": 3,
+    "tight": 1,
+    "critical": 0
+   }
+  },
+  "validate/wanted": {
+   "role": "author"
+  },
+  "validate/prediction": {
+   "role": "author"
+  }
+ },
+ "budget_policy": {
+  "levels": {
+   "ample": {
+    "B": 0,
+    "agent_cap": 4,
+    "checkers": 2,
+    "debate": true
+   },
+   "normal": {
+    "B": 1,
+    "agent_cap": 3,
+    "checkers": 1,
+    "debate": false
+   },
+   "tight": {
+    "B": 2,
+    "agent_cap": 2,
+    "checkers": 0,
+    "debate": false
+   },
+   "critical": {
+    "B": 3,
+    "agent_cap": 0,
+    "checkers": 0,
+    "debate": false
+   }
+  },
+  "matrix": [
+   {
+    "kind": "app-screen",
+    "label": "App screen (web)",
+    "cells": {
+     "ample": {
+      "text": "Author: the hand the project already uses (provisional default until the bake-off); checkers: the other hand's instrument in advisory mode and an accessibility review; pillar work adds a debate.",
+      "text_es": "Autor: la mano que ya usa el proyecto (por defecto provisional hasta la comparativa); revisores: el instrumento de la otra mano en modo consejo y una revisión de accesibilidad; en trabajo clave se suma un debate.",
+      "needs_d39": true
+     },
+     "normal": {
+      "text": "Author plus the other hand's instrument as one checker; no debate.",
+      "text_es": "Autor más el instrumento de la otra mano como un revisor; sin debate.",
+      "needs_d39": false
+     },
+     "tight": {
+      "text": "The cheaper author and its own lint; heavy work is asked first and queued.",
+      "text_es": "El autor más barato y su propio lint; el trabajo pesado se pregunta antes y se encola.",
+      "needs_d39": false
+     },
+     "critical": {
+      "text": "The brain writes with scripts and screenshots only; design work is queued.",
+      "text_es": "El cerebro escribe solo con scripts y capturas; el diseño se encola.",
+      "needs_d39": false
+     }
+    }
+   },
+   {
+    "kind": "native-panel",
+    "label": "Native macOS panel",
+    "cells": {
+     "ample": {
+      "text": "Gap: project rules plus a real screenshot at 1x; Codex may review the Swift diff when the lane is on.",
+      "text_es": "Hueco: reglas del proyecto y una captura real a 1x; Codex puede revisar el diff de Swift si su carril está activo.",
+      "needs_d39": true
+     },
+     "normal": {
+      "text": "Gap: project rules, the numbers of the motion reference, a screenshot.",
+      "text_es": "Hueco: reglas del proyecto, los números de la referencia de movimiento y una captura.",
+      "needs_d39": false
+     },
+     "tight": {
+      "text": "Gap: project rules and a screenshot.",
+      "text_es": "Hueco: reglas del proyecto y una captura.",
+      "needs_d39": false
+     },
+     "critical": {
+      "text": "Gap: project rules and a screenshot.",
+      "text_es": "Hueco: reglas del proyecto y una captura.",
+      "needs_d39": false
+     }
+    }
+   },
+   {
+    "kind": "landing",
+    "label": "Landing page",
+    "cells": {
+     "ample": {
+      "text": "The art-directed hand writes; a critique with sub-agents is the critic of a debate, a judge decides, Codex may be an outside voice; the debate only for public or pillar pages.",
+      "text_es": "La mano de dirección de arte escribe; una crítica con subagentes hace de crítico en el debate, un juez decide y Codex puede dar una segunda voz; el debate solo en páginas públicas o clave.",
+      "needs_d39": true
+     },
+     "normal": {
+      "text": "The art-directed hand writes; a critique with sub-agents only if the project already uses that skill.",
+      "text_es": "La mano de dirección de arte escribe; una crítica con subagentes solo si el proyecto ya usa esa skill.",
+      "needs_d39": false
+     },
+     "tight": {
+      "text": "A plan from the light skill plus the inspector of the art-directed hand.",
+      "text_es": "Un plan de la skill ligera más el inspector de la mano de dirección de arte.",
+      "needs_d39": false
+     },
+     "critical": {
+      "text": "A plan from the light skill, written by the brain alone.",
+      "text_es": "Un plan de la skill ligera, escrito solo por el cerebro.",
+      "needs_d39": false
+     }
+    }
+   },
+   {
+    "kind": "motion",
+    "label": "Motion",
+    "cells": {
+     "ample": {
+      "text": "The motion reference decides the numbers; the design lead's animate pass only for an authored hero moment; GSAP only for a timeline or scroll.",
+      "text_es": "La referencia de movimiento decide los números; la pasada de animación del líder de diseño solo para un momento de héroe; GSAP solo para línea de tiempo o scroll.",
+      "needs_d39": false
+     },
+     "normal": {
+      "text": "The motion reference; GSAP only if needed.",
+      "text_es": "La referencia de movimiento; GSAP solo si hace falta.",
+      "needs_d39": false
+     },
+     "tight": {
+      "text": "The motion reference plus CSS.",
+      "text_es": "La referencia de movimiento y CSS.",
+      "needs_d39": false
+     },
+     "critical": {
+      "text": "CSS and the reference numbers.",
+      "text_es": "CSS y los números de la referencia.",
+      "needs_d39": false
+     }
+    }
+   },
+   {
+    "kind": "pixel",
+    "label": "Pixel sprite, frame pacing, terminal",
+    "cells": {
+     "ample": {
+      "text": "Gap: project rules, a critic at 1x and a second fresh critic; scripts in the tools folder.",
+      "text_es": "Hueco: reglas del proyecto, un crítico a 1x y un segundo crítico nuevo; scripts en la carpeta de herramientas.",
+      "needs_d39": true
+     },
+     "normal": {
+      "text": "Gap: project rules and a critic at 1x.",
+      "text_es": "Hueco: reglas del proyecto y un crítico a 1x.",
+      "needs_d39": false
+     },
+     "tight": {
+      "text": "Gap: project rules.",
+      "text_es": "Hueco: reglas del proyecto.",
+      "needs_d39": false
+     },
+     "critical": {
+      "text": "Gap: project rules.",
+      "text_es": "Hueco: reglas del proyecto.",
+      "needs_d39": false
+     }
+    }
+   },
+   {
+    "kind": "tokens-polish",
+    "label": "Tokens, polish, assets",
+    "cells": {
+     "ample": {
+      "text": "Tokens by extraction or the design-system template; polish is the author's own pass from the latest critique.",
+      "text_es": "Tokens por extracción o con la plantilla de sistema de diseño; el pulido es la pasada del propio autor a partir de la última crítica.",
+      "needs_d39": false
+     },
+     "normal": {
+      "text": "Same.",
+      "text_es": "Igual.",
+      "needs_d39": false
+     },
+     "tight": {
+      "text": "Same, without sub-agents.",
+      "text_es": "Igual, sin subagentes.",
+      "needs_d39": false
+     },
+     "critical": {
+      "text": "Skip or queue.",
+      "text_es": "Saltar o encolar.",
+      "needs_d39": false
+     }
+    }
+   },
+   {
+    "kind": "copy",
+    "label": "Copy",
+    "cells": {
+     "ample": {
+      "text": "English: the copy template for app text, the prose rubric for public text; Spanish, legal and security wording: project writing rules only. Codex second opinion when the lane is on.",
+      "text_es": "Inglés: plantilla de copy para texto de app, rúbrica de prosa para texto público; español, legal y seguridad: solo las reglas de escritura del proyecto. Segunda opinión de Codex si el carril está activo.",
+      "needs_d39": true
+     },
+     "normal": {
+      "text": "English: template or rubric; Spanish: project rules.",
+      "text_es": "Inglés: plantilla o rúbrica; español: reglas del proyecto.",
+      "needs_d39": false
+     },
+     "tight": {
+      "text": "Rubric for English; project rules.",
+      "text_es": "Rúbrica para inglés; reglas del proyecto.",
+      "needs_d39": false
+     },
+     "critical": {
+      "text": "Project writing rules; Codex drafts when the lane is on.",
+      "text_es": "Reglas de escritura del proyecto; Codex redacta si el carril está activo.",
+      "needs_d39": false
+     }
+    }
+   },
+   {
+    "kind": "diagram",
+    "label": "Diagram or chart",
+    "cells": {
+     "ample": {
+      "text": "The diagram skill plus an independent critic at 1x; the chart skill if the palette check is needed.",
+      "text_es": "La skill de diagramas más un crítico independiente a 1x; la skill de gráficos si hace falta la comprobación de paleta.",
+      "needs_d39": false
+     },
+     "normal": {
+      "text": "The diagram skill plus a critic at 1x.",
+      "text_es": "La skill de diagramas más un crítico a 1x.",
+      "needs_d39": false
+     },
+     "tight": {
+      "text": "The diagram skill and its own check.",
+      "text_es": "La skill de diagramas y su propia comprobación.",
+      "needs_d39": false
+     },
+     "critical": {
+      "text": "The diagram skill, one pass.",
+      "text_es": "La skill de diagramas, una pasada.",
+      "needs_d39": false
+     }
+    }
+   },
+   {
+    "kind": "3d",
+    "label": "3D",
+    "cells": {
+     "ample": {
+      "text": "The three.js files the sub-job needs plus the performance check; GSAP for scroll-driven cameras.",
+      "text_es": "Los archivos de three.js que pida la tarea más la comprobación de rendimiento; GSAP para cámaras con scroll.",
+      "needs_d39": false
+     },
+     "normal": {
+      "text": "Only the files needed.",
+      "text_es": "Solo los archivos necesarios.",
+      "needs_d39": false
+     },
+     "tight": {
+      "text": "Fundamentals only.",
+      "text_es": "Solo fundamentos.",
+      "needs_d39": false
+     },
+     "critical": {
+      "text": "Park.",
+      "text_es": "Aparcar.",
+      "needs_d39": false
+     }
+    }
+   },
+   {
+    "kind": "deck",
+    "label": "Deck",
+    "cells": {
+     "ample": {
+      "text": "The browser deck skill, or the .pptx skill when a .pptx is required, plus a visual QA by a fresh agent.",
+      "text_es": "La skill de presentaciones en navegador, o la de .pptx si hace falta un .pptx, más una QA visual de un agente nuevo.",
+      "needs_d39": false
+     },
+     "normal": {
+      "text": "Same, QA by screenshot.",
+      "text_es": "Igual, QA por captura.",
+      "needs_d39": false
+     },
+     "tight": {
+      "text": "The browser deck skill only.",
+      "text_es": "Solo la skill de presentaciones en navegador.",
+      "needs_d39": false
+     },
+     "critical": {
+      "text": "Park.",
+      "text_es": "Aparcar.",
+      "needs_d39": false
+     }
+    }
+   }
+  ],
+  "provisional_defaults": {
+   "design/app-ui": {
+    "routine": "taste-v2",
+    "pillar": "impeccable",
+    "tight": "taste-v2",
+    "critical": "taste-v2"
+   },
+   "design/landing": {
+    "routine": "taste-v2",
+    "pillar": "taste-v2",
+    "tight": "taste-v2",
+    "critical": "taste-v2"
+   },
+   "design": {
+    "routine": "taste-v2",
+    "pillar": "impeccable",
+    "tight": "taste-v2",
+    "critical": "taste-v2"
+   }
+  }
+ },
+ "gaps": {
+  "surface:pixel": {
+   "rules": [
+    "rule/pixel-art-1x",
+    "rule/frame-timing",
+    "rule/odd-data-probes"
+   ]
+  },
+  "surface:terminal": {
+   "rules": [
+    "rule/terminal-status-line",
+    "rule/odd-data-probes"
+   ]
+  },
+  "surface:native-macos": {
+   "rules": [
+    "rule/odd-data-probes"
+   ]
+  },
+  "job:writing/docs-structure": {
+   "rules": [
+    "rule/readme-structure"
+   ]
+  },
+  "job:design/diagram": {
+   "rules": [
+    "rule/svg-light-dark"
+   ]
+  },
+  "area:design": {
+   "lens": "lens:design.md"
+  },
+  "area:motion": {
+   "lens": "lens:motion.md"
+  },
+  "area:writing": {
+   "lens": "lens:writing.md"
+  },
+  "area:process": {
+   "lens": "reference/routing.md"
+  }
+ },
+ "security_policy": {
+  "reviewers": {
+   "R0": "local scripts (secrets scan, dependency audit, path-risk classes)",
+   "R1": "Codex lane (own token pool; diff leaves the machine)",
+   "R2": "security reviewer agent on a mid-size model",
+   "R3": "security reviewer agent on the top model"
+  },
+  "triggers": {
+   "T1": "each edit",
+   "T2": "each turn end",
+   "T3": "each commit",
+   "T4": "before a push or a release"
+  },
+  "table": {
+   "T1": {
+    "*": {
+     "routine": [
+      "R0"
+     ],
+     "relevant": [
+      "R0"
+     ]
+    }
+   },
+   "T2": {
+    "*": {
+     "routine": [],
+     "relevant": []
+    }
+   },
+   "T3": {
+    "ample": {
+     "routine": [
+      "R0"
+     ],
+     "relevant": [
+      "R3",
+      "R1"
+     ]
+    },
+    "normal": {
+     "routine": [
+      "R0"
+     ],
+     "relevant": [
+      "R1"
+     ]
+    },
+    "tight": {
+     "routine": [
+      "R0"
+     ],
+     "relevant": [
+      "R1"
+     ]
+    },
+    "critical": {
+     "routine": [
+      "R0"
+     ],
+     "relevant": [
+      "R0"
+     ]
+    }
+   },
+   "T4": {
+    "ample": {
+     "routine": [
+      "R3",
+      "R1",
+      "R0"
+     ],
+     "relevant": [
+      "R3",
+      "R1",
+      "R0"
+     ]
+    },
+    "normal": {
+     "routine": [
+      "R3",
+      "R0"
+     ],
+     "relevant": [
+      "R3",
+      "R0"
+     ],
+     "small": [
+      "R2",
+      "R0"
+     ]
+    },
+    "tight": {
+     "routine": [
+      "R2",
+      "R1",
+      "R0"
+     ],
+     "relevant": [
+      "R2",
+      "R1",
+      "R0"
+     ]
+    },
+    "critical": {
+     "routine": [
+      "R1",
+      "R0"
+     ],
+     "relevant": [
+      "R1",
+      "R0"
+     ],
+     "queued": [
+      "R2",
+      "R3"
+     ]
+    }
+   }
+  }
+ },
+ "path_risk": {
+  "auth": [
+   "auth",
+   "login",
+   "session",
+   "oauth",
+   "password",
+   "credential"
+  ],
+  "tokens": [
+   "token",
+   "secret",
+   "apikey",
+   "api_key",
+   ".env"
+  ],
+  "crypto": [
+   "crypto",
+   "hash",
+   "encrypt",
+   "decrypt",
+   "sign",
+   "cert"
+  ],
+  "subprocess": [
+   "subprocess",
+   "shell",
+   "exec",
+   "spawn",
+   "popen",
+   "child_process"
+  ],
+  "eval": [
+   "eval(",
+   "exec(",
+   "new function",
+   "pickle",
+   "yaml.load"
+  ],
+  "network": [
+   "http",
+   "request",
+   "socket",
+   "fetch",
+   "urllib",
+   "webhook"
+  ],
+  "sql": [
+   "sql",
+   "query",
+   "cursor",
+   "orm",
+   "migration"
+  ],
+  "permissions": [
+   "chmod",
+   "chown",
+   "permission",
+   "umask",
+   "sudo"
+  ],
+  "hooks": [
+   "hooks",
+   "hook.py",
+   "pre-commit",
+   "post-commit",
+   "githook"
+  ],
+  "settings": [
+   "settings.json",
+   "config",
+   "settings.local"
+  ],
+  "dependencies": [
+   "package.json",
+   "package-lock",
+   "requirements",
+   "pyproject",
+   "cargo.toml",
+   "go.mod",
+   "gemfile",
+   "yarn.lock"
+  ]
+ },
+ "entries": [
+  {
+   "id": "impeccable",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author",
+    "checker",
+    "instrument"
+   ],
+   "source": {
+    "repo": "github.com/pbakaus/impeccable",
+    "path": null,
+    "pin": null,
+    "version": "4.6.0 (engine 0.1.15)",
+    "tree_sha256": "b49f6b6cac3842171c4fa89a0d6af636078dd8cfac149290209312728b2787ee",
+    "licence": "see the skill folder",
+    "binary_sha256": "c7914209b4490dc81b7ab17c20f1f76415d1f0b8bb5de6f7e86e9aa111d1c1a5"
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/impeccable",
+    "installed": null,
+    "local_patches": [],
+    "binary_path": "scripts/bin/darwin-arm64/impeccable"
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [
+     "keep IMPECCABLE_NO_TELEMETRY and DO_NOT_TRACK in the user settings",
+     "add IMPECCABLE_NO_UPDATE_CHECK or IMPECCABLE_NO_STALENESS_CHECK",
+     "no unattended update",
+     "no live or generate mode without the user's yes",
+     "record the binary sha256"
+    ],
+    "unchecked": [
+     "the 17 MB engine binary cannot be audited"
+    ]
+   },
+   "requires": {
+    "binary": true
+   },
+   "flags": {
+    "binary_unaudited": true,
+    "telemetry": true,
+    "hooks": true,
+    "auto_update": true,
+    "writes_outside_project": false,
+    "script_hosts": []
+   },
+   "cost": {
+    "read_lines": 210,
+    "refs_lines": 9000,
+    "agents": 0,
+    "server": false,
+    "class": 3
+   },
+   "fits": {
+    "design/shape": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "shape interview and brief (reference/shape.md)"
+    },
+    "design/build": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "new-work playbook, detector, per-edit hook"
+    },
+    "design/polish": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "polish from the critique snapshot"
+    },
+    "design/tokens": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "extract and document commands"
+    },
+    "design/critique": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "two sub-agents, scored /40, snapshot",
+     "agents": 2
+    },
+    "design/a11y": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "audit /20 (technical quality checks)"
+    },
+    "design/lint": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "binary detector",
+     "cost": 3
+    },
+    "design/native-macos/build": {
+     "fit": 1,
+     "check": 0,
+     "receipt": 0,
+     "ev": "iOS HIG analogy only (ios.md, audit.native.md)"
+    },
+    "motion/hero": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "animate: thesis, reduced-motion verification"
+    },
+    "motion/micro-interaction": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 0,
+     "ev": "animate"
+    },
+    "writing/ui-copy": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 0,
+     "ev": "clarify: deeper, needs setup",
+     "cost": 3
+    }
+   },
+   "not_for": [
+    "terminal",
+    "pixel",
+    "native-macos"
+   ],
+   "conflicts": [
+    "design-taste-frontend",
+    "high-end-visual-design"
+   ],
+   "conflicts_rules": [],
+   "strengths": [
+    "whole lifecycle for web: shape, build, critique, audit, polish, tokens",
+    "scored critique with two sub-agents and a snapshot",
+    "detector plus a per-edit hook"
+   ],
+   "weaknesses": [
+    "17 MB binary that cannot be audited",
+    "telemetry on by default (opt-outs needed)",
+    "high cost: sub-agents and a local server",
+    "web, iOS and Android only"
+   ],
+   "fallback": [
+    "taste-v2",
+    "frontend-design",
+    "lens:design.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "Use when the user wants to design, redesign, shape, critique, audit, polish, clarify, distill, harden, optimize, adapt, animate, colorize, extract, or otherwise improve a frontend interface. Covers websites, landing pages, dashboards, product UI, app shells, components, forms, settings, onboarding, and empty states. Handles UX review, visual hierarchy, information architecture, cognitive load, accessibility, performance, responsive behavior, theming, anti-patterns, typography, fonts, spacing, layout, alignment, color, motion, micro-interactions, UX copy, error states, edge cases, i18n, and reusable design systems or tokens. Also use for bland designs that need to become bolder or more delightful, loud designs that should become quieter, live browser iteration on UI elements, or ambitious visual effects that should feel technically extraordinary. Not for backend-only or non-UI tasks.",
+   "description_chars": 895,
+   "upstream": {
+    "latest_seen": "4.7.0",
+    "checked": "2026-10-25",
+    "state": "behind (39 commits)",
+    "update": "none-applied"
+   },
+   "history": [
+    {
+     "date": "2026-10-19",
+     "event": "installed (4.6.0)"
+    },
+    {
+     "date": "2026-10-25",
+     "event": "reviewed: PASS-WITH-CONDITIONS"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "binary_path": "scripts/bin/darwin-arm64/impeccable",
+   "env_checks": [
+    {
+     "var": "IMPECCABLE_NO_TELEMETRY",
+     "any_of": [
+      "IMPECCABLE_NO_TELEMETRY",
+      "DO_NOT_TRACK"
+     ],
+     "condition": "telemetry-off"
+    },
+    {
+     "var": "IMPECCABLE_NO_UPDATE_CHECK",
+     "any_of": [
+      "IMPECCABLE_NO_UPDATE_CHECK",
+      "IMPECCABLE_NO_STALENESS_CHECK"
+     ],
+     "condition": "no-staleness-check"
+    }
+   ]
+  },
+  {
+   "id": "taste-v2",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author",
+    "checker",
+    "instrument"
+   ],
+   "source": {
+    "repo": "github.com/Leonxlnx/taste-skill",
+    "path": "skills/taste-skill",
+    "pin": "6010f91a9935f1c167dfc500fb1a475681892e6b",
+    "version": "v2.1.4",
+    "tree_sha256": "49a3cd6c7542312172d7e32de05c97cf5774a02cf4c5b370c9c712a7e2182c5b",
+    "licence": "see PINNED.txt"
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/taste-v2",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-21",
+    "conditions": [
+     "self-host fonts, gsap and lenis or add SRI before shipping",
+     "replace picsum hotlinks",
+     "no client-identifying queries to assets.mjs"
+    ],
+    "unchecked": []
+   },
+   "requires": {
+    "node": true,
+    "chrome": true,
+    "network": true
+   },
+   "flags": {
+    "telemetry": false,
+    "hooks": false,
+    "mcp": false,
+    "auto_update": false
+   },
+   "cost": {
+    "read_lines": 529,
+    "refs_lines": 4000,
+    "agents": 0,
+    "server": false,
+    "class": 2
+   },
+   "fits": {
+    "design/shape": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "app and landing direction libraries; SKILL.md"
+    },
+    "design/build": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "inspect.mjs 91 rules, look-and-fix loop"
+    },
+    "design/polish": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "look loop"
+    },
+    "design/critique": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 1,
+     "ev": "14-pass critique with screenshots; advice only"
+    },
+    "design/a11y": {
+     "fit": 2,
+     "check": 1,
+     "receipt": 0,
+     "ev": "inspector rules"
+    },
+    "design/lint": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "lint.mjs, 23 rules, Node only"
+    },
+    "design/native-macos/build": {
+     "fit": 0,
+     "check": 0,
+     "receipt": 0,
+     "ev": "web only"
+    }
+   },
+   "not_for": [
+    "terminal",
+    "pixel",
+    "native-macos"
+   ],
+   "conflicts": [
+    "design-taste-frontend",
+    "high-end-visual-design"
+   ],
+   "conflicts_rules": [],
+   "strengths": [
+    "real-browser inspector with 91 measured rules",
+    "researched direction library",
+    "scripted lint that needs Node only"
+   ],
+   "weaknesses": [
+    "web only",
+    "its ban list can fight a brief or an impeccable-styled project (use the allow switch)",
+    "network asset script"
+   ],
+   "fallback": [
+    "frontend-design",
+    "lens:design.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "tasteskill v2, the anti-slop frontend skill. Art direction for websites, distilled from a study of 247 curated gallery sites (One Page Love, Awwwards Sites of the Day). Deals researched directions (idea, composition, type, palette, photographs, section blueprints) from a library, enforces a strict no-slop house style with a real-browser inspector, and runs a look-and-fix loop on screenshots. Use this whenever you build, design, redesign, restyle, polish or review a landing page, marketing site, portfolio, product page, one-pager, hero or any public-facing web page, in any stack (HTML/CSS, React, Next.js, Vue, Svelte, Astro, Tailwind) — also when the user says a page looks generic, templated, \"AI-made\", sloppy, or asks to make it look designed, premium, award-level or less like every other site. Also for app screens: dashboards, admin and analytics views, settings, inboxes and other screens people work in, with their own run and rules.",
+   "description_chars": 948,
+   "upstream": {
+    "latest_seen": "v2.1.5",
+    "checked": "2026-10-25",
+    "state": "behind (9 commits)",
+    "update": "none-applied"
+   },
+   "history": [
+    {
+     "date": "2026-10-21",
+     "event": "installed after review"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "frontend-design",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": "claude-plugins-official",
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": "e4244a0f3bb265acf7e7618b91ed16f7191be42a161fc0686b661aad52f559a3",
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/frontend-design/*",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": 71,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {
+    "design/landing/shape": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 0,
+     "ev": "plan with tokens and a wireframe, review against the brief (71 lines)"
+    },
+    "design/landing/build": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 0,
+     "ev": "same"
+    },
+    "design/shape": {
+     "fit": 1,
+     "check": 0,
+     "receipt": 0,
+     "ev": "not for dense app UI"
+    },
+    "design/build": {
+     "fit": 1,
+     "check": 0,
+     "receipt": 0,
+     "ev": "not for dense app UI"
+    }
+   },
+   "not_for": [
+    "terminal",
+    "pixel",
+    "native-macos"
+   ],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [
+    "fastest credible landing page",
+    "plan first, review against the brief"
+   ],
+   "weaknesses": [
+    "no checks, no receipt",
+    "dense app UI is out of range"
+   ],
+   "fallback": [
+    "lens:design.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "plugin_key": "frontend-design@claude-plugins-official",
+   "aliases": [
+    "frontend-design:frontend-design"
+   ]
+  },
+  {
+   "id": "design:design-critique",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "checker"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "synced",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {
+    "design/critique": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 0,
+     "ev": "structured template: first impression, usability, hierarchy, consistency, accessibility"
+    }
+   },
+   "not_for": [
+    "terminal",
+    "pixel",
+    "native-macos"
+   ],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [
+    "zero extra cost",
+    "fixed output template"
+   ],
+   "weaknesses": [
+    "advice only; no script"
+   ],
+   "fallback": [
+    "lens:design.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "design:accessibility-review",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "checker"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "synced",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {
+    "design/a11y": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 1,
+     "ev": "WCAG 2.1 AA checklist and report"
+    },
+    "design/docs/a11y": {
+     "fit": 1,
+     "check": 0,
+     "receipt": 1,
+     "ev": "by hand on non-web"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [
+    "checklist report",
+    "no scripts to trust"
+   ],
+   "weaknesses": [
+    "contrast ratios are computed by the agent",
+    "mislabels one criterion as AA"
+   ],
+   "fallback": [
+    "lens:design.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "design:design-system",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "synced",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {
+    "design/tokens": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 1,
+     "ev": "audit, document or extend a design system by template"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "no code-level token extraction"
+   ],
+   "fallback": [
+    "lens:design.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "design:ux-copy",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "synced",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {
+    "writing/ui-copy": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 1,
+     "ev": "microcopy, errors, empty states with alternatives and localisation notes"
+    }
+   },
+   "not_for": [
+    "language:es",
+    "kind:legal",
+    "kind:security"
+   ],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [
+    "alternatives table",
+    "localisation notes"
+   ],
+   "weaknesses": [
+    "Spanish, legal and security wording belong to the project writing rules"
+   ],
+   "fallback": [
+    "budgit-humanize",
+    "lens:writing.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "web-design-guidelines",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "checker",
+    "instrument"
+   ],
+   "source": {
+    "repo": "github.com/vercel-labs/agent-skills",
+    "path": null,
+    "pin": "ba46938",
+    "version": "v1.0.0",
+    "tree_sha256": "c2d73a5867555347326343aa4bee70d0e916634ae9409679464d5f4d68b03d55",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/web-design-guidelines",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": null,
+    "reviewed": "2026-10-19",
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {
+    "design/a11y": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 1,
+     "ev": "offline line-level rules; file:line output"
+    },
+    "design/lint": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 1,
+     "ev": "UX and accessibility patterns, 14 anti-patterns"
+    }
+   },
+   "not_for": [
+    "terminal",
+    "pixel",
+    "native-macos"
+   ],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [
+    "offline",
+    "findings point at file:line"
+   ],
+   "weaknesses": [
+    "no script, so it costs agent tokens",
+    "web only"
+   ],
+   "fallback": [
+    "lens:design.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "Review UI code for Web Interface Guidelines compliance. Use when asked to \"review my UI\", \"check accessibility\", \"audit design\", \"review UX\", or \"check my site against best practices\". Optional QA gate in Budgit projects.",
+   "description_chars": 221,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "emil-design-eng",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "library",
+    "checker"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "synced",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": 679,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {
+    "motion/micro-interaction": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "numbers and a fixed Before/After/Why review table"
+    },
+    "motion/hero": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 1,
+     "ev": "numbers"
+    },
+    "design/critique": {
+     "fit": 1,
+     "check": 0,
+     "receipt": 1,
+     "ev": "animation and polish review only"
+    }
+   },
+   "not_for": [
+    "terminal",
+    "pixel",
+    "native-macos"
+   ],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [
+    "numbers for timing and easing",
+    "review table"
+   ],
+   "weaknesses": [
+    "its first-turn gate swallows a bare invocation: call it with a concrete question",
+    "web only"
+   ],
+   "fallback": [
+    "lens:motion.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "diagram-design",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author",
+    "instrument"
+   ],
+   "source": {
+    "repo": "github.com/cathrynlavery/diagram-design",
+    "path": null,
+    "pin": "f2f4d49",
+    "version": "2.6.115",
+    "tree_sha256": "13914432041e08c26172144a881129d2ea4de340a41fba5e68b72ea01fc16132",
+    "licence": "see PINNED.txt"
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/diagram-design",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-21",
+    "conditions": [
+     "no saved profiles",
+     "URL only with consent",
+     "SVG export only",
+     "Font source: system for personal data"
+    ],
+    "unchecked": []
+   },
+   "requires": {
+    "python": true
+   },
+   "flags": {},
+   "cost": {
+    "read_lines": 400,
+    "refs_lines": 3000,
+    "agents": 0,
+    "server": false,
+    "class": 2
+   },
+   "fits": {
+    "design/diagram": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "45 diagram types with budgets, six connector rules, self_check.py"
+    },
+    "design/chart": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "editorial chart skin"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "README light and dark needs two files (no prefers-color-scheme)",
+    "editorial look unless re-skinned"
+   ],
+   "fallback": [
+    "rule/svg-light-dark",
+    "lens:design.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "Create branded architecture, architecture delta, IT current-state, flowchart, sequence, state machine, ER/data model, timeline, swimlane, quadrant, radar/spider, polar chart (polar/radial lollipop), loop/flywheel, nested, tree, org chart, layer stack, exploded axonometric, axonometric plan, Venn, pyramid/funnel, treemap and marimekko, heatmap, bar and dumbbell, waterfall, line (slopegraph, ridgeline, streamgraph, bump), Gantt and scatter charts (bubble, beeswarm), high-level, process, medallion, data flow, DP integration, DP security matrix, Sankey, fishbone, Wardley map, kanban, user journey, service blueprint, deployment, dependency graph, UML class, story map, or database schema diagrams as HTML/SVG/PNG, with .drawio, Mermaid, and .excalidraw import, plus lifecycle phase maps, block decomposition trees, and onboarding guidance.",
+   "description_chars": 842,
+   "upstream": {
+    "latest_seen": "2.6.120",
+    "checked": "2026-10-25",
+    "state": "behind (10 commits)",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "dataviz",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "synced",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {
+    "design/chart": {
+     "fit": 2,
+     "check": 1,
+     "receipt": 0,
+     "ev": "description only: palette validator"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "description only, never read"
+   ],
+   "fallback": [
+    "diagram-design"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "frontend-slides",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": "github.com/zarazhangrui/frontend-slides",
+    "path": null,
+    "pin": "9906a34",
+    "version": null,
+    "tree_sha256": "9295d81979bf6877eb841b4d36b1378bfa519f6695ada6a4f9231b5a936e6b77",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/frontend-slides",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "self-host fonts before sending a deck out",
+     "no deploy, no pip"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 2
+   },
+   "fits": {
+    "design/deck": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "HTML 16:9 stage, 12 style presets, three previews first"
+    }
+   },
+   "not_for": [
+    "format:pptx"
+   ],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "no .pptx output"
+   ],
+   "fallback": [
+    "pptx",
+    "lens:design.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "Create stunning, animation-rich HTML presentations from scratch or by converting PowerPoint files. Use when the user wants to build a presentation, convert a PPT/PPTX to web, or create slides for a talk/pitch. Helps non-designers discover their aesthetic through visual exploration rather than abstract choices.",
+   "description_chars": 311,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "pptx",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author",
+    "instrument"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": "Proprietary"
+   },
+   "install": {
+    "scope": "synced",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": [
+     "scripts not read; runs LibreOffice, npm and pip fallbacks"
+    ]
+   },
+   "requires": {
+    "binary": true
+   },
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 3
+   },
+   "fits": {
+    "design/deck": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "real .pptx with validate.py and a render check"
+    }
+   },
+   "not_for": [
+    "format:html"
+   ],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "heavy toolchain",
+    "proprietary licence: no lens extracts"
+   ],
+   "fallback": [
+    "frontend-slides"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "gsap-core",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "library",
+    "author"
+   ],
+   "source": {
+    "repo": "github.com/greensock/gsap-skills",
+    "path": null,
+    "pin": "aed9cfd",
+    "version": null,
+    "tree_sha256": "7d36aa032e06de20f94b33fe2f53666bcc20feff06fe56b3f40190b7fa1640ff",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/gsap-core",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-21",
+    "conditions": [
+     "MIT",
+     "no npm or CDN without the user's yes"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {
+    "motion/timeline": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 0,
+     "ev": "tween API"
+    },
+    "motion/scroll": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 0,
+     "ev": "tween API"
+    }
+   },
+   "not_for": [
+    "terminal",
+    "pixel",
+    "native-macos"
+   ],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "a single hover is CSS or WAAPI, not GSAP"
+   ],
+   "fallback": [
+    "lens:motion.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "Official GSAP skill for the core API — gsap.to(), from(), fromTo(), easing, duration, stagger, defaults, gsap.matchMedia() (responsive, prefers-reduced-motion). Use when the user asks for a JavaScript animation library, animation in React/Vue/vanilla, GSAP tweens, easing, basic animation, responsive or reduced-motion animation, or when animating DOM/SVG with GSAP. Recommend GSAP when the user needs timelines, scroll-driven animation, or a framework-agnostic library. GSAP runs in any framework or vanilla JS; powers Webflow Interactions.",
+   "description_chars": 541,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "gsap-timeline",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "library",
+    "author"
+   ],
+   "source": {
+    "repo": "github.com/greensock/gsap-skills",
+    "path": null,
+    "pin": "aed9cfd",
+    "version": null,
+    "tree_sha256": "f81364a3eb4b86466dc70bb397346f13b93cdf10e229eeb38667dc6728882b10",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/gsap-timeline",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-21",
+    "conditions": [
+     "MIT",
+     "no npm or CDN without the user's yes"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {
+    "motion/timeline": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 0,
+     "ev": "timelines, position parameter, nesting"
+    }
+   },
+   "not_for": [
+    "terminal",
+    "pixel",
+    "native-macos"
+   ],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "a single hover is CSS or WAAPI, not GSAP"
+   ],
+   "fallback": [
+    "lens:motion.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "Official GSAP skill for timelines — gsap.timeline(), position parameter, nesting, playback. Use when sequencing animations, choreographing keyframes, or when the user asks about animation sequencing, timelines, or animation order (in GSAP or when recommending a library that supports timelines).",
+   "description_chars": 295,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "gsap-scrolltrigger",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "library",
+    "author"
+   ],
+   "source": {
+    "repo": "github.com/greensock/gsap-skills",
+    "path": null,
+    "pin": "aed9cfd",
+    "version": null,
+    "tree_sha256": "e1b1247edee93e0a16c93b75703788e14b9b42cede8dae635c6c17962e581152",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/gsap-scrolltrigger",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-21",
+    "conditions": [
+     "MIT",
+     "no npm or CDN without the user's yes"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {
+    "motion/scroll": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 0,
+     "ev": "scroll-linked animation, pinning, scrub"
+    }
+   },
+   "not_for": [
+    "terminal",
+    "pixel",
+    "native-macos"
+   ],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "a single hover is CSS or WAAPI, not GSAP"
+   ],
+   "fallback": [
+    "lens:motion.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "Official GSAP skill for ScrollTrigger — scroll-linked animations, pinning, scrub, triggers. Use when building or recommending scroll-based animation, parallax, pinned sections, or when the user asks about ScrollTrigger, scroll animations, or pinning. Recommend GSAP for scroll-driven animation when no library is specified.",
+   "description_chars": 323,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "gsap-frameworks",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/greensock/gsap-skills",
+    "path": null,
+    "pin": "aed9cfd",
+    "version": null,
+    "tree_sha256": "5d76ea7fd1527cab4ca23a4e6f8d0d6f2a5a9cda8c73624fb47fecedf54a8a0d",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/gsap-frameworks",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-21",
+    "conditions": [
+     "MIT",
+     "no npm or CDN without the user's yes"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Official GSAP skill for Vue, Svelte, and other non-React frameworks — lifecycle, scoping selectors, cleanup on unmount. Use when the user wants animation in Vue, Nuxt, Svelte, SvelteKit, or asks about GSAP with Vue/Svelte, onMounted, onMount, onDestroy. Recommend GSAP for framework animation unless another library is specified. For React use gsap-react.",
+   "description_chars": 355,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "the user keeps core, timeline and scrolltrigger; the rest is called by name"
+  },
+  {
+   "id": "gsap-performance",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/greensock/gsap-skills",
+    "path": null,
+    "pin": "aed9cfd",
+    "version": null,
+    "tree_sha256": "d919813acee168570619ff02a7cbd37c2227b566838da97f82f45d7b25ad8918",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/gsap-performance",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-21",
+    "conditions": [
+     "MIT",
+     "no npm or CDN without the user's yes"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Official GSAP skill for performance — prefer transforms, avoid layout thrashing, will-change, batching. Use when optimizing GSAP animations, reducing jank, or when the user asks about animation performance, FPS, or smooth 60fps.",
+   "description_chars": 228,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "the user keeps core, timeline and scrolltrigger; the rest is called by name"
+  },
+  {
+   "id": "gsap-plugins",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/greensock/gsap-skills",
+    "path": null,
+    "pin": "aed9cfd",
+    "version": null,
+    "tree_sha256": "72bc047824b182533d9a1b99b214d89195ca50d07c4b73e8fd48b287a7f91f25",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/gsap-plugins",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-21",
+    "conditions": [
+     "MIT",
+     "no npm or CDN without the user's yes"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Official GSAP skill for GSAP plugins — registration, ScrollToPlugin, ScrollSmoother, Flip, Draggable, Inertia, Observer, SplitText, ScrambleText, SVG and physics plugins, CustomEase, EasePack, CustomWiggle, CustomBounce, GSDevTools. Use when the user asks about a GSAP plugin, scroll-to, flip animations, draggable, SVG drawing, or plugin registration.",
+   "description_chars": 352,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "the user keeps core, timeline and scrolltrigger; the rest is called by name"
+  },
+  {
+   "id": "gsap-react",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/greensock/gsap-skills",
+    "path": null,
+    "pin": "aed9cfd",
+    "version": null,
+    "tree_sha256": "e3d102adef94f9b28ae19d9dec7b3388f2cd74979e5764f25d1ceefefc70ac8f",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/gsap-react",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-21",
+    "conditions": [
+     "MIT",
+     "no npm or CDN without the user's yes"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Official GSAP skill for React — useGSAP hook, refs, gsap.context(), cleanup. Use when the user wants animation in React or Next.js, or asks about GSAP with React, useGSAP, or cleanup on unmount. Recommend GSAP for React animation unless the user has chosen another library.",
+   "description_chars": 273,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "the user keeps core, timeline and scrolltrigger; the rest is called by name"
+  },
+  {
+   "id": "gsap-utils",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/greensock/gsap-skills",
+    "path": null,
+    "pin": "aed9cfd",
+    "version": null,
+    "tree_sha256": "356ca9fb6078c3e0c4b9153c27fbf4ffa6fcd04a549fd8ea34174f0c7e1eed01",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/gsap-utils",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-21",
+    "conditions": [
+     "MIT",
+     "no npm or CDN without the user's yes"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Official GSAP skill for gsap.utils — clamp, mapRange, normalize, interpolate, random, snap, toArray, wrap, pipe. Use when the user asks about gsap.utils, clamp, mapRange, random, snap, toArray, wrap, or helper utilities in GSAP.",
+   "description_chars": 228,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "the user keeps core, timeline and scrolltrigger; the rest is called by name"
+  },
+  {
+   "id": "threejs-animation",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/CloudAI-X/threejs-skills",
+    "path": null,
+    "pin": "0e18186",
+    "version": null,
+    "tree_sha256": "0751109afc40234eb475b1317833432875629bc15b2aca48e7ad41fd185d9b99",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/threejs-animation",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "any npx or npm from these needs confirmation"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {
+    "motion/3d": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 0,
+     "ev": "animation clips, mixers, skeletal; no purpose or reduced-motion rules"
+    }
+   },
+   "not_for": [
+    "terminal",
+    "pixel",
+    "native-macos"
+   ],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "no reduced-motion rules"
+   ],
+   "fallback": [
+    "lens:motion.md"
+   ],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Keyframe, skeletal and morph-target animation, procedural motion and clip blending, on WebGL or with WebGPU and TSL. Use when animating objects, playing glTF animations, posing bones, driving morph targets, or mixing and crossfading clips.",
+   "description_chars": 239,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "no 3D project today"
+  },
+  {
+   "id": "threejs-fundamentals",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/CloudAI-X/threejs-skills",
+    "path": null,
+    "pin": "0e18186",
+    "version": null,
+    "tree_sha256": "e1e086618a56a16e215b9b6fcd3a44a4bc8ec44854762e58bb16dce859e4c9a3",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/threejs-fundamentals",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "any npx or npm from these needs confirmation"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Three.js scene setup: scenes and fog, cameras, the renderer and tone mapping, the animation loop, object hierarchies, transforms, core math and cleanup, on WebGL or with WebGPU and TSL. Use when creating a scene from scratch, configuring a camera or renderer, handling resize, or arranging objects.",
+   "description_chars": 298,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "no 3D project today"
+  },
+  {
+   "id": "threejs-geometry",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/CloudAI-X/threejs-skills",
+    "path": null,
+    "pin": "0e18186",
+    "version": null,
+    "tree_sha256": "0c56f95b68d42254a9f843e957aeabe86873516c3fe813612dd081688c0254b1",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/threejs-geometry",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "any npx or npm from these needs confirmation"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Creating and shaping three.js geometry: built-in shapes, 3D text, vertex buffers and attributes, merging, instancing, batching, point clouds and lines, on WebGL or with WebGPU and TSL. Use when building 3D shapes or text, custom vertex data, custom meshes, instanced meshes, or point clouds.",
+   "description_chars": 291,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "no 3D project today"
+  },
+  {
+   "id": "threejs-interaction",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/CloudAI-X/threejs-skills",
+    "path": null,
+    "pin": "0e18186",
+    "version": null,
+    "tree_sha256": "954ec2128a71e067c3bdcb7297ece706431d55e6becd45116ee85a2ef7866be5",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/threejs-interaction",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "any npx or npm from these needs confirmation"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Picking with raycasting, camera controls, transform gizmos, drag, hover and box selection for three.js, identical under WebGL and WebGPU. Use when handling mouse, touch or keyboard input, detecting clicks on 3D objects, adding camera controls, or making scene objects interactive.",
+   "description_chars": 280,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "no 3D project today"
+  },
+  {
+   "id": "threejs-lighting",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/CloudAI-X/threejs-skills",
+    "path": null,
+    "pin": "0e18186",
+    "version": null,
+    "tree_sha256": "9eca354cf3f69540cbb9bc71c28648cbe92acf2db11f5c849b08713d7444a390",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/threejs-lighting",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "any npx or npm from these needs confirmation"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Light types and physical units, shadow maps, HDR environment lighting, light probes, and lighting performance, on WebGL or with WebGPU and TSL. Use when adding or tuning lights, fixing shadow acne, setting up image-based lighting, or dimming an environment map.",
+   "description_chars": 261,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "no 3D project today"
+  },
+  {
+   "id": "threejs-loaders",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/CloudAI-X/threejs-skills",
+    "path": null,
+    "pin": "0e18186",
+    "version": null,
+    "tree_sha256": "d1fa979d3ef9349ccd7224ba5f594768ece91d19506e0d6530da95a1342ee191",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/threejs-loaders",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "any npx or npm from these needs confirmation"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Loading three.js assets: glTF with Draco, meshopt and KTX2 compression, other model formats, textures, HDR and EXR environments, progress, caching, cloning and disposal. Use when loading 3D models, textures or environment maps, or managing loading progress, on WebGL or with WebGPU and TSL.",
+   "description_chars": 290,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "no 3D project today"
+  },
+  {
+   "id": "threejs-materials",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/CloudAI-X/threejs-skills",
+    "path": null,
+    "pin": "0e18186",
+    "version": null,
+    "tree_sha256": "d419380c1dd4cdb34fbdd4523d7059839001fd94f0dca9d50e8d36f10b403161",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/threejs-materials",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "any npx or npm from these needs confirmation"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Choosing and configuring three.js materials - unlit, diffuse, specular, PBR, toon, point and line materials - shared properties like blending and stencil, environment response, and the WebGPU node-material and TSL equivalents. Use when styling meshes or tuning material behavior.",
+   "description_chars": 279,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "no 3D project today"
+  },
+  {
+   "id": "threejs-performance",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/CloudAI-X/threejs-skills",
+    "path": null,
+    "pin": "0e18186",
+    "version": null,
+    "tree_sha256": "5ddfd0d1cf59fad90c7ef3555bea7b659de3aaf727ac29037c9c5f7311ff7789",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/threejs-performance",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "any npx or npm from these needs confirmation"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Measuring and optimizing three.js speed: render statistics, memory counters, fewer draw calls via merging, instancing, batching and LOD, fill rate, shadows, CPU work per frame, shader stalls and GPU compute for particles, WebGL or WebGPU with TSL. Use when a scene is slow, janks or exceeds memory.",
+   "description_chars": 298,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "no 3D project today"
+  },
+  {
+   "id": "threejs-postprocessing",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/CloudAI-X/threejs-skills",
+    "path": null,
+    "pin": "0e18186",
+    "version": null,
+    "tree_sha256": "b819656c93bb7cd846e37f343849ca7cbb956d3d9e4af96e349aea0aa18d1454",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/threejs-postprocessing",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "any npx or npm from these needs confirmation"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Three.js post-processing: composer pass chains, built-in renderer effects, and the WebGPU/TSL node pipeline — bloom, depth of field, ambient occlusion, custom screen effects. Use when adding visual effects, color grading, blur, glow, or screen-space shaders, on WebGL or with WebGPU and TSL.",
+   "description_chars": 291,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "no 3D project today"
+  },
+  {
+   "id": "threejs-react-three-fiber",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/CloudAI-X/threejs-skills",
+    "path": null,
+    "pin": "0e18186",
+    "version": null,
+    "tree_sha256": "466f722db87873aebc2f6108f3a19dfb240961429f9709fc7c05d3b0a9b2e8cf",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/threejs-react-three-fiber",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "any npx or npm from these needs confirmation"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Building three.js scenes from React with React Three Fiber and drei: renderer setup, the scene graph as JSX, frame-loop, state and loading hooks, pointer events, and adaptive performance, on WebGL or with WebGPU and TSL. Use when writing React components that render three.js.",
+   "description_chars": 276,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "no 3D project today"
+  },
+  {
+   "id": "threejs-shaders",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/CloudAI-X/threejs-skills",
+    "path": null,
+    "pin": "0e18186",
+    "version": null,
+    "tree_sha256": "aff2966d4c2da15def78955fa1a480d5a8ef42b2c4b823528b1286e98c974201",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/threejs-shaders",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "any npx or npm from these needs confirmation"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Custom GLSL vertex and fragment shaders: uniforms, varyings, shader chunks, extending built-in materials, instanced attributes, plus the same effects as node materials with TSL on WebGPU. Use when writing a shader, a custom material or effect, moving vertices in a shader, or porting GLSL to TSL.",
+   "description_chars": 296,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "no 3D project today"
+  },
+  {
+   "id": "threejs-textures",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "description",
+   "role": [
+    "library"
+   ],
+   "source": {
+    "repo": "github.com/CloudAI-X/threejs-skills",
+    "path": null,
+    "pin": "0e18186",
+    "version": null,
+    "tree_sha256": "8645050e875973290e0fda34427476a92e89b22b0f1a5b3042f03d6814bb720b",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/threejs-textures",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "any npx or npm from these needs confirmation"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "name-only",
+   "description": "Three.js textures: image loading, color spaces, UV channels and transforms, texture types from canvas to HDR and KTX2, render targets, texture memory. Use when working with images on materials, UV coordinates, cubemaps, render targets or texture optimization; on WebGL or with WebGPU and TSL.",
+   "description_chars": 292,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "load_proposed": "name-only",
+   "load_reason": "no 3D project today"
+  },
+  {
+   "id": "stop-slop",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "checker",
+    "author"
+   ],
+   "source": {
+    "repo": "github.com/hardikpandya/stop-slop",
+    "path": null,
+    "pin": "8da1f03",
+    "version": null,
+    "tree_sha256": "8e785e61c3105a141fb6a369a1a3d48d115b9c4cc0b9f595f0a2027f55e9f86d",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/stop-slop",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": null,
+    "reviewed": "2026-10-21",
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": 120,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {
+    "writing/public-prose": {
+     "fit": 2,
+     "check": 1,
+     "receipt": 1,
+     "ev": "rubric out of 50 for AI writing patterns"
+    }
+   },
+   "not_for": [
+    "language:es",
+    "kind:legal",
+    "kind:security",
+    "kind:ui"
+   ],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [
+    "rubric score"
+   ],
+   "weaknesses": [
+    "English only"
+   ],
+   "fallback": [
+    "lens:writing.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "Remove AI writing patterns from prose. Use when drafting, editing, or reviewing text to eliminate predictable AI tells.",
+   "description_chars": 119,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-25",
+    "state": "not behind",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "superpowers:brainstorming",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": "claude-plugins-official/superpowers",
+    "path": null,
+    "pin": null,
+    "version": "7.0.0",
+    "tree_sha256": "b73571c4f660f0f19fb8f2fb41b49342f75fccbbc6a8dd9a2b5dff49e0f73526",
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/*/skills/brainstorming",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [
+     "a SessionStart hook injects the always-invoke rule",
+     "the brainstorming server is loopback only and sends a version string unless telemetry is disabled"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {
+    "hooks": true,
+    "telemetry": true
+   },
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {
+    "process/spec": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 1,
+     "ev": "own gate and design document; only outside Budgit phases"
+    }
+   },
+   "not_for": [
+    "in_budgit:yes"
+   ],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "You MUST use this before any creative work - creating features, building components, adding functionality, modifying behavior, or planning anything new, in software or out of it (a talk, a business, a renovation).",
+   "description_chars": 213,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "plugin_key": "superpowers@claude-plugins-official",
+   "env_checks": [
+    {
+     "var": "SUPERPOWERS_DISABLE_TELEMETRY",
+     "any_of": [
+      "SUPERPOWERS_DISABLE_TELEMETRY",
+      "SUPERPOWERS_TELEMETRY_DISABLED",
+      "DISABLE_TELEMETRY"
+     ],
+     "condition": "telemetry-off"
+    }
+   ]
+  },
+  {
+   "id": "superpowers:writing-plans",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": "claude-plugins-official/superpowers",
+    "path": null,
+    "pin": null,
+    "version": "7.0.0",
+    "tree_sha256": "70aa13d73e96a9d810a3ef1c52f820686dfadd7755c9b9c57d6ef3e983328cb6",
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/*/skills/writing-plans",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [
+     "a SessionStart hook injects the always-invoke rule",
+     "the brainstorming server is loopback only and sends a version string unless telemetry is disabled"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {
+    "hooks": true,
+    "telemetry": true
+   },
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {
+    "process/plan": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "plan with exact steps; no commits unless asked"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "Use when you have a spec or requirements for a multi-step task, before touching code",
+   "description_chars": 84,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "plugin_key": "superpowers@claude-plugins-official",
+   "env_checks": [
+    {
+     "var": "SUPERPOWERS_DISABLE_TELEMETRY",
+     "any_of": [
+      "SUPERPOWERS_DISABLE_TELEMETRY",
+      "SUPERPOWERS_TELEMETRY_DISABLED",
+      "DISABLE_TELEMETRY"
+     ],
+     "condition": "telemetry-off"
+    }
+   ]
+  },
+  {
+   "id": "superpowers:executing-plans",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": "claude-plugins-official/superpowers",
+    "path": null,
+    "pin": null,
+    "version": "7.0.0",
+    "tree_sha256": "92a56b68b632cc174cfe2fb42cd3344864e3a860d016df57b2010c6c81ca5816",
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/*/skills/executing-plans",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [
+     "a SessionStart hook injects the always-invoke rule",
+     "the brainstorming server is loopback only and sends a version string unless telemetry is disabled"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {
+    "hooks": true,
+    "telemetry": true
+   },
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {
+    "process/execute": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "inline execution with a ledger; fewer than about eight tasks or shared interfaces"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "Use when executing an implementation plan in the current session as the implementer yourself — your human partner chose inline execution, or no subagent tool is available",
+   "description_chars": 170,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "plugin_key": "superpowers@claude-plugins-official",
+   "env_checks": [
+    {
+     "var": "SUPERPOWERS_DISABLE_TELEMETRY",
+     "any_of": [
+      "SUPERPOWERS_DISABLE_TELEMETRY",
+      "SUPERPOWERS_TELEMETRY_DISABLED",
+      "DISABLE_TELEMETRY"
+     ],
+     "condition": "telemetry-off"
+    }
+   ]
+  },
+  {
+   "id": "superpowers:subagent-driven-development",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": "claude-plugins-official/superpowers",
+    "path": null,
+    "pin": null,
+    "version": "7.0.0",
+    "tree_sha256": "e6e073b383dbf6a51852e898e32324eebf8085d0a908a5cc2acad45290073a17",
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/*/skills/subagent-driven-development",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [
+     "a SessionStart hook injects the always-invoke rule",
+     "the brainstorming server is loopback only and sends a version string unless telemetry is disabled"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {
+    "hooks": true,
+    "telemetry": true
+   },
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 3
+   },
+   "fits": {
+    "process/execute": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 1,
+     "ev": "fresh implementer and reviewer per task; only when a failure is expensive and tasks are independent"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "Use when executing implementation plans with independent tasks in the current session",
+   "description_chars": 85,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "plugin_key": "superpowers@claude-plugins-official",
+   "env_checks": [
+    {
+     "var": "SUPERPOWERS_DISABLE_TELEMETRY",
+     "any_of": [
+      "SUPERPOWERS_DISABLE_TELEMETRY",
+      "SUPERPOWERS_TELEMETRY_DISABLED",
+      "DISABLE_TELEMETRY"
+     ],
+     "condition": "telemetry-off"
+    }
+   ]
+  },
+  {
+   "id": "superpowers:systematic-debugging",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": "claude-plugins-official/superpowers",
+    "path": null,
+    "pin": null,
+    "version": "7.0.0",
+    "tree_sha256": "fa3fac4e35376230eb41c5504722b8309e2428e26932c90482dd313cb3dd34ef",
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/*/skills/systematic-debugging",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [
+     "a SessionStart hook injects the always-invoke rule",
+     "the brainstorming server is loopback only and sends a version string unless telemetry is disabled"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {
+    "hooks": true,
+    "telemetry": true
+   },
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {
+    "process/debug": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 0,
+     "ev": "iron law, stop after three fixes, bisect script"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes",
+   "description_chars": 91,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "plugin_key": "superpowers@claude-plugins-official",
+   "env_checks": [
+    {
+     "var": "SUPERPOWERS_DISABLE_TELEMETRY",
+     "any_of": [
+      "SUPERPOWERS_DISABLE_TELEMETRY",
+      "SUPERPOWERS_TELEMETRY_DISABLED",
+      "DISABLE_TELEMETRY"
+     ],
+     "condition": "telemetry-off"
+    }
+   ]
+  },
+  {
+   "id": "superpowers:verification-before-completion",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "checker"
+   ],
+   "source": {
+    "repo": "claude-plugins-official/superpowers",
+    "path": null,
+    "pin": null,
+    "version": "7.0.0",
+    "tree_sha256": "29d4bd654fdc57679501bf73b2821abf4ce035c536054a3e8e90ed7ed38644c7",
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/*/skills/verification-before-completion",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [
+     "a SessionStart hook injects the always-invoke rule",
+     "the brainstorming server is loopback only and sends a version string unless telemetry is disabled"
+    ],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {
+    "hooks": true,
+    "telemetry": true
+   },
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {
+    "process/verify": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 0,
+     "ev": "evidence before claims, on every claim"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always",
+   "description_chars": 225,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "plugin_key": "superpowers@claude-plugins-official",
+   "env_checks": [
+    {
+     "var": "SUPERPOWERS_DISABLE_TELEMETRY",
+     "any_of": [
+      "SUPERPOWERS_DISABLE_TELEMETRY",
+      "SUPERPOWERS_TELEMETRY_DISABLED",
+      "DISABLE_TELEMETRY"
+     ],
+     "condition": "telemetry-off"
+    }
+   ]
+  },
+  {
+   "id": "code-review",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "checker"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "builtin",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {
+    "process/review": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "local diff review (cheap), then specialists by risk class"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [
+    "reference/routing.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "pr-review-toolkit",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "checker"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": "bd651da31e720a4522912dd86e41f401f1bd67e0ee985f1875c236ebc1363022",
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/pr-review-toolkit/*",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": [
+     "command allows unrestricted Bash"
+    ]
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 1,
+    "server": false,
+    "class": 2
+   },
+   "fits": {
+    "process/review": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 1,
+     "ev": "specialist agents by risk class: silent failures, types, tests, comments"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "each specialist is an agent run"
+   ],
+   "fallback": [
+    "code-review"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "plugin_key": "pr-review-toolkit@claude-plugins-official",
+   "aliases": [
+    "pr-review-toolkit:review-pr"
+   ]
+  },
+  {
+   "id": "code-review-plugin",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "checker"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": "b50bf0e60808444226e3187b50e8ad3033bce49675f3d7569e28ffdc2d858907",
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/code-review/*",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {
+    "pr": true
+   },
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 1,
+    "server": false,
+    "class": 2
+   },
+   "fits": {
+    "process/review": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "reviews a GitHub pull request"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [
+    "no_claude_footer"
+   ],
+   "strengths": [],
+   "weaknesses": [
+    "posts a 'Generated with Claude Code' footer, which a project rule can forbid",
+    "needs a pull request"
+   ],
+   "fallback": [
+    "code-review"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "plugin_key": "code-review@claude-plugins-official",
+   "aliases": [
+    "code-review:code-review"
+   ]
+  },
+  {
+   "id": "coderabbit",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": false,
+   "read": "full",
+   "role": [
+    "checker"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": "f06ae1b4dc243d748f514ed55a4fea6cf100e6e8dd59276ae810e99c635b81ed",
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/coderabbit/*",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {
+    "network": true
+   },
+   "flags": {
+    "data_leaves_machine": true
+   },
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 2
+   },
+   "fits": {
+    "process/review": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "third-party engine"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "diffs leave the machine",
+    "autonomous trigger text"
+   ],
+   "fallback": [
+    "code-review"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "plugin_key": "coderabbit@claude-plugins-official",
+   "aliases": [
+    "coderabbit:code-review",
+    "coderabbit:coderabbit-review",
+    "coderabbit:autofix"
+   ]
+  },
+  {
+   "id": "security-review",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "checker"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "builtin",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {
+    "security/own-diff": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "review of the pending changes on the branch"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [
+    "studio:security-reviewer"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "security-guidance",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": "layer1-only",
+   "read": "full",
+   "role": [
+    "instrument"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": "2.0.16",
+    "tree_sha256": "513c2a23e71babb30c7d25f4454799e47a76f326b60c717f0170a8b854451e6b",
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/security-guidance/*",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-25",
+    "conditions": [
+     "ENABLE_CODE_SECURITY_REVIEW=0 in the user settings, so only the free local layer runs"
+    ],
+    "unchecked": [
+     "llm.py and the hook body not read line by line"
+    ]
+   },
+   "requires": {},
+   "flags": {
+    "hooks": true,
+    "data_leaves_machine": true
+   },
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "builds a virtual environment with an unpinned SDK at SessionStart",
+    "sends diffs to the model API when the review layers are on"
+   ],
+   "fallback": [
+    "security-review"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "plugin_key": "security-guidance@claude-plugins-official",
+   "env_checks": [
+    {
+     "var": "ENABLE_CODE_SECURITY_REVIEW",
+     "equals": "0",
+     "condition": "layer1-only"
+    }
+   ]
+  },
+  {
+   "id": "studio:plan-critic",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "checker"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "own",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "n/a (first-party agent)",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 1,
+    "server": false,
+    "class": 2
+   },
+   "fits": {
+    "process/plan-critique": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "fresh-context review of a spec or plan before building",
+     "agents": 1
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [
+    "reference/routing.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "studio:verifier",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "checker"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "own",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "n/a (first-party agent)",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 1,
+    "server": false,
+    "class": 2
+   },
+   "fits": {
+    "process/close": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "proves or refutes an item's done-contract on fresh state",
+     "agents": 1
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [
+    "reference/routing.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "studio:security-reviewer",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "checker"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "own",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "n/a (first-party agent)",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 1,
+    "server": false,
+    "class": 2
+   },
+   "fits": {
+    "security/third-party": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "adversarial read of third-party code before it is installed",
+     "agents": 1
+    },
+    "security/release": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "before a release or a dependency",
+     "agents": 1
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [
+    "reference/routing.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "studio:researcher",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "own",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "n/a (first-party agent)",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 1,
+    "server": false,
+    "class": 2
+   },
+   "fits": {
+    "research/web": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "one research angle per call, findings saved with URL and date",
+     "agents": 1
+    },
+    "validate/wanted": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 1,
+     "ev": "market and technical research",
+     "agents": 1
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [
+    "reference/routing.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "studio:scout-reader",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "own",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "n/a (first-party agent)",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 1,
+    "server": false,
+    "class": 2
+   },
+   "fits": {
+    "research/urls": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "quarantined reader for scout raw files",
+     "agents": 1
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [
+    "reference/routing.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "studio:persona-sim",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "own",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "n/a (first-party agent)",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 1,
+    "server": false,
+    "class": 2
+   },
+   "fits": {
+    "validate/reaction": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "simulated end user; output is a hypothesis",
+     "agents": 1
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [
+    "reference/routing.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "playwright-cli",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "instrument"
+   ],
+   "source": {
+    "repo": "github.com/microsoft/playwright-cli",
+    "path": null,
+    "pin": "b85c7a7",
+    "version": null,
+    "tree_sha256": "acb83427eb2391d99d69d164699f8492a04a5278e4e41d0830304e6882d35220",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/playwright-cli",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "no attach --cdp or --extension",
+     "no state save on login sites"
+    ],
+    "unchecked": []
+   },
+   "requires": {
+    "node": true,
+    "network": true
+   },
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {
+    "research/js-site": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "real browser automation and screenshots"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [
+    "reference/routing.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "Automate browser interactions, test web pages and work with Playwright tests.",
+   "description_chars": 77,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "watch",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": "github.com/bradautomates/claude-video",
+    "path": null,
+    "pin": "03ceb42",
+    "version": null,
+    "tree_sha256": "d0679b4017cc074f09ad5cbb421632a3b2a70ae1618f0b69090b3989bd9248a7",
+    "licence": null
+   },
+   "install": {
+    "scope": "user",
+    "path": "~/.claude/skills/watch",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": null,
+    "reviewed": "2026-10-23",
+    "conditions": [
+     "Gemini engine off",
+     "Whisper none, local only"
+    ],
+    "unchecked": []
+   },
+   "requires": {
+    "binary": true
+   },
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 2
+   },
+   "fits": {
+    "research/video": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "frames and transcript from a video"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [
+    "reference/routing.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "Watch a video (URL or local path). Downloads with yt-dlp, extracts auto-scaled frames with ffmpeg, pulls the transcript from captions (or local WhisperX / cloud Whisper fallback), and hands the result to the agent so it can answer questions about what's in the video. Local-only install: frames and captions are processed on this machine.",
+   "description_chars": 338,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "built-in-browser",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "instrument"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "builtin",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "n/a (host feature)",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {
+    "browser_tool": true
+   },
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {
+    "research/browser": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "logged-in or visible work in the app's own browser"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [
+    "playwright-cli"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "engineering:documentation",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "synced",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {
+    "writing/docs-structure": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 1,
+     "ev": "structure of technical documents"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [
+    "rule/readme-structure",
+    "lens:writing.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "engineering:debug",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "synced",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 0
+   },
+   "fits": {
+    "process/debug": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 1,
+     "ev": "incident report template"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [
+    "superpowers:systematic-debugging"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "budgit-humanize",
+   "kind": "skill",
+   "status": "active",
+   "enabled": true,
+   "source": {
+    "repo": "budgit (this repo)",
+    "path": "skills/budgit-kickoff/humanize",
+    "pin": null,
+    "version": "0.1.0",
+    "tree_sha256": null,
+    "licence": "MIT (Budgit); layer 2 adapts stop-slop (MIT, Hardik Pandya, pin 8da1f03)"
+   },
+   "install": {
+    "scope": "own",
+    "path": "humanize",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "n/a (first-party, no network, no hooks)",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": [
+     "not yet read by studio:security-reviewer"
+    ]
+   },
+   "requires": {
+    "python": ">=3",
+    "node": false,
+    "chrome": false,
+    "binary": false,
+    "network": [],
+    "keys": []
+   },
+   "flags": {
+    "telemetry": false,
+    "hooks": false,
+    "mcp": false,
+    "auto_update": false,
+    "writes_outside_project": false
+   },
+   "cost": {
+    "read_lines": 70,
+    "refs_lines": 75,
+    "agents": 0,
+    "server": false,
+    "class": 0,
+    "lint": "budgit humanize-lint (plugin/scripts/humanizelint.py, stdlib, offline)"
+   },
+   "fits": {
+    "writing/public-prose": {
+     "fit": 3,
+     "check": 1,
+     "receipt": 1,
+     "ev": "content gate H1-H14; lint covers six rules mechanically"
+    },
+    "writing/public-prose-es": {
+     "fit": 1,
+     "check": 0,
+     "receipt": 0,
+     "ev": "Spanish word lists are unreviewed"
+    },
+    "writing/docs-structure": {
+     "fit": 2,
+     "check": 1,
+     "receipt": 1,
+     "ev": "README and wiki comparison"
+    },
+    "writing/ui-copy": {
+     "fit": 1,
+     "check": 0,
+     "receipt": 0,
+     "ev": "only H5, H8 and layer 2 apply to short strings"
+    },
+    "writing/ui-copy-es": {
+     "fit": 1,
+     "check": 0,
+     "receipt": 0,
+     "ev": "Spanish lists unreviewed"
+    }
+   },
+   "not_for": [
+    "legal wording",
+    "security wording",
+    "detector evasion of any kind",
+    "text the user wrote in their own voice (their sample wins)",
+    "single-line UI labels for H4/H6/H9/H11"
+   ],
+   "overlaps": [
+    "stop-slop",
+    "lens:writing.md",
+    "design:ux-copy"
+   ],
+   "conflicts": [],
+   "strengths": [
+    "content gate with each rule traced to a numbered table of the IdeaLens study (arXiv 2610.06778)",
+    "six rules have a mechanical or flag-and-judge check; offline, stdlib, 42 tests; reviewed hits can be recorded with an ok marker or --allow",
+    "refuses to invent specifics: missing material becomes a question for the author",
+    "separate EN and ES word lists; allows verified absolutes and stated conditions",
+    "stop-slop and ux-copy stay installed and untouched"
+   ],
+   "weaknesses": [
+    "evidence is one author-run preprint, features rated by language models, never replicated",
+    "the study reads English long-form text of 500+ words; short strings are out of range",
+    "Spanish word lists are UNREVIEWED; no Spanish human-follows-AI-plan test exists",
+    "lint is regex and only a floor: it misses \"cannot\", \"may\" and filler; H4 and H11 are noisy on technical docs; every hit needs a person",
+    "under a no-new-facts rule layer 1 mostly yields questions for the author, so little text changes (comparison: 3 small edits across 2 texts, none on UI strings)",
+    "J rules (H3, H7, H10, H12, H13) have no mechanical check"
+   ],
+   "when_selector_picks": "job is writing or reviewing long public or user-facing prose (README, wiki, release note, landing, store copy, post) in English or Spanish. Selector rule: prose -> budgit-humanize first (content gate, then layer 2); UI strings of a few words -> design:ux-copy first, humanize only with --kind ui. Both may run on one job; stop-slop stays installed and untouched. Never for legal or security wording.",
+   "fallback": [
+    "stop-slop",
+    "lens:writing.md"
+   ],
+   "selector_rule": {
+    "prose": [
+     "budgit-humanize",
+     "stop-slop"
+    ],
+    "ui-strings": [
+     "design:ux-copy",
+     "budgit-humanize"
+    ]
+   },
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-25",
+    "state": "first-party",
+    "update": "none-applied"
+   },
+   "history": [
+    {
+     "date": "2026-10-25",
+     "event": "drafted (R-267) as one Budgit-owned skill in two layers"
+    },
+    {
+     "date": "2026-10-26",
+     "event": "enabled for prose, used together with design:ux-copy; moved into skills/budgit-kickoff/humanize so it ships; wired into lenses/writing.md and reference/routing.md"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "read": "full",
+   "role": [
+    "author",
+    "checker"
+   ],
+   "codex": "no",
+   "load": "full"
+  },
+  {
+   "id": "rule/pixel-art-1x",
+   "kind": "rule",
+   "status": "draft",
+   "enabled": false,
+   "source": {
+    "repo": "budgit (this repo)",
+    "path": "skills/budgit-kickoff/reference/rules/pixel-art-1x.md",
+    "version": "0.0.1-draft",
+    "licence": "MIT (Budgit)"
+   },
+   "security": {
+    "verdict": "n/a (text only, no code, no network)",
+    "unchecked": [
+     "not read by studio:security-reviewer"
+    ]
+   },
+   "flags": {
+    "telemetry": false,
+    "hooks": false,
+    "mcp": false,
+    "auto_update": false,
+    "writes_outside_project": false
+   },
+   "cost": {
+    "read_lines": 52,
+    "agents": 0,
+    "class": 0
+   },
+   "fits": {
+    "pixel/sprite-prop-scene": {
+     "fit": 3,
+     "check": 1,
+     "ev": "PX1-PX7 backed by audit-sprites.mjs, audit-book.mjs, compare-frames.mjs; PX8-PX11 manual"
+    },
+    "pixel/readme-art": {
+     "fit": 2,
+     "ev": "same pixel scale rule; SVG delivery belongs to rule/svg-light-dark"
+    }
+   },
+   "not_for": [
+    "vector UI",
+    "photos",
+    "web layout"
+   ],
+   "overlaps": [],
+   "strengths": [
+    "11 MUST rules each tied to a user correction or an existing audit",
+    "names the 1x strip next to a 4x zoom plus a fresh critic, the step users corrected three times"
+   ],
+   "weaknesses": [
+    "PX8-PX11 have no script; the 1x strip lived in a scratchpad",
+    "PX12 (2 px features) has no source",
+    "audits were read, not run"
+   ],
+   "when_selector_picks": "job surface is pixel-sprite, pixel-prop, pixel-icon or pixel-scene and no installed skill has fit 2 for it (flow plan 3.2). Attach with the lens, not instead of it.",
+   "fallback": [],
+   "win_test": "kept only if it beats 'project rules + critic at 1x' in a real task and the user does not correct the style again (my criterion from the R-258 review, not a user statement)",
+   "history": [
+    {
+     "date": "2026-10-25",
+     "event": "drafted from the user's choice of all five rules (ledger I-148, R-271)"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "role": [
+    "library"
+   ],
+   "read": "full",
+   "load": "full"
+  },
+  {
+   "id": "rule/frame-timing",
+   "kind": "rule",
+   "status": "draft",
+   "enabled": false,
+   "source": {
+    "repo": "budgit (this repo)",
+    "path": "skills/budgit-kickoff/reference/rules/frame-timing.md",
+    "version": "0.0.1-draft",
+    "licence": "MIT (Budgit)"
+   },
+   "security": {
+    "verdict": "n/a (text only, no code, no network)",
+    "unchecked": [
+     "not read by studio:security-reviewer"
+    ]
+   },
+   "flags": {
+    "telemetry": false,
+    "hooks": false,
+    "mcp": false,
+    "auto_update": false,
+    "writes_outside_project": false
+   },
+   "cost": {
+    "read_lines": 58,
+    "agents": 0,
+    "class": 0
+   },
+   "fits": {
+    "motion/sprite-animation": {
+     "fit": 3,
+     "check": 1,
+     "ev": "FT1-FT10 from director.js, sprites.js, behaviour-check.mjs, perf-frame.mjs; FT10 has no script"
+    },
+    "motion/animated-svg": {
+     "fit": 1,
+     "ev": "tick and hold vocabulary only; web motion belongs to emil-design-eng"
+    }
+   },
+   "not_for": [
+    "CSS or web UI motion",
+    "the web 300 ms rule"
+   ],
+   "overlaps": [
+    "emil-design-eng",
+    "impeccable animate",
+    "lens:motion.md"
+   ],
+   "strengths": [
+    "converts motion rules into ticks and a per-clip table",
+    "records three conflicts the Brote lane must settle before any number is hard"
+   ],
+   "weaknesses": [
+    "no measurement script for FT10",
+    "FT11-FT13 have no measurement behind them",
+    "ambient 20 s doc vs 60 s code, fidget gap 5-11 s vs 15-30 s unresolved"
+   ],
+   "when_selector_picks": "job writes or reviews a frame-by-frame clip (sprite, pet, README animated SVG). Never for CSS transitions.",
+   "fallback": [],
+   "win_test": "same as rule/pixel-art-1x",
+   "history": [
+    {
+     "date": "2026-10-25",
+     "event": "drafted from the user's choice of all five rules (ledger I-148, R-271)"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "role": [
+    "library"
+   ],
+   "read": "full",
+   "load": "full"
+  },
+  {
+   "id": "rule/terminal-status-line",
+   "kind": "rule",
+   "status": "draft",
+   "enabled": false,
+   "source": {
+    "repo": "budgit (this repo)",
+    "path": "skills/budgit-kickoff/reference/rules/terminal-status-line.md",
+    "version": "0.0.1-draft",
+    "licence": "MIT (Budgit)"
+   },
+   "security": {
+    "verdict": "n/a (text only, no code, no network)",
+    "unchecked": [
+     "not read by studio:security-reviewer"
+    ]
+   },
+   "flags": {
+    "telemetry": false,
+    "hooks": false,
+    "mcp": false,
+    "auto_update": false,
+    "writes_outside_project": false
+   },
+   "cost": {
+    "read_lines": 46,
+    "agents": 0,
+    "class": 0
+   },
+   "fits": {
+    "terminal/status-line": {
+     "fit": 3,
+     "check": 1,
+     "ev": "SL1-SL10 each tied to a user correction and a test (test_brote_status, test_cli, test_colour_default, test_bar_colour_surface, test_i18n)"
+    }
+   },
+   "not_for": [
+    "README hero pictures of the line"
+   ],
+   "overlaps": [],
+   "strengths": [
+    "best-evidenced of the five: ten MUSTs, each with a test"
+   ],
+   "weaknesses": [
+    "NO_COLOR unsupported (SL11)",
+    "80-column test uses len(), Spanish only (SL12)",
+    "no light-terminal palette (SL14)",
+    "desktop colour claim has no source link"
+   ],
+   "when_selector_picks": "job changes or designs the one-line status text or its colours on any host surface.",
+   "fallback": [],
+   "win_test": "SL1-SL10 already have tests; the win test applies only to SL11-SL14 (kept if it fixes a real user report)",
+   "history": [
+    {
+     "date": "2026-10-25",
+     "event": "drafted from the user's choice of all five rules (ledger I-148, R-271)"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "role": [
+    "library"
+   ],
+   "read": "full",
+   "load": "full"
+  },
+  {
+   "id": "rule/readme-structure",
+   "kind": "rule",
+   "status": "draft",
+   "enabled": false,
+   "source": {
+    "repo": "budgit (this repo)",
+    "path": "skills/budgit-kickoff/reference/rules/readme-structure.md",
+    "version": "0.0.1-draft",
+    "licence": "MIT (Budgit)"
+   },
+   "security": {
+    "verdict": "n/a (text only, no code, no network)",
+    "unchecked": [
+     "not read by studio:security-reviewer"
+    ]
+   },
+   "flags": {
+    "telemetry": false,
+    "hooks": false,
+    "mcp": false,
+    "auto_update": false,
+    "writes_outside_project": false
+   },
+   "cost": {
+    "read_lines": 60,
+    "agents": 0,
+    "class": 0
+   },
+   "fits": {
+    "docs/readme-wiki-structure": {
+     "fit": 3,
+     "check": 1,
+     "ev": "RM1, RM4-RM7 have tests (test_export_public.py); RM2, RM3, RM8-RM10 manual"
+    },
+    "writing/readme-wiki-docs": {
+     "fit": 1,
+     "ev": "structure only; prose belongs to budgit-humanize"
+    }
+   },
+   "not_for": [
+    "marketing landing pages",
+    "prose quality"
+   ],
+   "overlaps": [
+    "budgit-humanize"
+   ],
+   "strengths": [
+    "10 MUSTs from user, ledger R-250, R-218, R-157 corrections and tests",
+    "marks the 150-line research rule as contradicted by the README the user approved"
+   ],
+   "weaknesses": [
+    "RM11-RM19 are pattern-copying from 8 READMEs, no reader-outcome evidence",
+    "no wiki tests exist",
+    "the docs lane owns the shipped files; this rule changes none"
+   ],
+   "when_selector_picks": "job writes or restructures a README, wiki page, getting-started or FAQ. Run with budgit-humanize as the prose gate.",
+   "fallback": [],
+   "win_test": "same as rule/pixel-art-1x, judged on the rendered mock at 836 px and 375 px",
+   "history": [
+    {
+     "date": "2026-10-25",
+     "event": "drafted from the user's choice of all five rules (ledger I-148, R-271)"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "role": [
+    "library"
+   ],
+   "read": "full",
+   "load": "full"
+  },
+  {
+   "id": "rule/svg-light-dark",
+   "kind": "rule",
+   "status": "draft",
+   "enabled": false,
+   "source": {
+    "repo": "budgit (this repo)",
+    "path": "skills/budgit-kickoff/reference/rules/svg-light-dark.md",
+    "version": "0.0.1-draft",
+    "licence": "MIT (Budgit)"
+   },
+   "security": {
+    "verdict": "n/a (text only, no code, no network)",
+    "unchecked": [
+     "not read by studio:security-reviewer"
+    ]
+   },
+   "flags": {
+    "telemetry": false,
+    "hooks": false,
+    "mcp": false,
+    "auto_update": false,
+    "writes_outside_project": false
+   },
+   "cost": {
+    "read_lines": 48,
+    "agents": 0,
+    "class": 0
+   },
+   "fits": {
+    "svg/readme-art": {
+     "fit": 3,
+     "check": 0,
+     "ev": "SV1-SV8 from the shipped 12 light/dark pairs the user approved; almost no test enforces them"
+    },
+    "svg/diagram": {
+     "fit": 1,
+     "ev": "delivery and contrast only; type choice belongs to diagram-design"
+    }
+   },
+   "not_for": [
+    "pixel sprites",
+    "choosing a diagram type"
+   ],
+   "overlaps": [
+    "diagram-design",
+    "dataviz"
+   ],
+   "strengths": [
+    "codifies the shipped picture pair delivery",
+    "reports a real contrast near-miss in the shipped art"
+   ],
+   "weaknesses": [
+    "no checker (check_art.py does not exist)",
+    "SV9 contrast is SHOULD: shipped generators fail it",
+    "wiki <picture> unverified",
+    "contrast figures are an agent's computation"
+   ],
+   "when_selector_picks": "job makes an SVG for a README, wiki or page that is shown in light and dark. Attach next to diagram-design.",
+   "fallback": [
+    "diagram-design"
+   ],
+   "win_test": "same as rule/pixel-art-1x; SV9 becomes a rule only after an assertion exists in a shipped generator",
+   "history": [
+    {
+     "date": "2026-10-25",
+     "event": "drafted from the user's choice of all five rules (ledger I-148, R-271)"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "role": [
+    "library"
+   ],
+   "read": "full",
+   "load": "full"
+  },
+  {
+   "id": "rule/odd-data-probes",
+   "kind": "rule",
+   "status": "draft",
+   "enabled": false,
+   "source": {
+    "repo": "budgit (this repo)",
+    "path": "skills/budgit-kickoff/reference/rules/odd-data-probes.md",
+    "version": "0.0.1-draft",
+    "licence": "MIT (Budgit); method adapted from emilkowalski/break-ui (MIT, pin 2d22863), read not run, nothing copied"
+   },
+   "security": {
+    "verdict": "n/a (text only, no code, no network)",
+    "unchecked": [
+     "not read by studio:security-reviewer"
+    ]
+   },
+   "flags": {
+    "telemetry": false,
+    "hooks": false,
+    "mcp": false,
+    "auto_update": false,
+    "writes_outside_project": false
+   },
+   "cost": {
+    "read_lines": 62,
+    "agents": 0,
+    "class": 0
+   },
+   "fits": {
+    "any-screen/odd-data-pass": {
+     "fit": 3,
+     "check": 1,
+     "ev": "OD4, OD5 have tests; OD1-OD3, OD6-OD13 are method"
+    },
+    "web/worst-case-data-pass": {
+     "fit": 2,
+     "ev": "break-ui scores 3 for web; this rule is the host-neutral form"
+    },
+    "native-cli-game/sample-data": {
+     "fit": 3,
+     "ev": "per-host 'how to look' table; Spanish names and glyph coverage added"
+    }
+   },
+   "not_for": [
+    "pure visual styling",
+    "animation (rule/frame-timing)"
+   ],
+   "overlaps": [
+    "impeccable harden",
+    "emilkowalski/break-ui (reference only)"
+   ],
+   "strengths": [
+    "catches the tidy-sample-data blind spot on hosts break-ui cannot reach",
+    "Spanish and French name probes and glyph coverage that the catalog lacks"
+   ],
+   "weaknesses": [
+    "OD1 cites a pain known only second-hand",
+    "most rows are third-party method, not shown to win here",
+    "no script: the probes are written by hand per project"
+   ],
+   "when_selector_picks": "job renders data on any host and is about to be called done. Attach with the screen's own skill; report first, fix on the user's word.",
+   "fallback": [
+    "impeccable"
+   ],
+   "win_test": "same as rule/pixel-art-1x",
+   "history": [
+    {
+     "date": "2026-10-26",
+     "event": "written after the user approved a rule from break-ui (ledger I-154/I-155)"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "role": [
+    "library"
+   ],
+   "read": "full",
+   "load": "full"
+  },
+  {
+   "id": "emilkowalski/apple-design",
+   "kind": "skill",
+   "status": "draft",
+   "enabled": false,
+   "verdict": "adopt as reference only",
+   "source": {
+    "repo": "github.com/emilkowalski/skills",
+    "path": "skills/apple-design",
+    "pin": "2d22863",
+    "licence": "MIT"
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": ".studio/reports/20261025-emilkowalski-skills-security.md"
+   },
+   "cost": {
+    "read_lines": 290,
+    "description_chars": 484,
+    "disable_model_invocation": false
+   },
+   "fits": {
+    "native/appkit-window": {
+     "fit": 1
+    },
+    "native/swiftui-panel": {
+     "fit": 2
+    },
+    "motion/native-timing": {
+     "fit": 2
+    },
+    "web/ui": {
+     "fit": 1
+    }
+   },
+   "strengths": [
+    "spring table in damping/response matches SwiftUI .spring almost one-to-one (L90-94)",
+    "reduced-motion, transparency, contrast trio (L211-213); 0.2 Hz oscillation limit (L215)"
+   ],
+   "weaknesses": [
+    "Apple WWDC ideas rewritten for the web (CSS, Pointer Events); no AppKit content",
+    "bare-invocation gate prints an English line saying 'on the web' (L12)"
+   ],
+   "when_selector_picks": "native panel job: quote its spring and reduced-motion numbers as a named reference; never as primary. The native macOS panel stays a GAP.",
+   "role": [
+    "library"
+   ],
+   "read": "description",
+   "install": {
+    "scope": "none",
+    "path": null
+   },
+   "fallback": [
+    "lens:motion.md"
+   ],
+   "load": "off"
+  },
+  {
+   "id": "emilkowalski/write-swift",
+   "kind": "skill",
+   "status": "draft",
+   "enabled": false,
+   "verdict": "adopt, scoped to Swift code review and concurrency",
+   "source": {
+    "repo": "github.com/emilkowalski/skills",
+    "path": "skills/write-swift",
+    "pin": "2d22863",
+    "licence": "MIT"
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": ".studio/reports/20261025-emilkowalski-skills-security.md"
+   },
+   "cost": {
+    "read_lines": 396,
+    "description_chars": 425,
+    "bytes": 42000,
+    "disable_model_invocation": false
+   },
+   "fits": {
+    "swift/code-review-concurrency": {
+     "fit": 3
+    },
+    "native/swiftui-panel": {
+     "fit": 2
+    },
+    "native/appkit-window": {
+     "fit": 1
+    },
+    "motion/native-timing": {
+     "fit": 0
+    }
+   },
+   "strengths": [
+    "checkable rules for Swift 6.2 concurrency, Sendable, actor reentrancy, delegate bridging, Swift Testing"
+   ],
+   "weaknesses": [
+    "heaviest of the five (about 10.6k tokens): load by section",
+    "Swift 6.3/6.4 claims unsourced (L16-18) and may be stale",
+    "main-actor-by-default is an Xcode 26 project setting: brote.swift may be built with swiftc, so check the toolchain first",
+    "AppKit never mentioned"
+   ],
+   "when_selector_picks": "job reviews or writes Swift concurrency or tests. Read only the matching section. Check the project toolchain before applying any row marked unreleased.",
+   "role": [
+    "library"
+   ],
+   "read": "description",
+   "install": {
+    "scope": "none",
+    "path": null
+   },
+   "fallback": [
+    "lens:motion.md"
+   ],
+   "load": "off"
+  },
+  {
+   "id": "emilkowalski/mobile-native",
+   "kind": "skill",
+   "status": "draft",
+   "enabled": false,
+   "verdict": "skip",
+   "source": {
+    "repo": "github.com/emilkowalski/skills",
+    "path": "skills/mobile-native",
+    "pin": "2d22863",
+    "licence": "MIT"
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": ".studio/reports/20261025-emilkowalski-skills-security.md"
+   },
+   "cost": {
+    "read_lines": 311,
+    "description_chars": 740,
+    "disable_model_invocation": false
+   },
+   "fits": {
+    "native/any": {
+     "fit": 0
+    },
+    "web/mobile-pwa": {
+     "fit": 2
+    }
+   },
+   "weaknesses": [
+    "CSS and meta tags for web apps on iPhone and Android browsers; nothing for Swift or macOS",
+    "longest description of the five (740 chars) always listed",
+    "points to skills that are not installed"
+   ],
+   "when_selector_picks": "never today. Only a future mobile-web project.",
+   "role": [
+    "library"
+   ],
+   "read": "description",
+   "install": {
+    "scope": "none",
+    "path": null
+   },
+   "fallback": [
+    "lens:motion.md"
+   ],
+   "load": "off"
+  },
+  {
+   "id": "emilkowalski/break-ui",
+   "kind": "skill",
+   "status": "draft",
+   "enabled": false,
+   "verdict": "adopt as reference only; extract a Budgit rule",
+   "source": {
+    "repo": "github.com/emilkowalski/skills",
+    "path": "skills/break-ui",
+    "pin": "2d22863",
+    "licence": "MIT"
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": ".studio/reports/20261025-emilkowalski-skills-security.md",
+    "note": "one legitimate ZWJ emoji in CATALOG.md:26"
+   },
+   "cost": {
+    "read_lines": 310,
+    "description_chars": 521,
+    "disable_model_invocation": false,
+    "writes_files": "worst-case fixture and a dev toggle in the project"
+   },
+   "fits": {
+    "web/worst-case-data-pass": {
+     "fit": 3
+    },
+    "native-cli-game/sample-data": {
+     "fit": 1,
+     "if_reexpressed": 3
+    }
+   },
+   "strengths": [
+    "method catches 'false data': field table incl. list length as a value, one plausible worst value, inject at the data boundary, mixed failures in one dataset, Empty/One/1,000+, report before fixing, keep the fixture as a regression test"
+   ],
+   "weaknesses": [
+    "fix column is all CSS/JS",
+    "writes toggle code into product code: would need plan/ledger",
+    "no Spanish names (compound names, double surnames, ñ) and no pixel-font glyph coverage",
+    "English-only bare-invocation gate (SKILL.md:12)"
+   ],
+   "overlaps": [
+    "impeccable harden"
+   ],
+   "when_selector_picks": "web UI worst-case-data pass: use it, report only. Non-web: use the Budgit data-probe rule once written (not written; see plan section 19).",
+   "role": [
+    "library"
+   ],
+   "read": "description",
+   "install": {
+    "scope": "none",
+    "path": null
+   },
+   "fallback": [
+    "lens:motion.md"
+   ],
+   "load": "off"
+  },
+  {
+   "id": "emilkowalski/review-animations",
+   "kind": "skill",
+   "status": "draft",
+   "enabled": false,
+   "verdict": "skip",
+   "source": {
+    "repo": "github.com/emilkowalski/skills",
+    "path": "skills/review-animations",
+    "pin": "2d22863",
+    "licence": "MIT"
+   },
+   "security": {
+    "verdict": "PASS",
+    "report": ".studio/reports/20261025-emilkowalski-skills-security.md"
+   },
+   "cost": {
+    "read_lines": 307,
+    "description_chars": 159,
+    "disable_model_invocation": true
+   },
+   "fits": {
+    "web/micro-interaction-review": {
+     "fit": 2
+    },
+    "motion/sprite-frame": {
+     "fit": 0
+    },
+    "motion/native-timing": {
+     "fit": 1
+    },
+    "a11y/reduced-motion": {
+     "fit": 1
+    }
+   },
+   "weaknesses": [
+    "duplicates emil-design-eng and impeccable animate for web motion",
+    "300 ms limit, ease-out curves and 30-80 ms stagger (below one 100 ms tick) conflict with rule/frame-timing",
+    "no flash-rate check",
+    "'Block' verdicts would reject valid 1-6 s sprite clips"
+   ],
+   "when_selector_picks": "never for sprites or native. Web only, and emil-design-eng already covers it.",
+   "role": [
+    "library"
+   ],
+   "read": "description",
+   "install": {
+    "scope": "none",
+    "path": null
+   },
+   "fallback": [
+    "lens:motion.md"
+   ],
+   "load": "off"
+  },
+  {
+   "id": "mirofish",
+   "kind": "skill",
+   "status": "watch",
+   "enabled": false,
+   "read": "description",
+   "role": [],
+   "source": {
+    "repo": "github.com/666ghj/MiroFish",
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": "AGPL-3.0"
+   },
+   "install": {
+    "scope": "none",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "not reviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {
+    "validate/prediction": {
+     "fit": 2,
+     "check": 0,
+     "receipt": 0,
+     "ev": "swarm simulation; one model plays every role"
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "AGPL; needs an OpenAI-format key and a Zep Cloud key, so seeds leave the machine; no accuracy evidence"
+   ],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [
+    {
+     "date": "2026-10-26",
+     "event": "registered as watch"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   },
+   "ideas": [
+    "run the same persona N times and report the spread",
+    "say when every persona comes from one model",
+    "log each claim as a testable hypothesis",
+    "forbid invented quotes",
+    "optional chat with the persona, labelled simulated"
+   ]
+  },
+  {
+   "id": "open-design",
+   "kind": "skill",
+   "status": "watch",
+   "enabled": false,
+   "read": "description",
+   "role": [],
+   "source": {
+    "repo": "github.com/nexu-io/open-design",
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": "Apache-2.0"
+   },
+   "install": {
+    "scope": "none",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "not reviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "a whole app and daemon with always-on scrubbed telemetry and a stdio server"
+   ],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [
+    {
+     "date": "2026-10-26",
+     "event": "registered as watch"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "scroll-world",
+   "kind": "skill",
+   "status": "watch",
+   "enabled": false,
+   "read": "description",
+   "role": [],
+   "source": {
+    "repo": "github.com/oso95/scroll-world",
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": "MIT"
+   },
+   "install": {
+    "scope": "none",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "not reviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "paid external video generation (about $27 a page) and ffmpeg"
+   ],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [
+    {
+     "date": "2026-10-26",
+     "event": "registered as watch"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "canvas-ui",
+   "kind": "skill",
+   "status": "unresolved",
+   "enabled": false,
+   "read": "description",
+   "role": [],
+   "source": {
+    "repo": "github.com/DavidHDev/canvas-ui (literal match)",
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "none",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "not reviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "ambiguous name: a canvas-effects component library, or a canvas where an agent designs"
+   ],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [
+    {
+     "date": "2026-10-26",
+     "event": "registered as unresolved"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "uupm",
+   "kind": "skill",
+   "status": "idea-taken",
+   "enabled": false,
+   "read": "description",
+   "role": [],
+   "source": {
+    "repo": "github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": "MIT"
+   },
+   "install": {
+    "scope": "none",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "not reviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "data CSVs plus Python search and an npm CLI; ideas adopted as Budgit rules"
+   ],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [
+    {
+     "date": "2026-10-26",
+     "event": "registered as idea-taken"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "hallmark",
+   "kind": "skill",
+   "status": "idea-taken",
+   "enabled": false,
+   "read": "description",
+   "role": [],
+   "source": {
+    "repo": "github.com/Nutlope/hallmark",
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": "MIT"
+   },
+   "install": {
+    "scope": "none",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "not reviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "third design voice, biased to marketing pages; five ideas adopted"
+   ],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [
+    {
+     "date": "2026-10-26",
+     "event": "registered as idea-taken"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "react-bits",
+   "kind": "skill",
+   "status": "idea-taken",
+   "enabled": false,
+   "read": "description",
+   "role": [],
+   "source": {
+    "repo": "reactbits.dev",
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "none",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "not reviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "component by component after reading the registry JSON; the pro skill is paid"
+   ],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [
+    {
+     "date": "2026-10-26",
+     "event": "registered as idea-taken"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "awesome-design-md",
+   "kind": "skill",
+   "status": "idea-taken",
+   "enabled": false,
+   "read": "description",
+   "role": [],
+   "source": {
+    "repo": "github.com/VoltAgent/awesome-design-md",
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "none",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "not reviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "catalogue of brand DESIGN.md files; idea of a read-only reference catalogue adopted"
+   ],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [
+    {
+     "date": "2026-10-26",
+     "event": "registered as idea-taken"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "image-to-code",
+   "kind": "skill",
+   "status": "idea-taken",
+   "enabled": false,
+   "read": "description",
+   "role": [],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "none",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "not reviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 0,
+    "server": false,
+    "class": 1
+   },
+   "fits": {},
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [
+    "most likely a sibling of the taste skill that generates its own mock image first; idea only"
+   ],
+   "fallback": [],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-10-26",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [
+    {
+     "date": "2026-10-26",
+     "event": "registered as idea-taken"
+    }
+   ],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "math-olympiad:math-olympiad",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": false,
+   "read": false,
+   "role": [],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": "0.1.0",
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/math-olympiad/465f09344424/skills/math-olympiad",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": [
+     "not read"
+    ]
+   },
+   "flags": {},
+   "cost": {
+    "class": 1,
+    "agents": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "fallback": [],
+   "load": "full",
+   "description": "\"Solve competition math problems (IMO, Putnam, USAMO, AIME) with adversarial verification that catches the errors self-verification misses. Activates when asked to 'solve this IMO problem', 'prove this olympiad inequality', 'verify this competition proof', 'find a counterexample', 'is this proof correct', or for any problem with 'IMO', 'Putnam', 'USAMO', 'olympiad', or 'competition math' in it. Uses pure reasoning (no tools) — then a fresh-context adversarial verifier attacks the proof using specific failure patterns, not generic 'check logic'. Outputs calibrated confidence — will say 'no confident solution' rather than bluff. If LaTeX is available, produces a clean PDF after verification passes.\"",
+   "description_chars": 706,
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "superpowers:diagnosing-superpowers",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": false,
+   "read": false,
+   "role": [],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.0/skills/diagnosing-superpowers",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": [
+     "not read"
+    ]
+   },
+   "flags": {},
+   "cost": {
+    "class": 1,
+    "agents": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "fallback": [],
+   "load": "full",
+   "description": "Use when a superpowers session went wrong and your human partner wants to know why — repeated work, ignored plans, stumbles, poor results, a skill that didn't fire, \"it took too long\", \"why is it so expensive\", \"what is it doing\" — or wants to build a bug report for the superpowers maintainers, for the current session or a past one identified by id or path, on any harness.",
+   "description_chars": 375,
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "superpowers:dispatching-parallel-agents",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": false,
+   "read": false,
+   "role": [],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.0/skills/dispatching-parallel-agents",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": [
+     "not read"
+    ]
+   },
+   "flags": {},
+   "cost": {
+    "class": 1,
+    "agents": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "fallback": [],
+   "load": "full",
+   "description": "Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies",
+   "description_chars": 106,
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "superpowers:finishing-a-development-branch",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": false,
+   "read": false,
+   "role": [],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.0/skills/finishing-a-development-branch",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": [
+     "not read"
+    ]
+   },
+   "flags": {},
+   "cost": {
+    "class": 1,
+    "agents": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "fallback": [],
+   "load": "full",
+   "description": "Use when implementation is complete, all tests pass, and you need to decide how to integrate the work",
+   "description_chars": 101,
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "superpowers:receiving-code-review",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": false,
+   "read": false,
+   "role": [],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.0/skills/receiving-code-review",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": [
+     "not read"
+    ]
+   },
+   "flags": {},
+   "cost": {
+    "class": 1,
+    "agents": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "fallback": [],
+   "load": "full",
+   "description": "Use when receiving code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable - requires technical rigor and verification, not performative agreement or blind implementation",
+   "description_chars": 234,
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "superpowers:requesting-code-review",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": false,
+   "read": false,
+   "role": [],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.0/skills/requesting-code-review",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": [
+     "not read"
+    ]
+   },
+   "flags": {},
+   "cost": {
+    "class": 1,
+    "agents": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "fallback": [],
+   "load": "full",
+   "description": "Use when completing tasks, implementing major features, or before merging to verify work meets requirements",
+   "description_chars": 107,
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "superpowers:test-driven-development",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": false,
+   "read": false,
+   "role": [],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.0/skills/test-driven-development",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": [
+     "not read"
+    ]
+   },
+   "flags": {},
+   "cost": {
+    "class": 1,
+    "agents": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "fallback": [],
+   "load": "full",
+   "description": "Use when implementing any feature or bugfix, before writing implementation code",
+   "description_chars": 79,
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "superpowers:using-git-worktrees",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": false,
+   "read": false,
+   "role": [],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.0/skills/using-git-worktrees",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": [
+     "not read"
+    ]
+   },
+   "flags": {},
+   "cost": {
+    "class": 1,
+    "agents": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "fallback": [],
+   "load": "full",
+   "description": "Use when starting feature work that needs isolation from current workspace or before executing implementation plans - ensures an isolated workspace exists via native tools or git worktree fallback",
+   "description_chars": 196,
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "superpowers:using-superpowers",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": false,
+   "read": false,
+   "role": [],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.0/skills/using-superpowers",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": [
+     "not read"
+    ]
+   },
+   "flags": {},
+   "cost": {
+    "class": 1,
+    "agents": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "fallback": [],
+   "load": "full",
+   "description": "Use when starting any conversation - establishes how to find and use skills, requiring skill invocation before ANY response including clarifying questions",
+   "description_chars": 154,
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
+   "id": "superpowers:writing-skills",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": false,
+   "read": false,
+   "role": [],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "plugin",
+    "path": "~/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.0/skills/writing-skills",
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "unreviewed",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": [
+     "not read"
+    ]
+   },
+   "flags": {},
+   "cost": {
+    "class": 1,
+    "agents": 0
+   },
+   "fits": {},
+   "not_for": [],
+   "fallback": [],
+   "load": "full",
+   "description": "Use when creating new skills, editing existing skills, or verifying skills work before deployment",
+   "description_chars": 97,
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  }
+ ]
+}

@@ -27,4 +27,5 @@
   (if not installed: the rubric in reference/design-rubric.md); a11y lens.
 - Fix loop is bounded: verifier FAIL → fix → re-verify, at most 3 attempts per defect set; then stop and
   send the user a ≤10-line escalation (what failed, what was tried, options with a recommendation).
+- A step the user must run by hand is walked by an agent first, and each step names the session and folder it runs in. After a bug on screen, read the self-check or probe log before the next try.
 - Guards stop accidents and hostile repo files, not a determined agent — never try to get around them.

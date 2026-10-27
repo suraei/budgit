@@ -6,6 +6,8 @@ Checks per main session (~/.claude/projects/<dir>/<session>.jsonl + <session>/su
 - agents_over_call_budget: subagents whose tool calls exceed the level's per-agent budget
 - compactions_without_checkpoint: compactions with no progress.md write since the previous one
 - untracked_inputs / research_unsaved: only for sessions bound to a Budgit project (ledger, .budgit/reports)
+- with a skills registry (`--skills`): skills_unlogged (a registered skill used with no `budgit skills why` earlier in the
+  session that logged) and skills_rejected (a skill the registry marks rejected or turned off was used)
 """
 import glob
 import json
@@ -71,7 +73,27 @@ def _subagents(main_path):
         yield aid, meta.get("agentType", "?"), calls, wrote_research
 
 
-def audit(main_path, level=None, project=None):
+SKILL_COUNTERS = ("skills_unlogged", "skills_rejected")
+SKILL_LABELS = {"skills_unlogged": "skills used, no `skills why`", "skills_rejected": "rejected/off skills used"}
+
+
+def _skill_lookup(registry):
+    """{id or alias: entry} for the registry's skill entries."""
+    out = {}
+    for e in registry.get("entries", []):
+        if e.get("kind", "skill") != "skill":
+            continue
+        for name in [e["id"]] + list(e.get("aliases") or []):
+            out[name] = e
+    return out
+
+
+def _why_logged(block):
+    cmd = str((block.get("input") or {}).get("command", ""))
+    return block.get("name") == "Bash" and re.search(r"\bskills\s+why\b", cmd) is not None and "--no-log" not in cmd
+
+
+def audit(main_path, level=None, project=None, registry=None):
     level = level or budget.current()["level"]
     pol = budget.POLICY[level]
     sid = os.path.basename(main_path)[:-6]
@@ -79,6 +101,10 @@ def audit(main_path, level=None, project=None):
     r.update(session=sid, level=level, agents=0, compactions=0, models_filled=0)
     per_message, checkpointed = {}, False
     filled = budget.filled_ids(sid)   # the PreToolUse hook filled these (model fill); shown, not violations
+    lookup = _skill_lookup(registry) if registry else None
+    asked = False
+    if lookup is not None:
+        r.update(dict.fromkeys(SKILL_COUNTERS, 0))
     for rec in _records(main_path):
         if rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
             r["compactions"] += 1
@@ -89,6 +115,14 @@ def audit(main_path, level=None, project=None):
         for mid, block in _tool_uses(rec):
             if _is_progress_write(block):
                 checkpointed = True
+            if lookup is not None:
+                if _why_logged(block):
+                    asked = True
+                elif block.get("name") == "Skill":
+                    entry = lookup.get(str((block.get("input") or {}).get("skill", "")))
+                    if entry:
+                        r["skills_unlogged"] += 0 if asked else 1
+                        r["skills_rejected"] += 1 if entry.get("status") == "rejected" or entry.get("enabled") is False else 0
             if block.get("name") in ("Agent", "Task"):
                 r["agents"] += 1
                 per_message[mid] = per_message.get(mid, 0) + 1
@@ -149,10 +183,10 @@ def sessions(root, days=7, project=None):
     return out
 
 
-def scan(root, days=7, level=None, project=None):
+def scan(root, days=7, level=None, project=None, registry=None):
     rows = []
     for main, d in sessions(root, days, project):
-        row = audit(main, level=level)
+        row = audit(main, level=level, registry=registry)
         row["dir"] = d
         rows.append(row)
     return rows
@@ -178,4 +212,17 @@ def table(rows):
                    % (n_filled, "" if n_filled == 1 else "s"))
     if quiet:
         out.append("(%d quiet session%s hidden: no agents, no violations)" % (len(quiet), "" if len(quiet) == 1 else "s"))
+    return "\n".join(out)
+
+
+def skills_table(rows):
+    """The `--skills` section: one line per session that used a registered skill, then the totals."""
+    rows = [r for r in rows if "skills_unlogged" in r and (r["skills_unlogged"] or r["skills_rejected"])]
+    if not rows:
+        return "skills: every registered skill used was chosen with `budgit skills why`, none was rejected or off"
+    out = ["skills   session   dir" + " " * 30 + "  ".join(SKILL_LABELS[k] for k in SKILL_COUNTERS)]
+    for r in rows:
+        out.append("         %-8s  %-32s %s" % (r["session"][:8], r["dir"][-32:],
+                                                "  ".join(str(r[k]).rjust(len(SKILL_LABELS[k])) for k in SKILL_COUNTERS)))
+    out.append("TOTAL" + " " * 46 + "  ".join(str(sum(r[k] for r in rows)).rjust(len(SKILL_LABELS[k])) for k in SKILL_COUNTERS))
     return "\n".join(out)

@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 
+import floatmanifest
 import leak
 import lint
 import studiolib as sl
@@ -30,6 +31,7 @@ SCRUB_RE = (
     (re.compile(r"\((?:her )?%s[:;] " % _REF), "("),                      # (her I-46/I-47; measured … → (measured …  # voice-ok
     (re.compile(r"\bher %s: " % _REF), ""),                                # , her I-21: any files → , any files  # voice-ok
 )
+FLOAT_BUNDLE = ("Brote.app", "BUILD-INFO.txt", "MANIFEST.sha256", "src")     # everything the signed bundle consists of
 FLOAT_SRC = os.path.join("tools", "brote", "float")      # R-175: the floating Brote, shipped as source under experimental/
 FLOAT_DST = os.path.join("experimental", "brote-float")
 FLOAT_FILES = ("brote.swift", "sprites.js", "say.js", "personality.js", "director.js", "menu.json", "book-icon.json", "Info.plist", "build.sh")
@@ -98,6 +100,36 @@ def public_rules(stage_dir):
     return hits + voice_hits(files, stage_dir)
 
 
+def hidden_hits(stage_dir):
+    """R-287: hidden characters (zero-width, tags, variation selectors, exotic spaces, controls) in the files that
+    would ship; emoji sequences and joiners in Indic/Persian/Arabic text pass -> [leak.Hit]."""
+    hits = []
+    root = os.path.realpath(stage_dir)
+    for d, dirs, files in os.walk(stage_dir):
+        entries = [x for x in dirs if os.path.islink(os.path.join(d, x))]       # a link to a folder: named, never followed
+        dirs[:] = sorted(x for x in dirs if x not in lint.NOISE_DIRS)
+        for f in sorted(files + entries):
+            path = os.path.join(d, f)
+            rel = lint.show(os.path.relpath(path, stage_dir), "")
+            hits += [leak.Hit(rel, 0, "hidden char in name", c) for c in lint.name_codepoints(os.path.relpath(path, stage_dir))]
+            if os.path.islink(path):
+                real = os.path.realpath(path)
+                if real != root and not real.startswith(root + os.sep):
+                    hits.append(leak.Hit(rel, 0, "symlink leaves the tree", lint.show(os.readlink(path), "")))
+                hits += [leak.Hit(rel, 0, "hidden char in link target", c) for c in lint.name_codepoints(os.readlink(path))]
+            elif not lint._regular(path):
+                hits.append(leak.Hit(rel, 0, "special file", "pipe, socket or device (never opened)"))
+            else:
+                skipped = []
+                for h in lint.scan_file(path, skipped):
+                    if h.kind in ("invisible", "binary-text-file", "invalid-utf8"):
+                        hits.append(leak.Hit(rel, h.line, "hidden char" if h.kind == "invisible" else h.kind, h.detail))
+                if skipped and not os.path.relpath(path, stage_dir).startswith(os.path.join("plugin", "float") + os.sep):
+                    hits.append(leak.Hit(rel, 0, "binary file that lint cannot read",
+                                         "only the signed floating Brote (checked against its manifest) may ship unread"))
+    return hits
+
+
 def _git(path, *args):
     return vendor._git(path, *args)
 
@@ -105,8 +137,12 @@ def _git(path, *args):
 def release_check(root):
     """The export is a release: the newest CHANGELOG line names plugin.json's version and plugin/ + skills/ are
     committed. Returns the version."""
+    for name in (os.path.join(root, SHARE_DIR), os.path.join(root, SHARE_DIR, "CHANGELOG.md")):
+        _refuse_odd(name, deep=False)
     version = vendor.plugin_version()
     skill = vendor._skill_source()
+    if skill:
+        _refuse_odd(os.path.join(skill, "CHANGELOG.md"), deep=False)
     lines = []
     if skill and os.path.isfile(os.path.join(skill, "CHANGELOG.md")):
         with open(os.path.join(skill, "CHANGELOG.md"), encoding="utf-8") as f:
@@ -149,7 +185,33 @@ def _scrub_table(config):
     return sorted(table.items(), key=lambda kv: len(kv[0]), reverse=True)
 
 
+def _refuse_odd(path, deep=True):
+    """A link or a special file (pipe, socket, device) at path, or anywhere under it when it is a folder, is refused before
+    anything is read: copying follows links and opening a pipe waits for ever, so a planted one would carry a file from outside
+    the tree into the public repo or hang the export. A path that does not exist is the caller's business."""
+    if not os.path.lexists(path):
+        return
+    hub = os.path.dirname(os.path.abspath(vendor.plugin_root()))
+    here = os.path.abspath(path)
+    if here.startswith(hub + os.sep):                 # a link in any folder above the source would carry outside files in too
+        cur = hub
+        for part in os.path.relpath(os.path.dirname(here), hub).split(os.sep):
+            cur = os.path.join(cur, part) if part != "." else cur
+            if os.path.islink(cur):
+                raise ExportRefused("%s is a link: the export copies only regular files" % lint.show(os.path.relpath(cur, hub), ""))
+    if os.path.islink(path) or not (os.path.isdir(path) or lint._regular(path)):
+        raise ExportRefused("%s is a link or a special file: the export copies only regular files" % lint.show(path, ""))
+    for d, dirs, files in os.walk(path) if deep else ():
+        dirs[:] = sorted(x for x in dirs if x not in lint.SKIP_DIRS)
+        for f in sorted(files + [x for x in dirs if os.path.islink(os.path.join(d, x))]):
+            if os.path.islink(os.path.join(d, f)) or not lint._regular(os.path.join(d, f)):
+                raise ExportRefused("%s is a link or a special file: the export copies only regular files"
+                                    % lint.show(os.path.relpath(os.path.join(d, f), path), ""))
+
+
 def _copy_tree(src, dst, table, skip=()):
+    """Copy src into dst; links and special files anywhere in src are refused first (_refuse_odd)."""
+    _refuse_odd(src)
     for d, dirs, files in os.walk(src):
         dirs[:] = sorted(x for x in dirs if x not in lint.SKIP_DIRS)
         for f in sorted(files):
@@ -172,10 +234,12 @@ def build(stage_dir, version, config, repo="OWNER/REPO", author=None):
     for sub in ("agents", "bin", "hooks", "scripts"):
         skip = tuple(o[len(sub) + 1:] for o in OMIT_FROM_EXPORT if o.startswith(sub + os.sep))
         _copy_tree(os.path.join(root, sub), os.path.join(plugin, sub), table, skip)
+    _copy_prebuilt_float(root, plugin)
     skill = vendor._skill_source()
     if skill is None:
         raise ExportRefused("the %s skill was not found next to the plugin" % vendor.SKILL)
     _copy_tree(skill, os.path.join(plugin, "skills", vendor.SKILL), table)
+    _refuse_odd(os.path.join(root, ".claude-plugin", "plugin.json"), deep=False)
     with open(os.path.join(root, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
         manifest = json.load(f)
     manifest["name"] = "budgit"            # R-120: an export always carries the new identity, whatever the tree says
@@ -192,6 +256,10 @@ def build(stage_dir, version, config, repo="OWNER/REPO", author=None):
     share = os.path.join(os.path.dirname(root), SHARE_DIR)
     if not os.path.isfile(os.path.join(share, "README.md")):
         raise ExportRefused("%s/README.md not found next to the plugin: run export from the hub checkout" % SHARE_DIR)
+    _refuse_odd(share, deep=False)                                              # the folder itself may be a link
+    for name in sorted(os.listdir(share)):
+        if name in ("README.md", "LICENSE", "CHANGELOG.md") or name.endswith(".svg"):
+            _refuse_odd(os.path.join(share, name))                              # every shared file is read, so check each first
     fields = (("repo", repo), ("marketplace", MARKETPLACE), ("min_cli", MIN_CLI), ("version", version))
 
     def fill(text):
@@ -208,10 +276,42 @@ def build(stage_dir, version, config, repo="OWNER/REPO", author=None):
         if name.endswith(".svg"):                                                # the version strip carries fields
             vendor._write(os.path.join(stage_dir, "assets", name), fill(vendor._read(os.path.join(share, name))))
     _copy_float(os.path.dirname(root), stage_dir)
+    vendor._write(os.path.join(stage_dir, ".gitattributes"), "plugin/float/** -text -diff\n")   # the signed bundle: git never rewrites its bytes
     changelog = os.path.join(share, "CHANGELOG.md")                              # written by hand, shipped as it is
     if not os.path.isfile(changelog):
         raise ExportRefused("%s/CHANGELOG.md not found next to the plugin: the public tree needs a changelog" % SHARE_DIR)
     vendor._write(os.path.join(stage_dir, "CHANGELOG.md"), fill(vendor._read(changelog)))   # {repo}, {version}...
+
+
+VERIFIED = os.path.join(FLOAT_SRC, "VERIFIED.json")     # the hub's note of the reviewed prebuilt bundle (hub only, never exported)
+
+
+def float_problems(plugin_root, hub_root):
+    """Why the prebuilt floating Brote under <plugin>/float may not be exported; [] when it may or when the plugin has none."""
+    fd = os.path.join(plugin_root, "float")
+    if not os.path.isdir(fd):
+        return []
+    _refuse_odd(fd)                                                             # every file the checks below open: a pipe would hang them
+    for name in [VERIFIED] + [os.path.join(FLOAT_SRC, n) for n in floatmanifest.SRC_FILES]:
+        _refuse_odd(os.path.join(hub_root, name), deep=False)
+    extra = ["UNLISTED %s (only %s may sit in plugin/float)" % (lint.show(n, ""), ", ".join(FLOAT_BUNDLE))
+             for n in sorted(os.listdir(fd)) if n not in FLOAT_BUNDLE]          # a stray file would ship unhashed and unread
+    return extra + floatmanifest.check(fd, os.path.join(hub_root, FLOAT_SRC)) + floatmanifest.reviewed_problems(fd, os.path.join(hub_root, VERIFIED))
+
+
+def _copy_prebuilt_float(plugin_root, dst_plugin):
+    """plugin/float (the signed Brote.app, MANIFEST.sha256, BUILD-INFO.txt, the sources it was built from), byte for byte."""
+    bad = float_problems(plugin_root, os.path.dirname(plugin_root))
+    if bad:
+        raise ExportRefused("the prebuilt floating Brote is not exportable: " + "; ".join(bad[:5]))
+    src = os.path.join(plugin_root, "float")
+    if not os.path.isdir(src):
+        return
+    dst = os.path.join(dst_plugin, "float")
+    _copy_tree(src, dst, ())
+    bad = floatmanifest.check(dst)
+    if bad:
+        raise ExportRefused("the copied floating Brote differs from its manifest: " + "; ".join(bad[:5]))
 
 
 def _copy_float(hub, stage_dir):
@@ -221,6 +321,9 @@ def _copy_float(hub, stage_dir):
     if not os.path.isdir(src):
         return
     dst = os.path.join(stage_dir, FLOAT_DST)
+    _refuse_odd(src, deep=False)                                                # the folder itself may be a link
+    for name in FLOAT_FILES + ("README.public.md",):
+        _refuse_odd(os.path.join(src, name))
     for name in FLOAT_FILES:
         path = os.path.join(src, name)
         if not os.path.isfile(path):
@@ -247,11 +350,14 @@ def _ledger_texts(config):
     for d in dict.fromkeys(dirs):
         data = sl.studio_dir(d)
         try:
-            with open(os.path.join(data, "ledger.json"), encoding="utf-8") as f:
-                texts += [i.get("text") or "" for i in json.load(f).get("items", [])]
+            if lint._regular(os.path.join(data, "ledger.json")):                    # a pipe here would block the export for ever
+                with open(os.path.join(data, "ledger.json"), encoding="utf-8") as f:
+                    texts += [i.get("text") or "" for i in json.load(f).get("items", [])]
         except (OSError, ValueError, AttributeError):
             pass
         try:
+            if not lint._regular(os.path.join(data, "inbox.jsonl")):
+                continue
             with open(os.path.join(data, "inbox.jsonl"), encoding="utf-8") as f:
                 for line in f:
                     try:
@@ -292,13 +398,14 @@ def gate(stage_dir, config):
     """leak.scan + the user's 6-word runs + `budgit secrets`. Returns the report text; raises on any hit."""
     allow = config.get("share_allow") or ()
     hits = leak.scan(stage_dir, leak.terms(config), allow)
+    prebuilt = os.path.join(stage_dir, "plugin", "float")
+    if os.path.isdir(prebuilt):
+        hits += leak.scan_binary_strings(prebuilt, leak.terms(config), allow)      # the text scanners skip files with NUL bytes
     hits += [h for h in run_hits(stage_dir, _ledger_texts(config))
              if ("%s:%s" % (h.path, h.term)).lower() not in {a.lower() for a in allow}]
-    if hits:
-        raise ExportRefused(leak.report(hits))
-    rules = public_rules(stage_dir)
-    if rules:
-        raise ExportRefused(leak.report(rules))
+    rules = public_rules(stage_dir) + hidden_hits(stage_dir)
+    if hits or rules:
+        raise ExportRefused(leak.report(hits + rules))
     vendor.scan_staged(stage_dir)
     return leak.report(hits)
 
@@ -328,6 +435,7 @@ def pending_line(hub, version):
 def export(out, repo="OWNER/REPO", check_release=True, config=None, record=False):
     config = sl.load_config() if config is None else config
     out = os.path.realpath(os.path.expanduser(out))
+    _refuse_odd(os.path.join(vendor.plugin_root(), ".claude-plugin", "plugin.json"), deep=False)   # read before anything else
     version = release_check(os.path.dirname(vendor.plugin_root())) if check_release else vendor.plugin_version()
     _check_out(out)
     tmp = tempfile.mkdtemp(prefix="budgit-export-")
@@ -350,7 +458,7 @@ def export(out, repo="OWNER/REPO", check_release=True, config=None, record=False
             watermark.install(out, "strip-only")
         except sl.StudioError:
             pass
-    return "budgit export: v%s → %s\n%s\nnext: read README.md, then `claude plugin validate --strict %s`" % (
+    return "budgit export: v%s → %s\n%s\nnext: read the README, and run `claude plugin validate --strict %s` to check the plugin" % (
         version, out, report, os.path.join(out, "plugin"))
 
 

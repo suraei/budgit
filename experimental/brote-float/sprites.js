@@ -131,7 +131,7 @@ function compose(S, P){
   if(S.cap) CAP.forEach(([r,c,k])=>at(r,c,k));
   else { LEAF[S.leaf].forEach(([r,c,k])=>at(r,c,k)); if(S.flowers) FLOWERS.forEach(([r,c,k])=>at(r,c,k)) }
   if(S.ice) ICE.forEach(([r,c,k])=>at(r,c,k));
-  if(S.cheeks) CHEEKS[S.cheeks].forEach(([r,c,k])=>at(r,c,k));
+  if(S.cheeks&&S.eyes!=='heart') CHEEKS[S.cheeks].forEach(([r,c,k])=>at(r,c,k));   // pink cheeks under pink heart eyes run together
   (EYES[S.eyes]||[]).forEach(([r,c,k])=>at(r+S.lookY,c+S.look,k));
   (MOUTH[S.mouth]||[]).forEach(([r,c,k])=>at(r,c,k));
   if(S.tear) at(10,2,'T'), at(11,2,'T');
@@ -154,13 +154,32 @@ const FIDGETS = {
   dormido:[],
 };
 const ACTLEN = {hello:16, poke:16, grumpy:30, celebrate:32, land:5, dizzy:26, wake:28};
+/* a click answers with one of these, never the same twice in a row */
+const POKES = ['hearts','hop','wave','sparkle','spin'];
+const POKE_HOP = [0,-1,-2,-3,-3,-2,-1,0], POKE_SPARKS = [[-2,-3],[-6,15],[3,19],[-5,0],[1,-4],[-7,9]];
+function pokeFace(S, kind, a){
+  Object.assign(S,{eyes:'happy',mouth:'open',cheeks:'c',stretch:0,dx:0,dy:0,look:0,lookY:0,sit:false,feet:'stand',armL:'none',armR:'none',
+    tear:false,bubble:-1,thermo:false}); S.ex=[];
+  if(kind==='hearts'){ Object.assign(S,{eyes:'heart',dy:[0,-1,-2,-2,-1][a]??0,armL:a<6?'up':'none',armR:a<6?'up':'none'});
+    if(a>=2) S.ex.push(['heart',-2-Math.min(3,(a-2)>>1),15,false]) }
+  else if(kind==='hop'){ if(a<3) S.stretch=-1; else if(a<9) Object.assign(S,{dy:POKE_HOP[a-2]||-2,stretch:1,mouth:'smile',armL:'up',armR:'up'});
+    else if(a<11){ S.stretch=-1; S.ex.push(['puff',14,-2,true],['puff',14,16,true]) } else Object.assign(S,{stretch:a%2,mouth:'cat'}) }
+  else if(kind==='wave') Object.assign(S,{eyes:a>12?'open':'happy',mouth:a%6<3?'cat':'smile',armR:(a>>1)%2?'up':'up2',look:1});
+  else if(kind==='sparkle'){ Object.assign(S,{eyes:'star',cheeks:null,armL:a%4<2?'up':'up2',armR:a%4<2?'up2':'up',dy:a%4===1?-1:0});
+    for(let k=0;k<3;k++){ const [r,c]=POKE_SPARKS[(a+k*2)%POKE_SPARKS.length]; S.ex.push([(a+k)%3===0?'spark':'twink',r,c,false]) } }
+  else { S.cheeks=null; S.eyes='open'; S.mouth='o';
+    if(a<3) Object.assign(S,{look:-1,dx:-1,armL:'side'}); else if(a<5) Object.assign(S,{eyes:'blink',armL:'side',armR:'side'});
+    else if(a<8) Object.assign(S,{look:1,dx:1,armR:'side'}); else if(a<10) S.eyes='blink';
+    else { Object.assign(S,{eyes:'happy',cheeks:'c',mouth:'open',dy:[-1,-2,-2,-1,0,0][a-10]??0,armL:'up',armR:'up'}); if(a<13) S.ex.push(['puff',14,7,true]) } }
+}
 class Pet {
   constructor(state){ Object.assign(this,{state,from:null,k:1,t:Math.floor(Math.random()*60),act:null,actT:0,
     held:false,hover:false,lookPin:null,walking:false,h5:0,stale:0,fid:null,nextFid:30+Math.floor(Math.random()*60)}) }
   setState(s){ if(s===this.state) return; this.from=this.pal(); this.state=s; this.k=0; this.fid=null }
   pal(){ const to=PALS[this.state]; if(!this.from||this.k>=1) return to; const o={};
     for(const key in to) o[key]=mix(this.from[key]||to[key],to[key],this.k); return o }
-  do(a){ this.act=a; this.actT=0 }
+  do(a){ this.act=a; this.actT=0; if(a==='poke') this.poke=this.nextPoke() }
+  nextPoke(rand=Math.random){ const o=POKES.filter(k=>k!==this.poke); return o[Math.floor(rand()*o.length)%o.length] }
   tick(){
     this.t++; if(this.k<1) this.k=Math.min(1,Math.round((this.k+0.1)*10)/10);     // exactly 10 frames to the new palette
     if(this.act){ this.actT++; if(this.actT>=ACTLEN[this.act]){ const a=this.act; this.act=null; if(a==='land'&&this.dizzyNext){ this.dizzyNext=false; this.do('dizzy') } } }
@@ -233,8 +252,7 @@ class Pet {
     if(this.held){ Object.assign(S,{eyes:'wide',mouth:'o',cheeks:'C',armL:t%2?'up':'up2',armR:t%2?'up2':'up',feet:t%2?'kickA':'kickB',
       stretch:1,dy:0,dx:0,look:0,lookY:0,sit:false,tear:false,bubble:-1,thermo:false}); S.ex=[] }
     else if(this.act==='hello'){ const a=this.actT; Object.assign(S,{armR:(a>>1)%2?'up':'up2',eyes:'happy',mouth:'open',cheeks:'C',thermo:false}) }
-    else if(this.act==='poke'){ const a=this.actT; Object.assign(S,{eyes:'heart',mouth:'open',cheeks:'C',dy:[0,-1,-2,-2,-1][a]??0,
-      armL:a<5?'up':'none',armR:a<5?'up':'none',thermo:false}); S.ex.push(['heart',-7-(a>>1),7,false]) }
+    else if(this.act==='poke') pokeFace(S,this.poke,this.actT);
     else if(this.act==='grumpy'){ const a=this.actT; Object.assign(S,{eyes:'blink',mouth:'pout',cheeks:'C',look:0,dx:a%4<2?0:1,thermo:false,stretch:-1});
       if(a%12<7) S.ex.push(['puff',2,a%24<12?-5:19,false]) }
     else if(this.act==='celebrate'){ const a=this.actT; Object.assign(S,{eyes:'star',mouth:'open',cheeks:'C',sit:false,thermo:false,

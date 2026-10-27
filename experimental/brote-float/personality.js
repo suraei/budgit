@@ -7,18 +7,21 @@ const out=g=>g.map(r=>r.join(''));
 const fromRows=rows=>rows.map(r=>[...r]);
 function badge(glyph){
   const g=fromRows(['..HHHHHHH..','.HAAAAAAAH.','HAAAAAAAAAH','HAAAAAAAAAH','HAAAAAAAAAH','HAAAAAAAAAH','HAAAAAAAAAH','HAAAAAAAAAH','HAAAAAAAAAH','.HAAAAAAAH.','..HHHHHHH..']);
-  stamp(g,glyph,1,2); return out(g) }
+  stamp(g,glyph,1,2); return glyphed(out(g),[2,1,7,7]) }
 function cloud(glyph){
   const g=fromRows(['...ooooo...','.ooWWWWWoo.','oWWWWWWWWWo','oWWWWWWWWWo','oWWWWWWWWWo','oWWWWWWWWWo','oWWWWWWWWWo','.ooWWWWWoo.','...ooooo...','..oo.......','.oo........']);
-  stamp(g,glyph,1,1); return out(g) }
+  stamp(g,glyph,1,1); return glyphed(out(g),[1,1,9,7]) }
 const padTo=(rows,w)=>rows.map(r=>r.padEnd(w,'.'));
+
+const glyphed=(rows,box)=>Object.assign(rows,{glyph:box});
 Object.assign(SPR,{
   bub_call_check: badge([".......","......e",".....ee","e...ee.","ee.ee..",".eee...","..e...."]),
   bub_call_ques: badge([".eeeee.","ee...ee",".....ee","...eee.","..ee...",".......","..ee..."]),
+  bub_call_up: badge(["...e...","..eee..",".eeeee.","...e...","...e...","...e...","......."]),
   bub_call_lock: badge(["..eee..",".e...e.",".e...e.","eeeeeee","eeeAeee","eeeAeee","eeeeeee"]),
   calltick:["H..",".H.","...",".H.","H.."],
   bub_think: cloud(["..nnnnn..",".nn...nn.",".....nn..","....nn...","...nn....",".........","...nn...."]),
-  bub_done: padTo(["........uu.",".......uLLu","......uLLu.","uu...uLLu..","uLLuuLLu...",".uLLLLu....","..uLLu.....","...uu......"],11),
+  bub_done: glyphed(padTo(["........uu.",".......uLLu","......uLLu.","uu...uLLu..","uLLuuLLu...",".uLLLLu....","..uLLu.....","...uu......"],11),[0,0,11,8]),
   bub_plus:["....uuu....","....uLu....",".uuuuLuuuu.",".uLLLLLLLu.",".uuuuLuuuu.","....uLu....","....uuu...."],
   bub_idea:["...DDDDD...","..DyyyyyD..",".DyyWWyyyD.",".DyWyyyyyD.",".DyyyyyyyD.","..DyyyyyD..","...DyyyD...","...DgDgD...","....DDD....","....DgD....","....DDD...."],
   bub_clock:["...ooooo...","..oWWWWWo..",".oWWWeWWWo.",".oWWWeWWWo.",".oWWWeeeWo.",".oWWWWWWWo.",".oWWWWWWWo.","..oWWWWWo..","...ooooo..."],
@@ -183,7 +186,7 @@ const CAT=[];
 const A=(id,grp,st,ev,an,dur,cd,pri,att,src,plumb,f,x)=>CAT.push(Object.assign({id,grp,st,ev,an,dur,cd,pri,att,src,plumb,f},x||{}));
 
 A('ag_walk',0,'agotado',0,0,9,60,2,0,0,0,
- (S,ft)=>{ Object.assign(S,{sit:false,stretch:-1,leaf:'wilt',mouth:'wavy',eyes:ft<60?(alt(ft,25)?'sleep':'spent'):'spent'}); POSE.walk(S,ft,4); S.stretch=-1; S.look=0; S.dy=(ft%8<2)?1:0; S.dx=Math.round(lerp(-6,5,ft/90));
+ (S,ft)=>{ Object.assign(S,{sit:false,stretch:-1,leaf:'wilt',mouth:'wavy',eyes:ft<60?(alt(ft,25)?'sleep':'spent'):'spent'}); POSE.walk(S,ft,4); S.stretch=-1; S.look=0; S.dy=(ft%8<2)?1:0; S.dx=Math.round(lerp(-6,5,ft/68));
    if(ft<68) snot(S,ft,8); else if(ft<76){ S.eyes='sleep'; S.dy=1; S.feet='stand'; S.dx=5; snot(S,ft,8) } else if(ft<82){ S.eyes='wide'; S.mouth='o'; S.dy=-2; S.feet='stand'; S.dx=5; S.bubble=-1; S.ex.push(['bang',-6,15+5,false]) } else { S.feet='stand'; S.dx=5; S.eyes='blink' } },{walk:1});
 A('ag_bubbles',0,'agotado',0,0,6,30,1,0,0,0,
  (S,ft)=>{ S.eyes='sleep'; S.mouth='small'; snot(S,ft,0); if(ft>38) zs(S,ft) });
@@ -268,12 +271,46 @@ A('c_needs',0,'contento',0,0,4,0,5,1,0,0,
 A('c_perm',0,'contento',0,0,4,0,5,1,0,0,
  (S,ft)=>{ const bow=(ft%24)>=16&&(ft%24)<22; S.look=0; S.dx=-3; S.eyes='teary'; S.mouth='small'; S.cheeks='C'; S.leaf='droop'; S.armL='none'; S.armR='none'; if(bow){ S.stretch=-1; S.dy=1 }
   S.ex.push(['clasp',12,7,false]); if(ft%20>=12&&ft%20<16) S.ex.push(['sweat',2,17,false]); call(S,ft,'lock') });
+A('c_update',0,'contento',0,0,4,0,5,1,0,0,
+ (S,ft)=>{ S.look=0; S.dx=-3; S.eyes='open'; S.mouth='smile'; S.cheeks='C'; S.leaf=ft%24<12?'perk':'up'; S.armR=alt(ft,4)?'up':'up2'; S.dy=(ft%24)>=20?-1:0; call(S,ft,'up') });
 A('c_error',0,'contento',0,0,2.5,20,2,0,0,0,
  (S,ft)=>{ if(ft<4){ S.eyes='wide'; S.mouth='o'; S.dy=-2; S.ex.push(['bang',-6,15,false]) } else { S.eyes='half'; S.look=-1; S.mouth='wavy'; S.ex.push(['sweat',2,17,false]) } });
 A('c_wait',0,'contento',0,0,6,300,1,0,0,0,
  (S,ft)=>{ work(S,'lp_think'+((ft>>3)%3)); S.lookY=1; if(ft<20){ S.eyes='sleep'; S.mouth=ft<4?'small':'yawn'; S.armL='up'; S.armR='up' } else { S.eyes='half'; S.mouth='small'; typing(S,ft,3) } if(ft>=8) bub(S,alt(ft,5)?'clock':'clock2') },{v:'pc_think'});
 A('c_answered',0,'contento',0,0,2.5,0,5,0,0,0,
  (S,ft)=>{ S.eyes='happy'; S.mouth='open'; S.armR=alt(ft,2)?'up':'up2'; if(ft<14) S.ex.push(['heart',-7-(ft>>2),7,false]); S.leaf=ft%6<3?'up':'perk' });
+
+const BIGB=['...HHHHHHH...','..HAAAAAAAH..','.HAAAAAAAAAH.','HAAAAAAAAAAAH','HAAAAAAAAAAAH','HAAAAAAAAAAAH','HAAAAAAAAAAAH','HAAAAAAAAAAAH','HAAAAAAAAAAAH','HAAAAAAAAAAAH','.HAAAAAAAAAH.','..HAAAAAAAH..','...HHHHHHH...'];
+function coinBadge(w){
+  const g=fromRows(BIGB), inside=(y,x)=>((x+.5-6.5)**2)/((w/2)**2)+((y+.5-6.5)**2)/(4.5**2)<=1;
+  for(let y=1;y<=11;y++) for(let x=1;x<=11;x++){ if(!inside(y,x)) continue;
+    const rim=!inside(y-1,x)||!inside(y+1,x)||!inside(y,x-1)||!inside(y,x+1);
+    g[y][x]=rim?'Q':(w>=3&&w<9&&x===Math.round(6.5-w/2)+1&&y>3&&y<8?'f':'I') }
+  if(w>=9){ stamp(g,['..eee','.e...','eeee.','.e...','eeee.','.e...','..eee'].map(r=>r.replace(/e/g,'K')),3,4); return glyphed(out(g),[4,3,5,7]) }
+  return out(g) }
+Object.assign(SPR,{
+  bub_coin9:coinBadge(9), bub_coin7:coinBadge(7), bub_coin5:coinBadge(5), bub_coin3:coinBadge(3), bub_coin1:coinBadge(1),
+  cup_beg:["..ooooooo.",".oeeeeeeeo",".ogWggggGo",".ogWgIIgGo","..oggQQgGo","...oggGo..","....ooo..."],
+  cane0:["oo",".o",".o",".o",".o",".o",".o",".o",".oo"], cane1:["oo","..",".o",".o",".o",".o",".o",".o",".oo"],
+  tearA:["T","j"], tearB:["T"],
+  pud1:["jj"], pud2:["jTTj"], pud3:["jTTTTj"], pud4:["jTTTTTTj"], pud5:["jTTTTTTTTj"], pud6:["jTTTTTTTTTTj"],
+});
+const fi=(ft,n,k)=>Math.floor(ft/(k||1.6))%n;
+A('c_broke_coin',0,'contento',0,0,8,0,4,0,0,0,
+ (S,ft)=>{ const i=fi(ft,12,1.3), sh=[0,1,1,0,-1,-1,0,1,1,0,-1,-1][i], w=[9,9,7,5,3,1,3,5,7,9,9,9][i];
+  S.dx=-3; S.look=0; S.eyes=i%6===5?'blink':'teary'; S.mouth='small'; S.leaf='droop'; S.armR='up'; S.cheeks='c';
+  S.ex.push(['bub_coin'+(w<9?w:9),-10,13,true],['cup_beg',4,12+sh,true]); if(alt(ft,3)) S.ex.push(['calltick',-8,10,true]) });
+A('c_broke_cane',0,'agotado',0,0,8,0,4,0,0,0,
+ (S,ft)=>{ const i=fi(ft,8), lift=i%2;
+  S.eyes='half'; S.mouth='frown'; S.leaf='wilt'; S.cheeks=false; S.armR='side'; S.feet=(i>>1)%2?'walkA':'walkB'; S.stretch=i%2?-1:0; S.dx=[0,0,1,1,2,2,1,1][i]; S.look=1;
+  S.ex.push([lift?'cane1':'cane0',8-lift,19,false]); if(i===3||i===7) S.ex.push(['drip',2,16,false]) });
+A('c_broke_cry',0,'contento',0,0,8,0,4,0,0,0,
+ (S,ft)=>{ const i=fi(ft,8), d=i%4;
+  S.eyes='teary'; S.mouth=i%2?'o':'wavy'; S.leaf='wilt'; S.cheeks='C'; S.tear=true; S.dx=[0,1,0,-1,0,1,0,-1][i]; S.armR=d===3?'up2':'none';
+  S.ex.push([d<3?'tearA':'tearB',12+d,2,false],[d<3?'tearA':'tearB',12+d,15,false],['pud'+(1+Math.min(i,5)),16,9-(1+Math.min(i,5)),true]) });
+A('c_paused',0,'contento',0,0,8,0,4,0,0,0,
+ (S,ft)=>{ const i=fi(ft,6);
+  S.eyes='sleep'; S.mouth='small'; S.leaf='droop'; S.ex.push(['Z',-3-(i>>1),19+(i%2),false],['z',-6-(i>>1),23,false]) });
 
 A('att_1',0,'contento',0,0,3,0,5,1,0,0,
  (S,ft)=>{ S.look=0; S.dx=-Math.min(3,ft>>1); if(ft<24){ S.eyes='happy'; S.mouth='open'; S.armR=alt(ft,3)?'up':'up2'; S.dy=hop[ft%6]; S.feet=ft<6?(alt(ft,2)?'walkA':'walkB'):'stand' } else { S.eyes='open'; S.mouth='smile'; S.armR='up' } call(S,ft,'check') });
@@ -317,7 +354,7 @@ A('pc_sleep',0,'agotado',0,0,6,0,2,0,0,0,
  (S,ft)=>{ S.leaf='wilt'; if(ft<24){ work(S,'lp_code'+((ft>>3)%12)); S.eyes='half'; S.lookY=1; S.ex.push(['hand',alt(ft,3)?9:10,13,true]) } else { work(S,'lp_off'); S.eyes='sleep'; S.dy=2; S.stretch=-1; snot(S,ft,24); S.ex.push(['Z',-3,3,true]) } });
 
 A('w_hello',0,'contento',0,0,1.6,0,3,0,0,0,(S,ft)=>{ S.armR=(ft>>1)%2?'up':'up2'; S.eyes='happy'; S.mouth='open'; S.cheeks='C' });
-A('w_poke',0,'contento',0,0,1.6,0,3,0,0,0,(S,ft)=>{ Object.assign(S,{eyes:'heart',mouth:'open',cheeks:'C',dy:[0,-1,-2,-2,-1][ft]||0,armL:ft<5?'up':'none',armR:ft<5?'up':'none'}); S.ex.push(['heart',-7-(ft>>1),7,false]) });
+A('w_poke',0,'contento',0,0,1.6,0,3,0,0,0,(S,ft)=>{ Object.assign(S,{eyes:'heart',mouth:'open',cheeks:null,dy:[0,-1,-2,-2,-1][ft]||0,armL:ft<6?'up':'none',armR:ft<6?'up':'none'}); if(ft>=2) S.ex.push(['heart',-2-Math.min(3,(ft-2)>>1),15,false]) });
 A('w_grumpy',0,'contento',0,0,3,0,3,0,0,0,(S,ft)=>{ Object.assign(S,{eyes:'blink',mouth:'pout',cheeks:'C',dx:ft%4<2?0:1,stretch:-1}); if(ft%12<7) S.ex.push(['puff',2,ft%24<12?-5:19,false]) });
 A('w_held',0,'contento',0,0,1.6,0,4,0,0,0,(S,ft)=>{ Object.assign(S,{eyes:'wide',mouth:'o',cheeks:'C',armL:ft%2?'up':'up2',armR:ft%2?'up2':'up',feet:ft%2?'kickA':'kickB',stretch:1}) });
 A('w_land',0,'contento',0,0,0.8,0,3,0,0,0,(S,ft)=>{ S.stretch=-1; S.eyes='sleep'; S.ex.push(['puff',14,-4,true],['puff',14,18,true]) });
@@ -339,7 +376,7 @@ A('ti_evening',0,'cansado',0,0,5,86400,1,0,0,0,(S,ft)=>{ S.eyes=alt(ft,10)?'half
 A('ti_night',0,'cansado',0,0,6,3600,1,0,0,0,(S,ft)=>{ S.eyes='half'; S.look=0; S.armR='side'; S.ex.push(['cup',alt(ft,14)?8:7,14,false],[alt(ft,5)?'steam1':'steam2',alt(ft,14)?3:2,17,false]); if(ft>30) bub(S,'moon') });
 A('ti_idle5',0,'contento',0,0,6,300,1,0,0,0,(S,ft)=>{ S.sit=true; S.look=ft<20?-1:ft<40?1:0; S.mouth='cat'; S.ex.push(['note',-4-(ft>>2)%6,19,false]) });
 A('ti_idle20',0,'contento',0,0,6,1200,2,0,0,0,(S,ft)=>{ S.sit=true; if(ft<20){ S.eyes='half'; if(ft>=12) S.ex.push(['puff',12,-4,true],['puff',12,20,true]) } else if(ft<30){ S.eyes='sleep'; S.cap=ft>24; S.ex.push(['bed',4,-4,true]) } else { S.eyes='sleep'; S.cap=true; S.mouth='small'; S.ex.push(['bed',4,-4,true]); zs(S,ft,15); S.stretch=alt(ft,12) } });
-A('ti_return',0,'dormido',0,0,3.5,0,3,0,0,0,(S,ft)=>{ S.cap=ft<8; S.eyes=ft<10?'sleep':'happy'; S.mouth=ft<10?'yawn':'open'; S.stretch=ft>=8&&ft<16?1:0; S.armL=ft>=8?'up':'none'; S.armR=ft>=8?(alt(ft,2)?'up':'up2'):'none'; S.bubble=-1; S.cheeks='C'; if(ft>=12) sparks(S,ft,3) });
+A('ti_return',0,'dormido',0,0,3.5,0,3,0,0,0,(S,ft)=>{ S.bubble=-1; S.cheeks='C'; if(ft<10){ S.sit=true; S.cap=ft<6; S.eyes=ft<6?'sleep':'half'; S.mouth='yawn'; S.ex.push(['bed',4,-4,true]) } else { S.eyes='happy'; S.mouth='open'; S.stretch=ft<18?1:0; S.armL='up'; S.armR=alt(ft,2)?'up':'up2'; if(ft<14) S.ex.push(['puff',14,-4,true],['puff',14,18,true]); if(ft>=14) sparks(S,ft,3) } });
 A('ti_weekend',0,'radiante',0,0,6,3600,1,0,0,0,(S,ft)=>{ S.sit=true; S.eyes='happy'; S.mouth='cat'; S.armR='up'; S.ex.push(['fan',alt(ft,3)?5:6,14,false],['sunray',-9,-5,true]) });
 A('sys_battery',0,'cansado',0,0,5,1800,2,0,0,0,(S,ft)=>{ S.eyes='half'; S.mouth='wavy'; S.stretch=-1; bub(S,'battery') });
 
@@ -510,7 +547,7 @@ FIX('fl_walk',{});
 
 ['ag_walk','ag_bubbles','ag_nod_off','ag_catch','ag_dust','ag_lean','q_h5_wipe','q_h5_fan','q_watch','q_runout','t_all','am_rope','am_cookies','am_code','am_pc','am_tea','am_bed','c_wait','ti_morning','ti_lunch','ti_evening','ti_night','ti_idle5','ti_weekend','w_ignored','fl_walk','sf_top','sf_other','sf_sit','sf_peek','sf_fly','sf_ladder','sf_climb'].forEach(i=>FIX(i,{amb:1}));
 
-FIX('sf_top',{cd:90});FIX('sf_other',{cd:90});FIX('sf_edge',{cd:60});FIX('sf_sit',{cd:120});FIX('sf_peek',{cd:120});FIX('sf_fly',{cd:300});FIX('sf_ladder',{cd:300});FIX('sf_climb',{cd:180});
+FIX('ag_lean',{walk:1});FIX('sf_top',{cd:90});FIX('sf_other',{cd:90});FIX('sf_edge',{cd:60});FIX('sf_sit',{cd:120});FIX('sf_peek',{cd:120});FIX('sf_fly',{cd:300});FIX('sf_ladder',{cd:300});FIX('sf_climb',{cd:180});
 
 ['ag_lean', 'tr_week', 'q_watch', 'q_runout', 't_new', 't_done', 't_all', 't_stale', 'c_needs', 'c_perm', 'c_wait', 'att_1', 'att_2', 'att_3', 'att_cap', 'att_rm', 'pc_type', 'pc_read', 'pc_search', 'w_book_open', 'ti_morning', 'ti_evening', 'ti_night', 'sys_battery', 'fl_up', 'sf_ladder', 'sf_climb', 'sf_hang', 'bk_look', 'bk_read_upside', 'bk_read_aha'].forEach(i=>FIX(i,{}));
 

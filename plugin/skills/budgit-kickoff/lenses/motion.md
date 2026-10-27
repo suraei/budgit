@@ -1,4 +1,5 @@
 # Lens: animation & motion
+- **Which skill:** call `budgit skills why --job motion/<micro-interaction|hero|timeline|3d> --traits surface=<web|pixel|native-macos>` and follow its pick and fallback chain; a `gap` answer (sprites, frame timing, Swift) means the project rules in `reference/rules/frame-timing.md` and the checklist below. The names in the next two lines are the last resort when the command is not available.
 - `impeccable` animate mode + `anthropic-skills:emil-design-eng` for UI motion (if not installed: this lens' checklist below); gsap-skills (official)
   for web animation; hyperframes (official) for trailers/launch videos; Rive/Lottie only when a project
   needs vector assets. Measure on a mid Android + iPhone Low Power before committing.

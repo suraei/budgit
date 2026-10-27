@@ -10,6 +10,8 @@
 - If the plan touches a host surface you have not used, `## Surface contract` follows `## Assumptions`: one table (rows,
   columns, units, props honoured or ignored, redraw limit), each number quoted from the docs (file + line) or measured by a
   named probe. A number without a source is an assumption.
+- Before the user approves a build, tell them what the host cannot do (limits of the surface, what is slow, what is not drawn). A spec copied from another surface gets a conversion table: its numbers restated in the new surface's units.
+- A brief for a new host surface names the saved docs and prior-art note (the new-surface rule in SKILL.md); no note, no brief.
 - Probes answer one question each, are designed from the docs, and write their result to a log file the session reads. Never
   ask the user to look at a probe. On a failed probe, read the log first and quote the line behind the theory before editing code.
 - **MVP first:** right after `## Assumptions` the plan has `## MVP` — ≤5 tasks forming a walking skeleton (structure, one real
