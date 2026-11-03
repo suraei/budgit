@@ -2,7 +2,7 @@
 Must-obey rules live HERE (references often go unread). Unclear or ugly = useless (the user's rule).
 - **Which skill:** call `budgit skills why --job design/<shape|build|polish|critique|a11y|lint|tokens> --traits surface=<web|pixel|terminal|native-macos>,stakes=<routine|pillar>` and follow its pick, its checker and its fallback chain; it logs the choice. A `gap` answer means the project rules apply: `reference/rules/` for pixel art at 1x, frame timing, terminal text, README structure and light/dark SVG, then this lens and the rubric. The skill names below are the last resort when the command is not available.
 - **ONE design hand** (opus) owns tokens and all CSS. Feature, data and QA agents only consume tokens; they never
-  add a literal colour, font size, radius, shadow or spacing (drift comes from many hands).
+  add a literal colour, font size, radius, shadow or spacing (project a53: drift came from many hands).
 - **Register first:** product/dashboard = quiet, dense, tabular (the product register of the skill `budgit skills why` picks; if none: the rubric's product register); marketing = art
   directed (taste-skill per project). Write it down before any screen, in the project's own file and format;
   list the files in `.budgit/project.json` → `design.docs` (default `docs/design/*.md`).

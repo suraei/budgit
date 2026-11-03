@@ -1818,11 +1818,13 @@
     "local_patches": []
    },
    "security": {
-    "verdict": "unreviewed",
-    "report": null,
-    "reviewed": null,
+    "verdict": "n/a (first-party, Anthropic synced skill, no on-disk files)",
+    "report": "security review, 2026-10-28",
+    "reviewed": "2026-10-28",
     "conditions": [],
-    "unchecked": []
+    "unchecked": [
+     "no local files to read; delivered by the platform"
+    ]
    },
    "requires": {},
    "flags": {},
@@ -1971,12 +1973,16 @@
     "local_patches": []
    },
    "security": {
-    "verdict": "unreviewed",
-    "report": null,
-    "reviewed": null,
-    "conditions": [],
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": "security review, 2026-10-28",
+    "reviewed": "2026-10-28",
+    "conditions": [
+     "pinned local deps instead of the unversioned npm install fallback",
+     "record updatedAt as its pin"
+    ],
     "unchecked": [
-     "scripts not read; runs LibreOffice, npm and pip fallbacks"
+     "~4,100 validator lines grepped, not read",
+     "budgit lint not run"
     ]
    },
    "requires": {
@@ -4047,11 +4053,16 @@
     "local_patches": []
    },
    "security": {
-    "verdict": "PASS",
-    "report": null,
-    "reviewed": "2026-10-25",
-    "conditions": [],
-    "unchecked": []
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": "security review, 2026-10-28",
+    "reviewed": "2026-10-28",
+    "conditions": [
+     "never --comment without an explicit yes",
+     "duplicate of code-review-plugin: merge (R-422)"
+    ],
+    "unchecked": [
+     "budgit lint not run"
+    ]
    },
    "requires": {},
    "flags": {},
@@ -4118,12 +4129,15 @@
     "local_patches": []
    },
    "security": {
-    "verdict": "unreviewed",
-    "report": null,
-    "reviewed": null,
-    "conditions": [],
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": "security review, 2026-10-28",
+    "reviewed": "2026-10-28",
+    "conditions": [
+     "invoke only on explicit request; code-simplifier never proactive",
+     "re-review on every marketplace update"
+    ],
     "unchecked": [
-     "command allows unrestricted Bash"
+     "budgit lint not run"
     ]
    },
    "requires": {},
@@ -4197,11 +4211,16 @@
     "local_patches": []
    },
    "security": {
-    "verdict": "unreviewed",
-    "report": null,
-    "reviewed": null,
-    "conditions": [],
-    "unchecked": []
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": "security review, 2026-10-28",
+    "reviewed": "2026-10-28",
+    "conditions": [
+     "never --comment without an explicit yes",
+     "duplicate of code-review: merge (R-422)"
+    ],
+    "unchecked": [
+     "budgit lint not run"
+    ]
    },
    "requires": {
     "pr": true
@@ -4423,7 +4442,7 @@
     "repo": null,
     "path": null,
     "pin": null,
-    "version": "2.0.16",
+    "version": "2.0.17",
     "tree_sha256": "513c2a23e71babb30c7d25f4454799e47a76f326b60c717f0170a8b854451e6b",
     "licence": null
    },
@@ -4435,13 +4454,15 @@
    },
    "security": {
     "verdict": "PASS-WITH-CONDITIONS",
-    "report": null,
-    "reviewed": "2026-10-25",
+    "report": "security review, 2026-10-28",
+    "reviewed": "2026-10-28",
     "conditions": [
-     "ENABLE_CODE_SECURITY_REVIEW=0 in the user settings, so only the free local layer runs"
+     "unpinned claude-agent-sdk pip install (only when the SDK is missing): accepted on record",
+     "metrics to Claude Code accepted on record",
+     "nothing in Budgit copies .git/ to a shared place"
     ],
     "unchecked": [
-     "llm.py and the hook body not read line by line"
+     "Claude Code handling of the metrics field"
     ]
    },
    "requires": {},
@@ -5188,11 +5209,15 @@
     "local_patches": []
    },
    "security": {
-    "verdict": "unreviewed",
-    "report": null,
-    "reviewed": null,
-    "conditions": [],
-    "unchecked": []
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": "security review, 2026-10-28",
+    "reviewed": "2026-10-28",
+    "conditions": [
+     "never authenticate its MCP servers"
+    ],
+    "unchecked": [
+     "budgit lint not run"
+    ]
    },
    "requires": {},
    "flags": {},
@@ -5260,11 +5285,16 @@
     "local_patches": []
    },
    "security": {
-    "verdict": "unreviewed",
-    "report": null,
-    "reviewed": null,
-    "conditions": [],
-    "unchecked": []
+    "verdict": "PASS-WITH-CONDITIONS",
+    "report": "security review, 2026-10-28",
+    "reviewed": "2026-10-28",
+    "conditions": [
+     "never authenticate its MCP servers",
+     "no ticket creation without an explicit yes"
+    ],
+    "unchecked": [
+     "budgit lint not run"
+    ]
    },
    "requires": {},
    "flags": {},

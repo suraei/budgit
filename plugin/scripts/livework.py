@@ -133,7 +133,7 @@ def _waiting_for(raw):
     return "other"
 
 
-def live_sessions(now=None):
+def live_sessions(now=None, verify=True):
     """{'status': ok|absent|unreadable, 'dir', 'sessions': [...]}. A session is listed when its pid is alive;
     `verified` says whether the file can be trusted as a live row. Dead pids are dropped."""
     now = now if now is not None else time.time()
@@ -166,18 +166,49 @@ def live_sessions(now=None):
             "name": _line(rec["name"]) if isinstance(rec["name"], str) else "",
             "kind": rec["kind"] if isinstance(rec["kind"], str) else "",
             "waiting_for": _waiting_for(rec["waitingFor"]) if status == "waiting" else None,
-            "verified": _verified(rec, status, since, now), "file": path})
+            "verified": _verified(rec, status, since, now) if verify else None, "file": path})
     return out
+
+
+def waiting_chats(inside=None, now=None, home=None):
+    """Live chats waiting on one of the user's prompts (a permission, a question), oldest first, optionally only those
+    working inside the folder `inside`. A chat in a protected folder is counted with no name, folder or id. R-297: a
+    chat that is not protected also carries its CLI session id, its folder and the app's id (None when the app's
+    records do not name it), so the keep-alive can hand it over and archive it."""
+    import chatlink
+    now = now if now is not None else time.time()
+    root = canon(inside) if inside else None
+    out = []
+    for s in live_sessions(now)["sessions"]:
+        if s["status"] != "waiting":
+            continue
+        where = canon(s["cwd"])
+        if root and where != root and not where.startswith(root.rstrip(os.sep) + os.sep):
+            continue
+        hidden = is_private(where)
+        out.append({"session": None if hidden else s["session_id"], "name": None if hidden else s["name"] or None,
+                    "protected": hidden, "waiting_for": s["waiting_for"], "waiting_s": max(0, int(now - s["since"])),
+                    "cwd": None if hidden else s["cwd"],
+                    "local_id": None if hidden else chatlink.local_id(s["session_id"], home)})
+    return sorted(out, key=lambda c: -c["waiting_s"])
+
+
+def waiting_count(inside, now=None):
+    """How many live chats inside the folder `inside` wait on one of the user's prompts: the status line's cheap
+    count (no kernel check, no protected-folder lookup)."""
+    root = canon(inside)
+    return sum(1 for s in live_sessions(now, verify=False)["sessions"] if s["status"] == "waiting"
+               and (canon(s["cwd"]) == root or canon(s["cwd"]).startswith(root.rstrip(os.sep) + os.sep)))
 
 
 # ---------------------------------------------------------------- the project registry
 
 def is_protected(path, home=None):
     home = home or _home()
-    low = path.lower()
+    low = sl.fold_path(path)
     if _under(low, "/volumes"):
         return True
-    return any(_under(low, os.path.join(home, sub).lower()) for sub in PROTECTED_HOME)
+    return any(_under(low, sl.fold_path(os.path.join(home, sub))) for sub in PROTECTED_HOME)
 
 
 def _config_dir_strings(home):
@@ -201,8 +232,8 @@ def _config_private_dirs(home):
     """`protected_dirs` as real paths, `~` expanded, case-folded (APFS folds case)."""
     out = []
     for d in _config_dir_strings(home):
-        real = os.path.realpath(os.path.expanduser(d)).casefold()
-        if real not in out:
+        real = sl.protected_entry(d)
+        if real and real not in out:
             out.append(real)
     return out
 
@@ -212,7 +243,7 @@ def is_private(path, home=None):
     folder of the config, or its own project.json says `"private": true` (that travels with the project when its
     folder moves, which the config list does not). `protected_paths` is the guard's real-data list, not privacy."""
     home = home or _home()
-    low = os.path.realpath(path).casefold()
+    low = sl.fold_path(os.path.realpath(path))
     if any(_under(low, d) for d in _config_private_dirs(home)):
         return True
     try:
@@ -229,7 +260,7 @@ GENERIC_DIRS = {"documents", "dev", "desktop", "downloads", "library", "home", "
 
 def _norm(text):
     """Case-folded, every run of punctuation or space one space: `V.A.C.A`, `v-a-c-a` and `V A C A` read alike."""
-    return " ".join(re.sub(r"[\W_]+", " ", text.casefold()).split())
+    return " ".join(re.sub(r"[\W_]+", " ", sl.fold_path(text)).split())
 
 
 def private_names(home=None, paths=()):
@@ -509,6 +540,54 @@ def _newest(items):
     return sorted(items, key=num, reverse=True)
 
 
+CHAT_STATES = {"busy": "working", "waiting": "waiting", "idle": "resting"}
+
+
+def _label_projects(reg, private, sessions, projects):
+    """R-283 S2b (additive keys): a project row gets `project_name` (the real name; "private" for a protected one)
+    when it differs from `name`, and `chats` with the non-zero counts of {working, waiting, resting} when it has any.
+    Other rows name their project by `id` only, so the name is sent once (the feed stays under its 32 KB cap).
+    Returns is_pm(row): the chat is its project's PM in the portfolio list. A working row is then labelled by kind:
+    claim = a lane on a task, session with `role: "pm"` = PM, other session in a project = no task. The words are
+    `book.role.*` in the feed's `t`."""
+    try:
+        import portfolio
+        entries = portfolio.entries_by_path()
+        name_of = lambda path: portfolio.display_name(path, entries.get(path), private=False)
+    except Exception:
+        entries, name_of = {}, lambda path: os.path.basename(path.rstrip(os.sep)) or path
+    by_id = {r["id"]: r["path"] for r in reg["projects"]}
+    names = {pid: ("private" if path in private else name_of(path)) for pid, path in by_id.items()}
+    chats = {}
+    for s in sessions:
+        proj, state = reg["attrib"].get(s["session_id"]), CHAT_STATES.get(s["status"])
+        if proj and state and s.get("verified"):
+            chats.setdefault(proj, {})[state] = chats.get(proj, {}).get(state, 0) + 1
+    for row in projects:
+        if names.get(row["id"]) != row.get("name"):
+            row["project_name"] = names.get(row["id"])
+        if by_id.get(row["id"]) in chats:
+            row["chats"] = chats[by_id[row["id"]]]
+    pms = {pid: (entries.get(path) or {}).get("pm") for pid, path in by_id.items()}
+
+    def is_pm(row):
+        pm = pms.get(row["project"])
+        return bool(pm) and row["session"] == pm[:8]
+    return is_pm
+
+
+def _totals(projects):
+    """Across all projects: tasks (from `counts`) and chats, so a header can say which unit it counts."""
+    tasks = {"doing": 0, "next": 0, "later": 0, "done": 0}
+    chats = {"working": 0, "waiting": 0, "resting": 0}
+    for row in projects:
+        for k in tasks:
+            tasks[k] += (row.get("counts") or {}).get(k, 0)
+        for k in chats:
+            chats[k] += (row.get("chats") or {}).get(k, 0)
+    return {"tasks": tasks, "chats": chats}
+
+
 def live_feed(current=None, now=None, v2=None):
     """The v3/v3.1 keys of `status --brote --live`. Never raises: a broken part becomes an `unreadable` source.
     `v2`: the v2 dict of the same call, whose title lists get the same name shield."""
@@ -544,12 +623,9 @@ def live_feed(current=None, now=None, v2=None):
                 continue
             loaded += 1
             items = data["items"]
-            later = sum(1 for i in items if i["status"] == "open" and i.get("phase") == "later")
             queue = [i for i in items if i["status"] == "open" and i.get("phase") != "later"]
             closed = [i for i in items if i["status"] in ("done", "verified")]
-            row["counts"] = {"doing": sum(1 for i in items if i["status"] == "doing"),
-                             "next": sum(1 for i in items if i["status"] == "open") - later, "later": later,
-                             "done": len(closed)}
+            row["counts"] = sl.feed_counts(data)
             if r["path"] in private:                 # counts only: no title, no id, no path leaves this function
                 row["private"] = True
                 projects.append(row)
@@ -572,12 +648,17 @@ def live_feed(current=None, now=None, v2=None):
         sessions_ok = found["status"] == "ok"
         working, paused = working_rows(claims, found["sessions"], reg["attrib"],
                                        {p: i for p, i in ids.items()}, sessions_ok, hidden)
+        is_pm = _label_projects(reg, private, found["sessions"], projects)
+        for w in working:
+            if w["kind"] == "session" and is_pm(w):
+                w["role"] = "pm"
         for r in working:                       # a session title is the user's to write: it may name a protected project too
             r["title"] = hide(r["title"])
             r["session_name"] = hide(r["session_name"])
         done_rows.sort(key=lambda d: -d[3])
         return {"working": working, "paused": paused, "quiet_sessions": quiet_sessions(found["sessions"]),
                 "projects": projects, "week": week_counts(done_rows + week_rows, now),
+                "totals": _totals(projects),
                 "recent_done": [{"project": p, "item": i, "title": t, "done_at": _iso(ts)}
                                 for p, i, t, ts in done_rows[:RECENT_DONE]],
                 "watch": {"files": watch_paths(ledgers, found["dir"], found["sessions"]), "check_s": 2},

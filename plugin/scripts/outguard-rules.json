@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "note": "R-506 output guard rules, read by outguard.py. Regexes use only syntax shared by Python and JavaScript. All kinds are case-insensitive except those named in case_sensitive (actor_cs holds the TM/PM patterns, which must be upper case, and is reported as actor). A kind fires on the first hit of any of its patterns. The aside kind (English planning openers) is reported as narration and is checked only when the chat language is not English; every other kind is checked in every language. Code, links and quoted text are removed before matching.",
+  "case_sensitive": [
+    "token",
+    "actor_cs"
+  ],
+  "markers": {
+    "token": [
+      "\\blocal_[0-9a-f]{6,}",
+      "\\bagent-[0-9a-f]{8,}",
+      "\\btoolu_\\w{4,}",
+      "\\ba[0-9a-f]{16}\\b",
+      "\\.claude/worktrees/",
+      "/private/tmp/claude-\\d+",
+      "\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b"
+    ],
+    "narration": [
+      "(?:^|[.!?:;\\u2014]\\s+)[\\s>*\\u2022-]*(?:voy a|ahora voy a|primero voy a|d\\u00e9jame|dejame|perm\\u00edteme|permiteme)\\s+(?:primero\\s+)?(?:leer|releer|revisar|comprobar|buscar|abrir|editar|ejecutar|reejecutar|consultar|inspeccionar|verificar|obtener|listar|actualizar|aplicar|escribir|volver a (?:leer|revisar|ejecutar|comprobar))\\b",
+      "(?:^|[.!?:;\\u2014]\\s+)[\\s>*\\u2022-]*(?:ahora|primero|ahora mismo)\\s+(?:leo|releo|reviso|compruebo|busco|abro|edito|ejecuto|consulto|inspecciono|verifico|actualizo|aplico|escribo)\\b"
+    ],
+    "aside": [
+      "(?:^|[.!?:;\\u2014]\\s+)[\\s>*\\u2022-]*(?:let me|now let me|now i'll|now i will|i'll now|i will now|first,? i'll|next,? i'll|i'm going to|i am going to)\\s+(?:also\\s+|first\\s+)?(?:get|read|re-?read|check|look|edit|run|re-?run|fetch|open|grep|search|find|update|write|inspect|verify|view|pull|list|call|take|see|make|try|apply|confirm|double-check|start)\\b",
+      "^[ \\t*\\u2022-]*(?:let me(?! know\\b)|i['\\u2019]ll|i will|i['\\u2019]m going to|i need to|now i\\b|okay,)"
+    ],
+    "rules": [
+      "\\bsystem[- ]reminders?\\b",
+      "\\battribution[- ]reminders?\\b",
+      "\\bthe reminders? (?:says|asks|tells|told|states)\\b",
+      "\\bclaude\\.md\\s+(?:rule|rules|says|overrides|requires|instructs|takes precedence)\\b",
+      "\\b(?:h[e]r|his|their|the user's|su|sus)\\s+claude\\.md\\b",
+      "\\b(?:per|under|by|following|according to)\\s+(?:h[e]r|his|their|the user's)\\s+(?:claude\\.md|protocol|rules?|instructions?|boundar\\w+)\\b",
+      "\\b(?:h[e]r|his|their)\\s+protocol\\b",
+      "\\bboundary change\\b",
+      "\\bco-authored-by\\b",
+      "\\bgenerated with\\b",
+      "\\bstop[- ]hooks?\\b",
+      "\\bbudgit ledger check\\b",
+      "\\brecordatorio (?:de atribuci\\u00f3n|de atribucion|del sistema)\\b",
+      "\\bel recordatorio (?:dice|indica|pide)\\b"
+    ],
+    "actor": [
+      "\\bi['\\u2019]?m not routing\\b",
+      "\\b(?:the|this|that|my|each|every|another)\\s+lanes?(?:'s)?\\s+(?:session|chat|agent|owns?|has|will|should|reported|finished|died|stopped|branch)\\b",
+      "\\b(?:la|esta|esa|cada)\\s+lane\\b"
+    ],
+    "actor_cs": [
+      "\\b(?:[Rr]out|[Rr]elay|[Ss]end|[Pp]ass|[Ee]scalat|[Hh]and|[Ff]orward)\\w*\\s+(?:\\w+\\s+){0,3}(?:through|via|to|by)\\s+(?:[Tt]he\\s+)?(?:TM|PM)\\b",
+      "\\b(?:[Tt]he|[Mm]y|[Tt]his|[Tt]hat)\\s+(?:TM|PM)\\s+(?:lane|session|chat|will|should|can|needs?|already|has|had|decides?|decided|asked|wants?|owns?)\\b",
+      "\\b(?:[Aa] trav\\u00e9s del|[Pp]or el|[Vv]\\u00eda el|[Vv]ia el|[Pp]asar por el|[Dd]erivar al)\\s+(?:TM|PM)\\b"
+    ]
+  },
+  "language": {
+    "min_words": 12,
+    "min_hits": 4,
+    "min_ratio": 0.6
+  }
+}

@@ -14,7 +14,7 @@ import studiolib as sl
 
 VOCAB = ("supersedes", "depends_on", "derived_from", "implements", "supports", "contradicts")
 IMPACT_TYPES = ("depends_on", "derived_from", "implements")
-DEFAULT_ROOTS = ("research", "lessons", "docs", "radar")
+DEFAULT_ROOTS = (sl.DATA_NAME + "/research", sl.OLD_DATA_NAME + "/research", "research", "lessons", "docs", "radar")   # R-324: research lives in the data folder
 EXEMPT = {"index", "readme"}
 CAP = 1500
 
@@ -214,7 +214,7 @@ class Brain:
         for root in roots:
             top = os.path.join(repo, root)
             for dirpath, dirs, files in os.walk(top):
-                dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+                dirs[:] = sorted(d for d in dirs if not d.startswith(".") and not (d == "raw" and os.path.basename(dirpath) == "research"))   # raw = quarantined scout files, never read
                 for f in sorted(files):
                     if f.endswith(".md") and not f.startswith("."):
                         found.append(Note(repo, os.path.join(dirpath, f)))

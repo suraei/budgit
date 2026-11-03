@@ -51,10 +51,11 @@ var DIRECTOR = (function () {
                                                                        // The app's body clips (falls, climbs, scoots, walks) keep 1: their art is timed to his real movement
   const WORK_SIT = 450, WORK_BREAK = 300                               // in a long turn he works 45 s at the laptop, closes it and walks for 30 s, then opens it again
   const AMBIENT_POOL = [['am_rope', 3], ['am_cookies', 3], ['am_tea', 3], ['am_code', 2], ['am_pc', 2], ['am_bed', 1]]
-  const AMBIENT_STATES = { radiante: 1, contento: 1, justo: 1, cansado: 1, agotado: 1 }
+  const AMBIENT_STATES = { radiante: 1, contento: 1, justo: 1, cansado: 1, agotado: 1, enfermo: 1 }
   const READ_VARIANTS = ['bk_read_upside', 'bk_read_squint', 'bk_read_flip', 'bk_read_aha', 'bk_puf']   // two of these, never the same twice, between reading and putting back
   const HELD_BOOK = /^bk[COU]$/                      // the book drawn in his hands: the real book is hidden meanwhile (never two books)
   const AGOTADO_POOL = [['ag_bubbles', 3], ['ag_nod_off', 3], ['ag_catch', 2], ['ag_walk', 2], ['ag_dust', 1]]   // tired, he still moves: sleep bubbles, nodding off, a stumble, a sleepy walk (the walks move him for real: walkDx)
+  const ENFERMO_POOL = [['ag_bubbles', 3], ['ag_walk', 3], ['am_bed', 3], ['ag_nod_off', 2], ['ag_dust', 1]]   // sick, he lives at a tired pace: a slow walk, sitting, nodding, a rest in his bed and up again (the thermometer stays in his mouth)
   const MOOD_RANK = { radiante: 4, contento: 3, justo: 2, cansado: 1 }
   const IGNORED_AFTER = 12000                                          // 20 min without a hover or a click: he sulks a little (w_ignored)
   const H5_RESET_DROP = 30                                             // the 5-hour use falls this much at once: the window was reset
@@ -157,6 +158,7 @@ var DIRECTOR = (function () {
       const p = this.perch, pet = this.pet || {}, out = []
       const book = p.book && !p.libreta                                   // beside the book on the floor, the Libreta closed
       if (this.state === 'agotado') { if (p.nearClaude) out.push(['ag_lean', 3]); if (book) out.push(['bk_guard', 2]); return out }
+      if (this.state === 'enfermo') { if (p.nearClaude) out.push(['ag_lean', 2]); return out }
       if (book) out.push(['bk_pickup', 3], ['bk_pat', 2], ['bk_sitnext', 1])
       if (p.on === 'claude') out.push(['sf_top', 3])
       if (p.on === 'other') out.push(['sf_other', 3])
@@ -470,15 +472,15 @@ var DIRECTOR = (function () {
     ambientClip() {
       const a = this.ambient
       if (a) {
-        if (this.t - a.t0 >= a.dur) { this.ambient = null; this.nextAmbient = this.t + (AMBIENT_EVERY[this.level] || 0) }
+        if (this.t - a.t0 >= a.dur) { this.ambient = null; this.nextAmbient = this.t + Math.round((AMBIENT_EVERY[this.level] || 0) * (this.state === 'enfermo' ? 0.5 : 1)) }   // sick, his tired things come twice as often
         else return { key: 'amb:' + a.id + a.t0, id: a.id, t0: a.t0, rate: TEMPO }
       }
       if (!AMBIENT_EVERY[this.level] || this.t < this.nextAmbient || !AMBIENT_STATES[this.state] || !this.idle() || this.reduceMotion || this.calm()) return null
       if (this.markers.length || this.work()) return null
       const h5 = this.pet ? this.pet.h5 | 0 : 0
-      let pool = (this.state === 'agotado' ? AGOTADO_POOL : AMBIENT_POOL).concat(this.situational()).filter(([id]) => (this.cool[id] || 0) <= this.t && this.entry(id))
+      let pool = (this.state === 'agotado' ? AGOTADO_POOL : this.state === 'enfermo' ? ENFERMO_POOL : AMBIENT_POOL).concat(this.situational()).filter(([id]) => (this.cool[id] || 0) <= this.t && this.entry(id))
       if (h5 >= 90 && (this.cool.q_h5_fan || 0) <= this.t && this.entry('q_h5_fan')) pool = [['q_h5_fan', 8]]
-      if (this.morningDue && this.state !== 'agotado' && this.entry('ti_morning')) { pool = [['ti_morning', 1]]; this.morningDue = false }
+      if (this.morningDue && this.state !== 'agotado' && this.state !== 'enfermo' && this.entry('ti_morning')) { pool = [['ti_morning', 1]]; this.morningDue = false }
       if (!pool.length) return null
       let r = this.rng() * pool.reduce((n, p) => n + p[1], 0), pick = pool[0][0]
       for (const p of pool) { r -= p[1]; if (r < 0) { pick = p[0]; break } }
@@ -527,6 +529,7 @@ var DIRECTOR = (function () {
       if (c.dir) S.dir = c.dir
       try {
         e.f(S, this.frameOf(c))
+        if (this.state === 'enfermo' && this.ambient && c.id === this.ambient.id && S.mouth !== 'yawn') S.thermo = true      // the thermometer stays in his mouth through his tired clips
         if (this.reduceMotion) { S.dy = 0; S.stretch = 0; S.feet = 'stand' }
         S.ex = S.ex.filter(x => !NO_BROWS.test(x[0]) && Object.prototype.hasOwnProperty.call(SPR, x[0]))
         if (!EYES[S.eyes]) S.eyes = 'open'
@@ -545,5 +548,5 @@ var DIRECTOR = (function () {
     mode() { return this.clip ? this.clip.id : null }
   }
 
-  return { Director, TEMPO, WORK_SIT, WORK_BREAK, READ_VARIANTS, parseLine, modeOf, MODE, WORK, AMBIENT_POOL, AGOTADO_POOL, moodClip, NO_BROWS }
+  return { Director, TEMPO, WORK_SIT, WORK_BREAK, READ_VARIANTS, parseLine, modeOf, MODE, WORK, AMBIENT_POOL, AGOTADO_POOL, ENFERMO_POOL, moodClip, NO_BROWS }
 })()

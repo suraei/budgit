@@ -6,6 +6,7 @@ neither python nor budgit on the PATH, and it is the user's to remove (`budgit w
 import json
 import os
 import re
+import shlex
 import subprocess
 
 import studiolib as sl
@@ -32,8 +33,11 @@ def public_url():
     return url if isinstance(url, str) and _URL.fullmatch(url) else ""
 
 
-def hook_text(url, mode="trailer"):
-    """POSIX sh for .git/hooks/commit-msg. `url` must pass _URL, else the hook only strips."""
+def hook_text(url, mode="trailer", lang=None):
+    """POSIX sh for .git/hooks/commit-msg. `url` must pass _URL, else the hook only strips. In a Budgit project (a ledger file at the top
+    of the work tree) it also warns on stderr when the subject names no `R-n` (R-362); it never blocks and never writes the ledger,
+    because a worktree holds a stale copy of it. `lang` picks the warning's language (default: the user's)."""
+    import i18n
     if mode == "trailer" and not (isinstance(url, str) and _URL.fullmatch(url)):
         mode = "strip-only"
     lines = [
@@ -48,6 +52,15 @@ def hook_text(url, mode="trailer"):
         "sed -e '/^[Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:[[:space:]]*[Cc][Ll][Aa][Uu][Dd][Ee]/d' "
         "-e '/Generated with \\[Claude Code\\]/d' \"$f\" > \"$tmp\" && cat \"$tmp\" > \"$f\"",
         'rm -f "$tmp"',
+        "# R-362: warn (never block, never write the ledger) when the subject names no ledger item.",
+        'if [ -f .budgit/ledger.json ] || [ -f .studio/ledger.json ]; then',
+        "  s=$(sed -e '/^#/d' -e '/^[[:space:]]*$/d' \"$f\" | sed -n 1p)",
+        '  case "$s" in',
+        '    "Merge "*|"Revert "*|"fixup! "*|"squash! "*|"amend! "*) ;;',
+        '    *) printf \'%s\\n\' "$s" | grep -Eq \'(^|[^A-Za-z0-9_])R-[0-9]+([^A-Za-z0-9_]|$)\' \\',
+        "         || printf '%%s\\n' %s >&2 ;;" % shlex.quote(i18n.t("wm.no_item", lang)),
+        "  esac",
+        "fi",
     ]
     if mode == "trailer":
         lines.append("git interpret-trailers --in-place --if-exists addIfDifferent "

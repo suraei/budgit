@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import json
 import os
+import time
 import re
 import sys
 
@@ -24,6 +25,8 @@ def emit(obj):
     for key, value in obj.items():
         if key == "systemMessage" and key in _OUT:
             _OUT[key] += " | " + value
+        elif key == "reason" and key in _OUT and _OUT.get("decision") == "block":      # two Stop checks blocking in one event (R-373)
+            _OUT[key] += "\n\n" + value
         elif key == "hookSpecificOutput" and key in _OUT:
             old = _OUT[key].get("additionalContext")
             _OUT[key].update(value)
@@ -49,15 +52,124 @@ def _context(event, text):
     emit({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}})
 
 
+TRUST_PROMPTS = {"/budgit-trust work": "work", "/budgit-trust revoke": "revoke"}
+
+
+def on_trust_prompt(inp):
+    """R-335: the standing yes is set only by the user's own typed message, EXACTLY `/budgit-trust work` (or `revoke`).
+    Exact equality on the trimmed prompt (the hook sees the raw typed text, before slash expansion): wrapped text, a
+    longer message or anything from a subagent never matches."""
+    op = TRUST_PROMPTS.get((inp.get("prompt") or "").strip()) if isinstance((inp.get("prompt") or ""), str) else None
+    if not op or inp.get("agent_id") or inp.get("agent_type"):
+        return
+    import i18n
+    project = sl.project_for_session(inp.get("session_id")) or sl.find_project(inp.get("cwd") or os.getcwd())
+    if not project:
+        emit({"systemMessage": i18n.t("cmd.no_project")})
+        return
+    if op == "work":
+        # second factor: the transcript must END with this typed message (the transcript is written by Claude Code
+        # itself; a payload piped into this hook has no such line). It may land a moment after the hook starts.
+        granted = False
+        for attempt in range(6):
+            if sl.grant_trust(project, inp.get("transcript_path")):
+                granted = True
+                break
+            time.sleep(0.2)
+        if not granted:
+            sl.note_pending_grant(inp.get("session_id"), project)   # the line may land later: the next tool call retries
+        emit({"systemMessage": i18n.t("trust.on" if granted else "trust.unproven", project=project)})
+    else:
+        had = sl.revoke_trust(project)
+        emit({"systemMessage": i18n.t("trust.revoked" if had else "trust.revoked_none", project=project)})
+
+
 def on_prompt(inp, project):
     session = inp.get("session_id")
     sl.append_inbox(project, inp.get("prompt") or "", session, "prompt")
-    pending = sl.untracked(project, sl.load_ledger(project), session=session)
+    data = sl.load_ledger(project)
+    mine = _expire_claims(project, data, session)
+    if mine:
+        _context("UserPromptSubmit", "budgit: %s went back to open: nobody touched %s in the ledger for 24 hours. If this "
+                 "chat still works on %s, claim %s again with `budgit ledger start R-n`." % (
+                     ", ".join(mine), "it" if len(mine) == 1 else "them", "it" if len(mine) == 1 else "them",
+                     "it" if len(mine) == 1 else "each"))
+    pending = sl.untracked(project, data, session=session)
     if pending:
         _context("UserPromptSubmit", sl.untracked_notice(pending))
     ckpt = sl.checkpoint_due(session, inp.get("transcript_path"))
     if ckpt:
         _context("UserPromptSubmit", ckpt)
+
+
+def _expire_claims(project, data, session=None):
+    """R-477a: a claim nobody touched for a day goes back to open, with its note and a progress line. Checked at every
+    prompt too, because a long-lived chat (a PM) never starts a session again; best effort. Returns the released ids
+    that were this session's own, so the prompt can say so."""
+    try:
+        owners = {it["id"]: it.get("doing_by") for it in data["items"]}
+        gone = sl.sweep_dead_claims(project, data)
+        if gone:
+            sl.save_ledger(project, data)
+            _progress_line(project, "back to open (their claim went untouched or its session is gone): %s" % ", ".join(gone))
+        return [i for i in gone if session and owners.get(i) == session]
+    except Exception:
+        sl.log_error("prompt: claims step")
+        return []
+
+
+RELAY_NOTE = (
+    "budgit: this chat runs Budgit %(running)s; %(installed)s is installed (R-301). Answer the user's message first, "
+    "here, as usual. Then, at the end of this turn and only if nothing is in flight (no background agent, session or "
+    "command still running; otherwise wait for the user's next typed message), renew this chat: "
+    "1) write a handoff file (what this chat was doing, open R-n and I-n ids, branch, last commit, next step) and run "
+    "`budgit relay handoff --file <path> --title \"<this chat's title>\" --app-id <this chat's local_ id>`; "
+    "2) start the successor with the app's session tools, with the same title and nested under the same parent; its "
+    "brief says to first run `budgit relay echo %(sid)s --file <its echo>` restating every fact, then archive this "
+    "chat and run `budgit relay done %(sid)s`; "
+    "3) end your reply with one line in the user's language naming the new chat as a link, e.g. "
+    "\"Este chat se ha renovado: sigue en [<título>](#local_…)\". "
+    "If any step fails, run `budgit relay fail %(sid)s --reason \"<why>\"`, archive nothing, and end with one line, "
+    "e.g. \"No he podido renovar este chat: <motivo>. Sigue igual.\" "
+    "Never renew or archive any other chat. The user can also type /reload-plugins here to reload in place.")
+
+
+def relay_note(inp):
+    """R-301: the renewal steps, once per (chat, installed version), only for a prompt the user typed in a chat
+    that runs a Budgit older than the installed one. Nothing is done to any chat here."""
+    import relay
+    import updatelib
+    prompt = inp.get("prompt") or ""
+    sid = inp.get("session_id")
+    if not prompt.strip() or sl.is_harness(prompt) or not updatelib.chat_is_stale():
+        return None
+    installed = updatelib.installed_version()
+    if relay.shown(sid, installed):
+        return None
+    return RELAY_NOTE % {"running": updatelib.running_version(), "installed": installed, "sid": sid}
+
+
+def on_tm(event, inp):
+    """True when this is the Team Manager chat; its prompt is kept as T-n in the Budgit home. Every prompt of every
+    chat passes here, so only the list's `tm` key is read; the portfolio module loads in the TM chat alone."""
+    try:
+        with open(os.path.join(sl.home_state(), "portfolio.json"), encoding="utf-8") as f:
+            tm = json.load(f).get("tm")
+    except (OSError, ValueError, AttributeError):
+        return False
+    if not tm or tm != inp.get("session_id"):
+        return False
+    import portfolio
+    if event == "user-prompt-submit":
+        try:
+            tm_id = portfolio.append_tm(inp.get("prompt") or "", inp.get("session_id"))
+        except sl.StudioError:                  # the inbox lock cannot be taken: log it, skip this prompt, never crash the hook
+            sl.log_error("tm inbox")
+            tm_id = None
+        if tm_id:
+            _context("UserPromptSubmit", "budgit: kept in the TM inbox as %s. Route it to its project with "
+                                         "`budgit portfolio route %s <project> [--item R-n]`." % (tm_id, tm_id))
+    return True
 
 
 def _decision(event, decision, reason):
@@ -85,7 +197,7 @@ def fill_agent_model(inp):
     import budget
     tool_input = inp.get("tool_input") or {}
     if tool_input.get("model"):
-        return
+        return cap_agent_model(inp, tool_input)
     level = budget.current()["level"]
     kind = tool_input.get("subagent_type")
     model = budget.model_for(kind, level)
@@ -95,6 +207,33 @@ def fill_agent_model(inp):
         "permissionDecisionReason": "budgit: model filled from role", "updatedInput": dict(tool_input, model=model),
         "additionalContext": "budgit: no model= on this Agent call; filled model=%s (%s role, budget %s). "
                              "Pass it yourself next time." % (model, budget.role_for(kind), level)}})
+
+
+def cap_agent_model(inp, tool_input):
+    """R-383: an explicit model= dearer than its role's policy at the current budget level is lowered to the policy, with one
+    line saying so, unless the prompt carries `ESCALATE: <why>`. BUDGIT_MODEL_POLICY=advise only says it, =off does nothing.
+    A model that names no known family (inherit, another vendor's id) is left alone."""
+    import budget
+    mode = budget.policy_mode()
+    if mode == "off":
+        return
+    level = budget.current()["level"]
+    kind = tool_input.get("subagent_type")
+    given = tool_input.get("model")
+    allowed = budget.above_policy(kind, level, given)
+    if not allowed or budget.escalated(tool_input.get("prompt")):
+        return
+    role = budget.role_for(kind)
+    if mode == "advise":
+        _context("PreToolUse", "budgit: model=%s is above the %s policy (%s at budget %s). Put `ESCALATE: <why>` in the prompt "
+                               "to keep it, or pass model=%s." % (given, role, allowed, level, allowed))
+        return
+    budget.record_rewrite(inp.get("session_id"), inp.get("tool_use_id"), given, allowed)
+    emit({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse", "permissionDecision": "allow",
+        "permissionDecisionReason": "budgit: model lowered to the role policy", "updatedInput": dict(tool_input, model=allowed),
+        "additionalContext": "budgit: model=%s lowered to %s (%s role, budget %s). To keep the dearer model put "
+                             "`ESCALATE: <why>` in the prompt." % (given, allowed, role, level)}})
 
 
 from rawguard import RAW_REASON, SCOUT_READER, TREE_REASON, _fold, raw_glob_rewrite, raw_reason  # noqa: E402,F401
@@ -116,10 +255,25 @@ def summary_events(lines):
     return [l for l in lines if not any(t in l for t in tags)]
 
 
-def on_pre_tool_use(inp, project):
+ARCHIVE_TOOL = "mcp__ccd_session_mgmt__archive_session"
+
+
+def on_pre_tool_use(inp, project, defer=None):
+    """The guards decide from the call and the project's files alone, never under the project lock. The bookkeeping
+    (audit lines) runs at once, or is appended to `defer` for the caller to run under the lock."""
     tool = inp.get("tool_name")
+    if tool == ARCHIVE_TOOL:            # R-301: a chat being renewed is archived only after the new chat's echo
+        import relay
+        reason = relay.archive_block(inp.get("session_id"), (inp.get("tool_input") or {}).get("session_id"))
+        if reason:
+            _decision("PreToolUse", "deny", reason)
+        return
     if tool in ("Agent", "Task"):
         fill_agent_model(inp)
+        import admit
+        advice = admit.advice()
+        if advice:
+            _context("PreToolUse", advice)
         import codexlane
         note = codexlane.review_first_note(project, (inp.get("tool_input") or {}).get("subagent_type"))
         if note:
@@ -127,25 +281,90 @@ def on_pre_tool_use(inp, project):
         return
     tool_input = inp.get("tool_input") or {}
     cwd = inp.get("cwd") or project or os.getcwd()
-    found = [("verify-forgery", sl.verify_forgery_decision(tool, tool_input, inp.get("agent_type"), cwd))]
+    if not inp.get("agent_id") and not inp.get("agent_type"):
+        try:
+            sl.finish_pending_grant(inp.get("session_id"), inp.get("transcript_path"))   # a typed yes whose line landed late
+        except Exception:                            # a note about a grant must never cost the call its guard
+            pass
+    def closed(kind, fn, *args, **kw):
+        try:
+            return fn(*args, **kw)
+        except Exception:
+            sl.log_error("guard " + fn.__name__)
+            return (kind, "budgit guard: %s could not read this call; stop and report it, do not reword or retry." % fn.__name__)
+
+    rd_keys = []
+    def home_decision(*args):                    # R-473: an ask of a class the session said yes to passes; a deny never does
+        decision, keys = sl.home_write_check(*args, session=inp.get("session_id"))
+        rd_keys.extend(keys)
+        return decision
+
+    found = [("verify-forgery", closed("deny", sl.verify_forgery_decision, tool, tool_input, inp.get("agent_type"), cwd))]
+    found.append(("budgit-home", closed("deny", home_decision, tool, tool_input, cwd, inp.get("agent_type"))))
+    if str(tool).startswith("mcp__"):            # an MCP file tool is judged like Write for each path it is given
+        found.append(("mcp-file", closed("deny", sl.mcp_file_decision, tool, tool_input, project, cwd, inp.get("agent_type"))))
     if tool == "Bash":
         raw = raw_reason(inp)
         found.append(("raw-store", ("deny", raw) if raw else None))
         command = tool_input.get("command") or ""
-        found.append(("commit-identity", sl.commit_identity_decision(command, cwd)))
-        found.append(("approval", sl.approval_decision(command)))
-        found.append(("hook-bypass", sl.hook_bypass_decision(command)))
+        found.append(("commit-identity", closed("ask", sl.commit_identity_decision, command, cwd)))
+        found.append(("approval", closed("ask", sl.approval_decision, command, project, cwd)))
+        found.append(("hook-bypass", closed("ask", sl.hook_bypass_decision, command)))
+    try:                                         # R-433 / R-304: hold in every session; an error here must not stop the other guards
+        import writeguard
+        found.append(("persistence", writeguard.persistence_decision(tool, tool_input, cwd)))
+        found.append(("destructive-git", writeguard.destructive_git_decision(tool, tool_input)))
+    except Exception:
+        found.append(("write-guard", ("ask", "budgit guard: the write and git guard could not run for this call.")))
     if project:
-        found.append(("real-data", sl.real_data_decision(tool, tool_input, project, cwd=cwd)))
-        found.append(("contract-lock", sl.contract_lock_decision(tool, tool_input, project, cwd=cwd)))
+        def real_data_decision(*args, **kw):         # R-493: the keys of the ask are what a later yes is remembered for
+            decision, keys = sl.real_data_check(*args, **kw)
+            rd_keys.extend(keys)
+            return decision
+        found.append(("real-data", closed("ask", real_data_decision, tool, tool_input, project, cwd=cwd,
+                                          session=inp.get("session_id"))))
+        found.append(("contract-lock", closed("ask", sl.contract_lock_decision, tool, tool_input, project, cwd=cwd)))
     result = _combine([d for _, d in found])
+    try:                                             # R-493: which call asked, so only ITS PostToolUse can become a yes
+        if result and result[0] == "ask" and rd_keys and any(n in ("real-data", "budgit-home") and d and d[0] == "ask" for n, d in found):
+            sl.note_real_data_ask(inp.get("session_id"), tool, tool_input, rd_keys)
+        else:
+            sl.clear_real_data_ask(inp.get("session_id"), tool, tool_input)
+    except Exception:
+        sl.log_error("real-data memory")
     if result:
         _decision("PreToolUse", result[0], result[1])
         if result[0] == "ask" and project:     # the user's answer lives in the prompt; the log keeps the trail
-            sl.audit(project, "%s %s %s" % (ASK_TAG, tool, " ".join(result[1].split())[:200]))
+            import denylog
+            book = lambda: sl.audit(project, "%s %s %s %s" % (ASK_TAG, tool, " ".join(result[1].split())[:200],
+                                                              denylog.fingerprint(tool, tool_input)))
         elif project:                          # R-55: denies are measured too (hash + masked head, never the command)
             import denylog
-            denylog.log_denies(project, tool, tool_input, [(n, d) for n, d in found if d and d[0] == "deny"])
+            denies = [(n, d) for n, d in found if d and d[0] == "deny"]
+            def book():
+                denylog.log_denies(project, tool, tool_input, denies)
+                denylog.alarm(project)
+        else:
+            return
+        if defer is None:
+            book()
+        else:
+            defer.append(book)
+
+
+def book_pre_tool_use(project, todo):
+    """The bookkeeping of a PreToolUse decision under the project lock, waiting at most LOCK_WAIT_S. A busy lock never
+    changes the decision, which is already out: the bookkeeping is skipped and the note says so."""
+    with sl.try_locked(project, LOCK_WAIT_S) as got:
+        if got:
+            for book in todo:
+                book()
+            return
+    os.makedirs(sl.home_state(), exist_ok=True)
+    sl.append_text(os.path.join(sl.home_state(), "hooks.log"),
+                   "%s pre-tool-use: project lock busy for %.0f s — the audit line was skipped, the guard decision stands\n"
+                   % (sl.now(), LOCK_WAIT_S))
+    emit({"systemMessage": "budgit: the project lock was busy; the guard decision stands, its audit line was skipped"})
 
 
 def on_post_tool_use_failure(inp, project):
@@ -195,7 +414,6 @@ def on_post_tool_use(inp, project):
             _context("PostToolUse", note)
         return
     if inp.get("tool_name") in ("Edit", "Write", "MultiEdit"):
-        seal_verify_report(inp)
         path = (inp.get("tool_input") or {}).get("file_path") or ""
         if path.endswith(".md"):            # brain.py is imported only for notes
             import brain
@@ -211,7 +429,7 @@ def on_post_tool_use(inp, project):
                              "answer", ref=inp.get("tool_use_id"))
     if new_id:
         _context("PostToolUse", "budgit: the user's answer was captured as %s — track it "
-                 "(`budgit ledger add --src %s`, `link` or `ack`)." % (new_id, new_id))
+                 "(`budgit ledger add --src %s --phase P`, `link` or `ack`)." % (new_id, new_id))
 
 
 def on_stop(inp, project):
@@ -222,28 +440,25 @@ def on_stop(inp, project):
     problems = sl.stop_problems(project, data, session)
     events = summary_events(sl.new_audit_lines(project, state))
     drop_note = ("budgit audit: " + " | ".join(l.split(" ", 1)[-1] for l in events)) if events else ""
-    blocks = state["last_block"] if isinstance(state.get("last_block"), dict) else {}
-    state["last_block"] = blocks
+    import general
     if not problems:
-        blocks.pop(session, None)
+        general.forget_asked(state, session)
         sl.save_state(project, state)
         if drop_note:
             emit({"systemMessage": drop_note})
         return
-    fingerprint = hashlib.sha1("\n".join(problems).encode("utf-8")).hexdigest()
-    if inp.get("stop_hook_active") and blocks.get(session) == fingerprint:
-        sl.save_state(project, state)
+    reason = general.stop_reason(state, session, problems)      # R-373: once per item, whatever the host reports about a continued Stop
+    sl.save_state(project, state)
+    if reason:
+        out = {"decision": "block", "reason": reason}
+        if drop_note:
+            out["systemMessage"] = drop_note
+        emit(out)
+    elif inp.get("stop_hook_active"):                          # the model was asked and left it: say so, once, and let the turn end
         emit({"systemMessage": ("budgit: ledger stalled — %d problem(s) left: %s %s"
                                 % (len(problems), problems[0], drop_note)).strip()})
-        return
-    blocks[session] = fingerprint
-    sl.save_state(project, state)
-    out = {"decision": "block",
-           "reason": "budgit ledger check failed:\n- " + "\n- ".join(problems)
-           + "\nFix with the `budgit ledger` CLI, then finish your reply."}
-    if drop_note:
-        out["systemMessage"] = drop_note
-    emit(out)
+    elif drop_note:
+        emit({"systemMessage": drop_note})
 
 
 def _progress_line(project, text):
@@ -253,10 +468,7 @@ def _progress_line(project, text):
         sl.log_error("progress line")
 
 
-def on_session_start(inp, project):
-    import brain
-    sid = inp.get("session_id")
-    sl.touch_pointer(sid)
+def _session_start_writes(inp, project, sid):
     try:                                         # R-115: claims of sessions that ended without releasing, and a resume's own
         data = sl.load_ledger(project)
         dead = sl.sweep_dead_claims(project, data)
@@ -273,7 +485,7 @@ def on_session_start(inp, project):
         if dead or back:
             sl.save_ledger(project, data)
             if dead:
-                _progress_line(project, "back to open (their session ended without releasing): %s" % ", ".join(dead))
+                _progress_line(project, "back to open (their session ended or went stale): %s" % ", ".join(dead))
             if back:
                 _progress_line(project, "claimed again by the resumed session: %s" % ", ".join(back))
     except Exception:
@@ -282,22 +494,39 @@ def on_session_start(inp, project):
         sl.ensure_gitignore(project)          # projects activated before a line existed get it on their next session
     except Exception:                         # a bad .gitignore (Latin-1, a directory) must not cost the user the summary
         sl.log_error("session-start: gitignore step")
+
+
+def on_session_start(inp, project, held=True):
+    import brain
+    sid = inp.get("session_id")
+    sl.touch_pointer(sid)
+    if held:                                      # with a busy lock the summary is read-only; the next start sweeps
+        _session_start_writes(inp, project, sid)
     pointer = brain.session_pointer(project)
     conflict = sl.data_dir_conflict(project)      # R-120: a stale session recreated .studio next to .budgit
     _context("SessionStart", sl.session_summary(project, inp.get("session_id"), extra=(pointer, conflict)))
+    try:                                         # R-286 task 4: one line when a decision waits; a failure prints nothing
+        import triggers
+        due = triggers.session_line(project, source=inp.get("source"))
+        if due:
+            _context("SessionStart", due)
+    except Exception:
+        sl.log_error("session-start: triggers line")
 
 
-def on_session_end(inp, project):
+def on_session_end(inp, project, held=True):
     """R-115: the items this session was working on leave `doing` when it closes. clear/resume keep the claims (the
-    resumed session re-claims what it released; after /clear the new session starts or takes what it needs)."""
+    resumed session re-claims what it released; after /clear the new session starts or takes what it needs).
+    Without the lock the pointer still ends and keeps the list; the ledger is left for the next session's sweep."""
     if inp.get("reason") in ("clear", "resume"):
         return
     sid = inp.get("session_id")
     data = sl.load_ledger(project)
     mine = sl.claimed_by(data, sid)
-    sl.release_items(project, data, mine)
-    if mine:
-        sl.save_ledger(project, data)
+    if held:
+        sl.release_items(project, data, mine, "session ended")
+        if mine:
+            sl.save_ledger(project, data)
     sl.end_pointer(sid, mine)
 
 
@@ -340,6 +569,43 @@ def cloud_note():
             "only pushed work survives this VM." % (cli, where))
 
 
+LOCK_WAIT_S = 2.0
+
+
+def _busy_note(event, what):
+    os.makedirs(sl.home_state(), exist_ok=True)
+    sl.append_text(os.path.join(sl.home_state(), "hooks.log"),
+                   "%s %s: project lock busy for %.0f s — %s\n" % (sl.now(), event, LOCK_WAIT_S, what))
+
+
+def when_busy(event, inp, project):
+    """The project lock stayed taken. What must not be lost is kept without it: the user's inputs go to the inbox spool
+    (the next holder of the lock merges them), reports and the pointer are their own files. Advice and checks that the
+    next call repeats are skipped, with a note in hooks.log."""
+    if event == "user-prompt-submit":
+        sl.spool_inbox(project, inp.get("prompt") or "", inp.get("session_id"), "prompt")
+        _busy_note(event, "the prompt is in the inbox spool; the next holder of the lock merges it")
+    elif event == "post-tool-use" and inp.get("tool_name") == "AskUserQuestion":
+        response = inp.get("tool_response")
+        text = response if isinstance(response, str) else json.dumps(response, ensure_ascii=False)
+        sl.spool_inbox(project, "AskUserQuestion answer: " + text, inp.get("session_id"), "answer",
+                       ref=inp.get("tool_use_id"))
+        _busy_note(event, "the answer is in the inbox spool; the next holder of the lock merges it")
+    elif event == "post-tool-use" and inp.get("tool_name") == "SubagentHandback" or event == "subagent-stop":
+        message = (inp.get("tool_input") or {}).get("message") if event == "post-tool-use" else inp.get("last_assistant_message")
+        sl.save_report(project, inp.get("agent_type"), inp.get("agent_id"), message)
+    elif event == "post-compact":
+        on_post_compact(inp, project)           # an O_APPEND line: the lock was never needed
+    elif event == "session-start":
+        on_session_start(inp, project, held=False)
+        _busy_note(event, "claims sweep and .gitignore skipped; the next session start repeats them")
+    elif event == "session-end":
+        on_session_end(inp, project, held=False)
+        _busy_note(event, "the claims stay for the next session's sweep")
+    else:
+        _busy_note(event, "skipped")
+
+
 HANDLERS = {"user-prompt-submit": on_prompt, "pre-tool-use": on_pre_tool_use,
             "post-tool-use": on_post_tool_use, "stop": on_stop, "subagent-stop": on_subagent_stop,
             "session-start": on_session_start, "post-compact": on_post_compact, "session-end": on_session_end,
@@ -353,12 +619,27 @@ def main():
         if isinstance(inp, dict) and inp.get("agent_type"):
             inp["agent_type"] = sl.canon_agent(inp["agent_type"])   # cloud `studio-X` == plugin `studio:X` for every guard
         project = sl.project_for_session(inp.get("session_id"))
+        if not project and event in ("session-start", "user-prompt-submit"):
+            project = sl.auto_bind(inp.get("session_id"), inp.get("cwd"), inp)   # a chat in a project folder is bound
         if event in ("user-prompt-submit", "stop"):    # R-115 heartbeat: last_seen, at most once a minute
             sl.touch_pointer(inp.get("session_id"))
+            if on_tm(event, inp):                      # R-283 S10: the TM's words stay out of every project inbox
+                project = None
+        if event == "user-prompt-submit":
+            on_trust_prompt(inp)            # the user's own typed /budgit-trust work|revoke, in every session
         if event == "user-prompt-submit":  # context nudge runs in EVERY session, zero model tokens
+            try:
+                note = relay_note(inp)
+                if note:
+                    _context("UserPromptSubmit", note)
+            except Exception:
+                sl.log_error("relay note")
             nudge = sl.context_nudge(inp.get("session_id"), inp.get("transcript_path"))
             if nudge:
                 emit({"systemMessage": "budgit: " + nudge})
+            idle = sl.no_task_nudge(inp.get("session_id"))
+            if idle:
+                emit({"systemMessage": "budgit: " + idle})
             import budget
             note = budget.notice(inp.get("session_id"))   # once per level change, every session
             if note:
@@ -368,10 +649,23 @@ def main():
             check = introspect.live_check(inp.get("session_id"), inp.get("transcript_path"))
             if check:
                 _context("UserPromptSubmit", check)
+            import general   # R-373: a prompt asking for text for a person gets the humanize routing, project or not
+            route = general.on_prompt(inp)
+            if route:
+                _context("UserPromptSubmit", route)
+            if not project:
+                project = general.bind(inp)      # a chat in a folder with no notebook gets the general one (an old session binds here)
         if event == "session-start":
             note = cloud_note()
             if note:
                 _context("SessionStart", note)
+            import general
+            if not project:
+                project = general.bind(inp)      # R-373: the general notebook
+            found = general.offer(inp.get("cwd")) if general.offerable(project) else None
+            if found:                            # R-373: one line and the command, once per folder; nothing is created
+                emit({"systemMessage": found[0]})
+                _context("SessionStart", "budgit: offered the user a notebook for this folder (%s). Create it only if they say yes." % found[1])
         if event == "session-start" and not project:   # model rules matter in every session, not only Budgit ones
             if not sl.vendored() and not os.path.exists(os.path.join(sl.home_state(), "config.json")):
                 _context("SessionStart", sl.SETUP_NUDGE)   # R-52 E3: first run on a new machine
@@ -412,15 +706,42 @@ def main():
                     "updatedInput": rewritten}})
             return 0
         if event == "pre-tool-use":  # guards run in EVERY session; real-data only when bound
-            with (sl.locked(project) if project else _nullcontext()):
-                on_pre_tool_use(inp, project)
+            todo = []
+            on_pre_tool_use(inp, project, todo)
+            if todo:
+                book_pre_tool_use(project, todo)
             return 0
+        if event == "post-tool-use":
+            seal_verify_report(inp)             # machine-wide and lock-free: a busy lock or an unbound session still seals
+            try:                                # R-493: the tool ran after a real-data ask, so the user said yes to it
+                sl.promote_real_data_yes(inp.get("session_id"), inp.get("tool_name"), inp.get("tool_input") or {})
+            except Exception:
+                sl.log_error("real-data yes")
+            try:                                # R-520: text written between tool calls is on the user's screen; a nudge, never a deny
+                import outguard
+                interim = outguard.interim_note(inp)
+                if interim:
+                    _context("PostToolUse", interim)
+            except Exception:
+                sl.log_error("interim nudge")
+            if inp.get("tool_name") in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+                path = (inp.get("tool_input") or {}).get("file_path") or (inp.get("tool_input") or {}).get("notebook_path")
+                if path:                        # the script scan reads what this chat wrote before it runs
+                    sl.note_session_write(inp.get("session_id"), os.path.join(inp.get("cwd") or os.getcwd(), os.path.expanduser(path)))
+        if event == "stop":                     # R-373: the humanize check runs in every session, once per request
+            import general
+            reason, note = general.stop_checks(inp, project)     # R-375: and the client-text gate
+            if reason:
+                emit({"decision": "block", "reason": reason})
+            elif note:
+                emit({"systemMessage": note})
         if not project or event not in HANDLERS:
-            if event == "post-tool-use":
-                seal_verify_report(inp)         # seals are machine-wide: an unbound session's verifier still seals
             return 0
-        with sl.locked(project):
-            HANDLERS[event](inp, project)
+        with sl.try_locked(project, LOCK_WAIT_S) as got:
+            if got:
+                HANDLERS[event](inp, project)
+        if not got:
+            when_busy(event, inp, project)
     except Exception:  # fail open, but never silently: the user must know enforcement is off
         sl.log_error(event)
         if event in ("stop", "session-start", "user-prompt-submit", "pre-tool-use", "post-tool-use", "subagent-stop",

@@ -185,7 +185,7 @@ class Pet {
     if(this.act){ this.actT++; if(this.actT>=ACTLEN[this.act]){ const a=this.act; this.act=null; if(a==='land'&&this.dizzyNext){ this.dizzyNext=false; this.do('dizzy') } } }
     if(this.fid&&this.t-this.fid.t0>=this.fid.len){ this.fid=null; this.nextFid=this.t+50+Math.floor(Math.random()*60) }
     if(!this.fid&&!this.act&&!this.held&&!this.hover&&!this.walking&&this.t>=this.nextFid){
-      const list=FIDGETS[this.state]; if(list.length){ const [name,len]=list[Math.floor(Math.random()*list.length)]; this.fid={name,t0:this.t,len} } }
+      const list=FIDGETS[this.state]; if(list.length){ const pick=list.filter(f=>f[0]!==this.lastFid), [name,len]=(pick.length?pick:list)[Math.floor(Math.random()*(pick.length?pick:list).length)]; this.lastFid=name; this.fid={name,t0:this.t,len} } }
   }
   frame(){ return compose(this.spec(),this.pal()) }
   spec(){
@@ -226,11 +226,12 @@ class Pet {
         break;
       case 'agotado':
         Object.assign(S,{sit:true,leaf:'wilt',eyes:'spent',mouth:'wavy',stretch:-1});
-        if(fn==='sigh'){ S.eyes='sleep'; S.mouth='o'; if(ft>2) S.ex.push(['puff',10+(ft>9?1:0),-3-((ft-3)>>1),false]) }
-        if(fn==='melt'){ S.dy=ft>4&&ft<26?1:0; S.eyes=ft>4&&ft<26?'sleep':'spent' }
+        if(fn==='sigh'){ S.eyes='half'; S.mouth='o'; if(ft>2) S.ex.push(['puff',10+(ft>9?1:0),-3-((ft-3)>>1),false]) }
+        if(fn==='melt'){ S.dy=ft>4&&ft<26?1:0; S.eyes=ft>4&&ft<26?'half':'spent' }
         break;
       case 'enfermo':
-        Object.assign(S,{leaf:'wilt',ice:true,thermo:true,eyes:'teary',mouth:'o',cheeks:'C',dx:(t>>1)%2,fallen:true});
+        Object.assign(S,{leaf:'wilt',ice:true,thermo:true,eyes:'teary',mouth:'o',cheeks:'C',dx:t%100<8?(t>>1)%2:0,fallen:true});      // he shivers in short bursts (8 ticks in 100), not all the time
+        if(this.walking){ S.feet=(t>>1)%2?'walkA':'walkB'; S.stretch=(t>>1)%2; S.look=1; S.dx=0 }
         if(fn==='sneeze'){ if(ft<6){ S.eyes='sleep'; S.stretch=1; S.dy=-1 } else { S.eyes='sleep'; S.mouth='o'; S.thermo=false; S.dx=2; S.stretch=-1; S.ex.push(['puff',9,19+(ft-6),false]) } }
         if(fn==='sniff'){ S.eyes='blink'; S.ex.push(['drip',12,7,false]) }
         break;

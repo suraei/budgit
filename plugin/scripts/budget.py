@@ -13,6 +13,7 @@ import fcntl
 import json
 import math
 import os
+import re
 import time
 
 import studiolib as sl
@@ -83,6 +84,60 @@ def model_for(subagent_type, level):
     return m["mechanical"] if model == "none" else model
 
 
+TIERS = ("haiku", "sonnet", "opus", "fable")          # cheapest to dearest; the index is the rank
+ESCALATE = re.compile(r"(?<![A-Za-z-])ESCALATE:")          # "DE-ESCALATE:" and "NOESCALATE:" are not the marker
+
+
+def tier(model):
+    """Rank of a model name or id ("opus", "claude-sonnet-5-5", "opus[1m]"), or None when it names no known family
+    (inherit, a full id of something else): such a value is never rewritten."""
+    text = str(model or "").lower()
+    for rank in range(len(TIERS) - 1, -1, -1):
+        if TIERS[rank] in text:
+            return rank
+    return None
+
+
+def escalated(prompt):
+    """R-383: a prompt that carries `ESCALATE: <why>` keeps the model it asked for."""
+    return bool(ESCALATE.search(str(prompt or "")))
+
+
+def above_policy(subagent_type, level, given):
+    """-> the role's model when `given` is dearer than it, else None. A role the level gives no model ("none": work at critical,
+    where the policy is to start no new agents) has no ceiling to lower to: model_for would answer haiku, and a caller that
+    chose to run one anyway is not pushed down to it."""
+    if POLICY[level]["models"][role_for(subagent_type)] == "none":
+        return None
+    allowed = model_for(subagent_type, level)
+    rank, cap = tier(given), tier(allowed)
+    return allowed if rank is not None and cap is not None and rank > cap else None
+
+
+def policy_mode():
+    """BUDGIT_MODEL_POLICY: enforce (default), advise (say it, rewrite nothing) or off."""
+    mode = (sl.env("MODEL_POLICY") or "enforce").lower()
+    return mode if mode in ("enforce", "advise", "off") else "enforce"
+
+
+def _rewrites_path():
+    return os.path.join(sl.home_state(), "model-rewrites.log")
+
+
+def record_rewrite(session_id, tool_use_id, given, model):
+    os.makedirs(sl.home_state(), mode=0o700, exist_ok=True)
+    sl.append_text(_rewrites_path(), "%s %s %s %s\n" % (session_id or "-", tool_use_id or "-", given, model))
+
+
+def rewritten_ids(session_id):
+    """tool_use ids whose explicit model the hook lowered to the role's policy in that session."""
+    try:
+        with open(_rewrites_path(), encoding="utf-8") as f:
+            return {p[1] for p in (l.split() for l in f) if len(p) == 4 and p[0] == session_id}
+    except OSError:
+        return set()
+
+
 def _fills_path():
     return os.path.join(sl.home_state(), "model-fills.log")
 
@@ -116,7 +171,7 @@ def models_text(level):
     brain = "main model: %s%s" % (p["brain"], BUILD_NOTE)
     return ("%s. On EVERY Agent call pass model= : judgement=%s, work=%s, mechanical=%s (%s). Escalate one step "
             "(work->opus, mechanical->sonnet) only after the cheaper model failed twice or when the user asks, and say so in "
-            "one line." % (brain, m["judgement"], m["work"], m["mechanical"], ROLES))
+            "one line: put `ESCALATE: <why>` in that call's prompt, otherwise the hook lowers a dearer model= to the role's." % (brain, m["judgement"], m["work"], m["mechanical"], ROLES))
 
 
 def policy_text(level):
@@ -189,6 +244,8 @@ MAX_AHEAD = {"seven_day": WEEK + 6 * 3600, "five_hour": 6 * 3600}   # no window 
 
 def _plausible(name, value, now):
     used, resets = value
+    if resets is None:                      # R-522: the host may send a window with no reset time; the figure still counts
+        return 0.0 <= used <= 100.0
     return 0.0 <= used <= 100.0 and math.isfinite(resets) and 0 < resets <= now + MAX_AHEAD[name]
 
 
@@ -197,6 +254,9 @@ def _merge_window(old, new, authoritative, now, seen_at):
     snapshot never lowers what is stored for the same window while the stored value is fresh. A later window replaces
     it, an earlier one is ignored. What the user types (`budgit budget record`) is authoritative.
     -> (value to store, True when the reading was taken: only a taken reading keeps the stored value fresh)."""
+    if new.get("resets_at") is None:       # R-522: a figure with no reset time is the host's current word (the line used to show an older stored one)
+        keep = old.get("resets_at") if isinstance(old, dict) and (old.get("resets_at") or 0) > now else None
+        return {"used": new["used"], "resets_at": keep}, True
     if authoritative or not isinstance(old, dict) or old.get("used") is None or old.get("resets_at") is None:
         return new, True
     if now - (seen_at or 0) > STALE_AFTER:
@@ -211,8 +271,9 @@ def _merge_window(old, new, authoritative, now, seen_at):
         new["used"] >= old["used"]
 
 
-def record(seven_day=None, five_hour=None, extra=None, now=None, authoritative=False):
-    """seven_day / five_hour: (used_percent, resets_at_epoch); extra: (spent_usd, monthly_limit_usd). A reading outside
+def record(seven_day=None, five_hour=None, extra=None, now=None, authoritative=False, extra_enabled=None):
+    """seven_day / five_hour: (used_percent, resets_at_epoch); extra: (spent_usd, monthly_limit_usd); extra_enabled: True or
+    False when the account says whether extra usage is switched on, None when it does not say. A reading outside
     what a window can be (used not in 0..100, an end further away than the window is long) is dropped."""
     now = now or time.time()
     with _locked():
@@ -220,8 +281,11 @@ def record(seven_day=None, five_hour=None, extra=None, now=None, authoritative=F
         limits = data.setdefault("limits", {})
         seen = data.get("seen") if isinstance(data.get("seen"), dict) else {}
         for name, value in (("seven_day", seven_day), ("five_hour", five_hour)):
-            if value is not None and _plausible(name, (float(value[0]), float(value[1])), now):
-                new = {"used": float(value[0]), "resets_at": float(value[1])}
+            if value is None:
+                continue
+            pair = (float(value[0]), None if value[1] is None else float(value[1]))
+            if _plausible(name, pair, now):
+                new = {"used": pair[0], "resets_at": pair[1]}
                 limits[name], taken = _merge_window(limits.get(name), new, authoritative, now, seen.get(name))
                 if taken:
                     seen[name] = max(now, seen.get(name) or 0)
@@ -229,9 +293,69 @@ def record(seven_day=None, five_hour=None, extra=None, now=None, authoritative=F
             data.pop("limits")
         data["seen"] = seen
         if extra is not None and all(math.isfinite(float(x)) and float(x) >= 0 for x in extra):
+            was = data.get("extra") if isinstance(data.get("extra"), dict) else {}
+            flag = extra_enabled if isinstance(extra_enabled, bool) else was.get("enabled")      # a reading that does not say keeps what we knew
             data["extra"] = {"spent": float(extra[0]), "limit": float(extra[1])}
+            if isinstance(flag, bool):
+                data["extra"]["enabled"] = flag
         data["seen_at"] = max(now, data.get("seen_at") or 0)
         save(data)
+
+
+# R-522: a weekly sub-limit the host may send under a kind we do not know. It is never the all-models weekly, never named after
+# a model, and only ever read from the host's own data: with no host data there is nothing to show.
+KNOWN_KINDS = ("five_hour", "seven_day", "spend_limit")
+
+
+def _kinds_path():
+    return os.path.join(sl.home_state(), "limit-kinds.json")
+
+
+def note_kinds(names):
+    """Counts of the unknown limit kinds the host sent (names only: no figures, no text), in the machine state folder."""
+    clean = [re.sub(r"[^a-z0-9_.-]", "", str(n).lower())[:40] for n in names]
+    clean = [n for n in clean if n and n not in KNOWN_KINDS]
+    if not clean:
+        return
+    with _locked():
+        try:
+            with open(_kinds_path(), encoding="utf-8") as f:
+                counts = json.load(f)
+        except (OSError, ValueError):
+            counts = {}
+        if not isinstance(counts, dict):
+            counts = {}
+        for n in clean:
+            if n in counts or len(counts) < 30:
+                counts[n] = int(counts.get(n) or 0) + 1
+        os.makedirs(sl.home_state(), mode=0o700, exist_ok=True)
+        sl.atomic_write(_kinds_path(), json.dumps(counts, indent=1, sort_keys=True))
+
+
+def record_subcap(used, resets=None, label=None, now=None):
+    """The tightest unknown-kind window of the last reading; used None clears it."""
+    now = now or time.time()
+    with _locked():
+        data = load()
+        if used is None or not 0.0 <= float(used) <= 100.0:
+            if "subcap" not in data:
+                return
+            data.pop("subcap")
+        else:
+            clean = re.sub(r"[^A-Za-z0-9 ._-]", "", str(label or "")).strip()[:24] or None
+            data["subcap"] = {"used": float(used), "resets_at": resets, "label": clean, "at": now}
+        save(data)
+
+
+def subcap_for_line(seven_used, now=None):
+    """-> {used, label} when the host's sub-limit is fresh and tighter than the all-models weekly, else None."""
+    now = now or time.time()
+    sub = load().get("subcap")
+    if seven_used is None or not isinstance(sub, dict) or sub.get("used") is None:
+        return None
+    if now - (sub.get("at") or 0) > STALE_AFTER or (sub.get("resets_at") is not None and sub["resets_at"] <= now):
+        return None
+    return {"used": float(sub["used"]), "label": sub.get("label")} if float(sub["used"]) > float(seven_used) else None
 
 
 def set_override(level):
@@ -268,15 +392,23 @@ def classify(limits, prev=None, now=None):
     now = now or time.time()
     live = {k: v for k, v in (limits or {}).items()
             if isinstance(v, dict) and (v.get("resets_at") or 0) > now and v.get("used") is not None}
+    loose = (limits or {}).get("seven_day")      # R-522: a weekly figure with no reset time still counts (no pace; the ceilings apply)
+    if "seven_day" not in live and isinstance(loose, dict) and loose.get("resets_at") is None and loose.get("used") is not None:
+        live["seven_day"] = loose
     if not live:
         return "normal", "no budget data (no live 5-hour/weekly snapshot)"
     u7 = live["seven_day"]["used"] if "seven_day" in live else 0.0
     u5 = live["five_hour"]["used"] if "five_hour" in live else 0.0
     pace, bits = 0.0, []
-    if "seven_day" in live:
+    if "seven_day" in live and live["seven_day"].get("resets_at") is None:
+        bits.append("weekly %d%% used (no reset time given)" % u7)
+    elif "seven_day" in live:
         elapsed = 100.0 * (1 - (live["seven_day"]["resets_at"] - now) / WEEK)
         pace = u7 - elapsed
         bits.append("weekly %d%% used with %d%% of the week elapsed (pace %+d)" % (u7, max(elapsed, 0), pace))
+        if "five_hour" not in live:       # R-522: no 5-hour window (Ultra): a fast weekly burn has nothing else to stop it
+            days = max(WEEK * max(elapsed, 0) / 100.0 / 86400, 0.25)
+            bits.append("no 5-hour window, so the daily pace off the weekly is the guard (%d%% a day so far; %d%% a day keeps you inside the week)" % (u7 / days, 100 / 7.0))
     if "five_hour" in live:
         bits.append("5-hour window %d%% used" % u5)
     raw = _level_for(u7, pace, u5, 0)
@@ -294,6 +426,8 @@ def week_outlook(limits, now=None):
     -> {used, resets_at, projected (% at reset), runs_out (epoch when 100 % is hit before the reset, else None)}"""
     now = now or time.time()
     w = (limits or {}).get("seven_day")
+    if isinstance(w, dict) and w.get("used") is not None and w.get("resets_at") is None:    # R-522: the figure with no reset time
+        return {"used": float(w["used"]), "resets_at": None, "projected": None, "runs_out": None}
     if not (isinstance(w, dict) and w.get("used") is not None and (w.get("resets_at") or 0) > now):
         return None
     used, resets = float(w["used"]), float(w["resets_at"])
@@ -306,6 +440,9 @@ def week_outlook(limits, now=None):
     if out["projected"] > 100 and rate > 0:
         out["runs_out"] = max(now, resets - WEEK + 100 / rate)
     return out
+
+
+STRONG_FROM = 0.35      # R-330: before this share of the week has passed, the projection alone never reaches agotado or enfermo (it tops out at cansado)
 
 
 def brote_state(limits, now=None):
@@ -321,13 +458,14 @@ def brote_state(limits, now=None):
         return {"state": "dormido" if h5 >= 100 else "unknown", "fresh": False, "used": None, "projection": None,
                 "runs_out": None, "resets_at": None, "h5": h5}
     used, proj = o["used"], o["projected"]
+    early = o["resets_at"] is None or (1 - (o["resets_at"] - now) / WEEK) < STRONG_FROM     # R-330: too soon for a straight line to be believed
     if used >= 100 or h5 >= 100:
         state = "dormido"
-    elif used >= 90 or (proj is not None and proj > 140):
+    elif used >= 90 or (proj is not None and proj > 140 and not early):
         state = "enfermo"
     elif proj is None:
         state = "contento"
-    elif proj > 120:
+    elif proj > 120 and not early:
         state = "agotado"
     elif proj > 100:
         state = "cansado"
@@ -347,16 +485,21 @@ def current(now=None):
     if data.get("override") in LEVELS:
         return {"level": data["override"], "reason": "set by you (budgit budget auto to release)",
                 "source": "override"}
-    level, reason = classify(data.get("limits"), prev=data.get("level"), now=now)
+    limits = data.get("limits")
+    if isinstance(limits, dict) and (now or time.time()) - (data.get("seen_at") or 0) > STALE_AFTER:
+        limits = {k: v for k, v in limits.items() if not (isinstance(v, dict) and v.get("resets_at") is None)}   # R-522: a figure with no reset time only counts while fresh
+    level, reason = classify(limits, prev=data.get("level"), now=now)
     if data.get("level") != level:
         with _locked():                       # re-read under the lock so a merge that just happened is not overwritten
             fresh = load()
             fresh["level"] = level
             save(fresh)
     extra = data.get("extra")
-    if extra and level in ("tight", "critical"):
-        reason += "; extra usage $%.2f of $%.0f this month (real money once the plan limit is hit)" % (
-            extra["spent"], extra["limit"])
+    if extra and level in ("tight", "critical") and extra.get("enabled") is not False:
+        # real money only when the account is known to have extra usage on; without the flag we do not claim it
+        tail = "real money once the plan limit is hit" if extra.get("enabled") is True \
+            else "billed as real money only if extra usage is enabled on your account"
+        reason += "; extra usage $%.2f of $%.0f this month (%s)" % (extra["spent"], extra["limit"], tail)
     return {"level": level, "reason": reason, "source": "limits" if data.get("limits") else "none"}
 
 

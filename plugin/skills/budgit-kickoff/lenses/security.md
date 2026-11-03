@@ -1,6 +1,6 @@
 # Lens: security
 - Every diff: `/security-review` (if not installed: read the diff for injection, secrets and unsafe input, and quote the lines) (+ security-guidance hooks already on). Before release: Anthropic
-  `claude-security` plugin (verifiers try to disprove each finding); deterministic SAST/supply chain:
+  `claude-security` plugin (verifiers try to disprove each finding); deterministic static analysis/supply chain:
   Trail of Bits static-analysis / supply-chain skills; gitleaks (`--redact`, local) + `osv-scanner --offline`
   CLIs. Enable per project. Not trivy: its releases/actions were backdoored 2026-03-19 (CVE-2026-33634); not
   TruffleHog by default (verifies secrets against live APIs).

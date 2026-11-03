@@ -2,7 +2,7 @@
 
 Layer 1 is the content gate (rules H4, H5, H6, H8, H9, H11 of skills/budgit-kickoff/humanize): it flags text that tends to read as
 generic. Layer 2 is word hygiene (W1-W6), adapted from stop-slop (MIT, Hardik Pandya) minus the rules that clash with layer 1
-or with UI copy. A hit is a question for a person, not a verdict. The Spanish lists are UNREVIEWED by the product owner.
+or with UI copy. A hit is a question for a person, not a verdict. The Spanish lists keep only the entries a review against stop-slop confirmed (2026-10-27); the owner has not reviewed them.
 """
 import argparse
 import re
@@ -15,19 +15,16 @@ Finding = namedtuple("Finding", "rule layer line col match message")
 H5 = {
     "en": r"best practices|strategies|methodolog(?:y|ies)|robust|comprehensive|holistic|cutting-edge|state-of-the-art"
           r"|leverag(?:e|es|ed|ing)",
-    "es": r"mejores pr[áa]cticas|estrategias|metodolog[íi]as?|robust[oa]s?|integral(?:es)?|hol[íi]stic[oa]s?|vanguardia"
-          r"|aprovech(?:a|ar|ando)",
+    "es": r"(?!x)x",      # none of the Spanish words reads as slop on its own (review against stop-slop, 2026-10-27)
 }
 H6 = {
     "en": r"over the years|throughout history|has evolved|in recent years|in today's|since time immemorial",
-    "es": r"a lo largo de los a[ñn]os|en los [úu]ltimos a[ñn]os|en la actualidad|en el mundo actual"
-          r"|desde tiempos inmemoriales",
+    "es": r"en la actualidad|en el mundo actual|desde tiempos inmemoriales",
 }
 H8 = {
     "en": r"always|never|guarantee[sd]?|forever|permanent(?:ly)?|completely|eliminat(?:e|es|ing)|perfectly"
           r"|seamless(?:ly)?|effortless(?:ly)?",
-    "es": r"(?<!de )siempre|nunca|garantiza(?:n|do)?|para siempre|permanente(?:mente)?|por completo|elimina(?:r|n)?"
-          r"|perfectamente|sin fricci[oó]n",
+    "es": r"sin fricci[oó]n",
 }
 MESSAGES = {
     "H5": "named method or approach without its concrete step (H5)",
@@ -54,14 +51,13 @@ W = {
         "W6": ("—", "em dash: use a comma or a full stop"),
     },
     "es": {
-        "W1": (r"lleva(?:s|r)? tu \w+ al siguiente nivel|desbloquea(?:r)?|sum[eé]rgete|descubre c[oó]mo"
-               r"|en el mundo actual|en el panorama actual", "calque of English marketing copy (UNREVIEWED list)"),
-        "W2": (r"realmente|verdaderamente|literalmente|sinceramente|honestamente|fundamentalmente|en esencia"
+        "W1": (r"lleva(?:s|r)? tu \w+ al siguiente nivel|sum[eé]rgete|descubre c[oó]mo|en el panorama actual",
+               "calque of English marketing copy"),
+        "W2": (r"realmente|verdaderamente|literalmente|honestamente|fundamentalmente|en esencia"
                r"|cabe destacar|es importante (?:destacar|se[ñn]alar|mencionar)|vale la pena (?:destacar|mencionar)",
-               "emphasis crutch or intensifier (UNREVIEWED list)"),
-        "W3": (r"se (?:ha )?procede(?:ido)? a|realizaci[oó]n de (?:la|el|los|las)", "bureaucratic phrasing (UNREVIEWED list)"),
-        "W4": (r"no es (?:solo |solamente |simplemente )?[^.,;\n]{1,40}[,;] ?(?:es|sino)\b"
-               r"|no (?:solo|solamente) [^.\n]{1,50}\bsino (?:tambi[eé]n)?", "'no es X, es Y' contrast (UNREVIEWED list)"),
+               "emphasis crutch or intensifier"),
+        "W3": (r"se (?:ha )?proced(?:e|ido) a", "bureaucratic phrasing"),
+        "W4": (r"no es (?:solo |solamente |simplemente )?[^.,;\n]{1,40}[,;] ?es\b", "'no es X, es Y' contrast"),
     },
 }
 

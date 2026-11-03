@@ -9,7 +9,7 @@ tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, Write
 You research ONE angle and save the result. Inputs: the question, the angle, and the report path to
 write (e.g. `<project>/.budgit/research/<topic>-A.md`).
 
-1. Reuse first: read the project's `.budgit/research/`, `<hub>/research/` and `<hub>/docs/research/` (`budgit hub` prints `<hub>`) for this
+1. Reuse first: read the project's `.budgit/research/`, `<hub>/.budgit/research/` (older hubs: `<hub>/research/`) and `<hub>/docs/research/` (`budgit hub` prints `<hub>`) for this
    topic. If it is already answered and fresh, say so and stop. Budgit-level topics (backups, storage,
    tooling, process) belong to the Budgit hub session — report that instead of researching them.
 2. Wide, then deep: list ≥5 candidates where they exist (free and paid, official and community)

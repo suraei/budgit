@@ -9,7 +9,7 @@
   <a href="#install">Install</a> · <a href="#what-you-get">What you get</a> · <a href="#brote">Brote</a> · <a href="#how-a-project-moves">How a project moves</a> · <a href="../../wiki">Wiki</a>
 </p>
 
-<p align="center"><sub>version 0.13.1 · Claude Code 2.1.292 or newer · Python 3 · tested on macOS · speaks English and Spanish</sub></p>
+<p align="center"><sub>version 0.13.3 · Claude Code 2.1.292 or newer · Python 3 · tested on macOS · speaks English and Spanish</sub></p>
 
 You ask Claude Code for three things on Monday. By Thursday two of them are lost up the chat, your weekly limit is nearly spent, and the feature Claude called "done" has never run.
 
@@ -197,7 +197,7 @@ The guards are plain scripts, so they cost no model tokens and hold even when th
 | Scout quarantine | Reading raw web results directly. Text from the web can carry instructions. | No switch. Only `budgit:scout-reader` reads them. |
 | Hook bypass | `git commit --no-verify` and similar (asks). Skipped hooks hide problems. | Answer yes when you mean it |
 | Contract lock | Weakening the checks that define "done" (asks). Nobody loosens a test to turn red into green. | Answer yes when you mean it |
-| Ledger check | Ending a turn with a request unanswered. | Answer it with `budgit ledger add --text "…"`, or set a remark aside with `budgit ledger ack I-n --note "why"` |
+| Ledger check | Ending a turn with a request unanswered. | Answer it with `budgit ledger add --phase mvp --text "…"`, or set a remark aside with `budgit ledger ack I-n --note "why"` |
 | Push reminder | Nothing. It reminds you about unpushed work. | `budgit setup --force --push-after-commit never` (default `ask`: Claude asks before it pushes) |
 
 To switch everything off for a while, run `claude plugin disable budgit@budgit-hub`.
@@ -211,7 +211,7 @@ Claude runs these for you as you talk. The `budgit` command lives inside Claude 
 | `budgit new <name>` | Start a project with git and a ledger. |
 | `budgit status` | Which phase you are in and what comes next. |
 | `budgit idea "<text>"` | Keep an idea for later. |
-| `budgit ledger add --text "<text>"` | Add a request. `budgit ledger list` shows them all. |
+| `budgit ledger add --phase <phase> --text "<text>"` | Add a request (phase: mvp, later, a release like 0.13.2 or a workflow phase). `budgit ledger list` shows them all. |
 | `budgit budget` | How the work is pacing against your plan limits. |
 | `budgit activate <folder>` | Pick a project back up in this session. |
 | `budgit secrets` | Scan for secrets and vulnerable dependencies. |

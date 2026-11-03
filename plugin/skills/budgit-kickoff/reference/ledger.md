@@ -7,7 +7,9 @@ Every message the user sends (mid-turn ones and the user's answers to your quest
 | Command | Use |
 |---|---|
 | `budgit ledger add --src I-n [--phase P]` | new request — copies the user's literal words |
-| `budgit ledger link R-n --src I-n` | refines an existing item |
+| `budgit ledger link R-n --src I-n` | refines an existing item (no change to its contract) |
+| `budgit ledger link R-n --src I-n --change "what" --why "why"` | the input CHANGES an existing item: logged on it; a `done` item reopens and its old verify report is renamed stale, so the old PASS cannot verify it again. A `doing` item prints its owner session: tell that lane |
+| `budgit ledger match "text"` or `--input I-n` | triage, read-only: up to 3 existing items the input may belong to (open, doing, parked, or closed in the last 14 days) |
 | `budgit ledger ack I-n [I-m …] --note "why"` | approvals/"sí"/"continua" — not new requests |
 | `budgit ledger phase mvp\|later R-n [R-m …]` | MVP first: tag the MVP items; park the rest until it ships (`add --phase later` for new ideas) |
 | `budgit ledger done R-n --evidence "<proof>"` | close with proof |
@@ -21,6 +23,13 @@ Every message the user sends (mid-turn ones and the user's answers to your quest
 | `budgit image "<prompt>" --name <file>` | generate ONE image via the official Codex CLI on the ChatGPT lane (if set up) → `assets/generated/<file>.png` + `MANIFEST.jsonl` (prompt, sha256, tokens, time). Never ask the user to generate images by hand |
 | `budgit release-check [--items R-n …] [--since REF]` | release scope gate (non-zero while an item is unbuilt and not deferred) plus a read-only graph check: built items with no PASS receipt, orphaned claims, commits since REF that name no item. The graph part is advice and never changes the exit code |
 | `budgit prepare` | fresh state before verifying (commands approved by the user at a terminal: `--approve`; the error prints the exact command to show in a bash block) |
+
+**Triage: match first, add second.** Before `ledger add` for a new input, run `budgit ledger match --input I-n`. A clear match
+is `link`ed: with `--change/--why` when it alters the item, and update the item's done-contract in the same turn. Send the
+change to the owner lane and expect it echoed in that lane's next report (the pending-pick echo rule in `coordination.md`).
+Ask the user ONE card only when unsure: two plausible candidates, a `done` match, or a change past the item's appetite.
+A match on a parked (`later`) item is remembered for the parked review. `status --brote` carries `triage`:
+`link_share_7d` (share of the week's inputs that went into an existing item) and `reshape` (doing items changed more than twice).
 
 A claimed item leaves `doing` when its session closes (SessionEnd releases it; `/clear` and `resume` release nothing, and a
 resumed session claims again what its own end released). A session that died without the hook is found by the next

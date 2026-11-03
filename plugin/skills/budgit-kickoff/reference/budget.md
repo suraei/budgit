@@ -29,6 +29,9 @@ VS Code and mobile have the status line and `/brote` (the notebook pane). `/brot
 | tight | 2 | ~40 | reuse + 1 angle + 1 confirmation | ask first; queue for after the reset | 55% | push images/bulk drafts to ChatGPT |
 | critical | 0 (verifier of a waiting gate only) | ~25 | saved research only | no; offer to resume after the reset | 45% | only the ChatGPT lane |
 
+## Running limit (`budgit capacity`)
+The level also sets how many items may run at once, shared between projects: ample 6, normal 5, tight 3, critical 1 (floors 1, 1, 1, 0). A lower level applies at once; the limit rises +1 a day, only while at least half of it is in use and the weekly pace is not above +5. A weekly projection over 100% uses the next level down. The 5-hour window at 70% or more refuses new starts. Per project: weights high 3, normal 2, low 1 (`budgit portfolio priority`), at least 1 each, at most min(ready, 4).
+
 ## Models (brain + agents)
 Brain = opus (settings.json `model`); only at critical does Budgit suggest `/model sonnet` (the user's call; switching
 mid-session re-reads the whole context uncached). Agents get a model per ROLE and level, passed as `model=` on every
@@ -43,6 +46,8 @@ Agent call — if you forget, the PreToolUse hook fills the role's model at the 
 | mechanical (lookups, logs, formatting, summaries) | haiku | haiku | haiku | haiku |
 
 Escalate one step (work→opus, mechanical→sonnet) only after the cheaper model failed twice or when the user asks; say so in one line.
+
+**Enforced, not advised (R-383).** The PreToolUse hook lowers an explicit `model=` that is dearer than the role's model at the current level (a work agent asking for opus becomes sonnet) and prints one line saying so. To keep the dearer model, put `ESCALATE: <why>` in that call's prompt. A name that is no known family (`inherit`, another vendor's id) is left alone. `BUDGIT_MODEL_POLICY=advise` only prints the line, `=off` does nothing. `budgit comply` counts the calls that got through anyway under **model above policy**; calls the hook lowered and calls kept with `ESCALATE:` are listed below the table, not counted.
 
 ## Never changes (at any level)
 Ledger capture · phase gates and artefacts · verification before "done" · progress.md + checkpoint before

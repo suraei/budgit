@@ -150,6 +150,8 @@ def update_state(loaded=None, config_dir=None, root=None):
             return {"kind": "stale-chat", "running": loaded, "available": disk}
         config = _config_dir(config_dir)
         for market, installed in _installs(config, name):
+            if valid_version(loaded) and installed and _key(installed) > _key(loaded):
+                return {"kind": "stale-chat", "running": loaded, "available": installed}     # R-353: updated since this chat loaded (a copy kept per version)
             loc = _market(config, market)
             clone = _clone_version(loc, name) if loc else None
             if clone and installed and _key(clone) > _key(installed):
@@ -159,6 +161,31 @@ def update_state(loaded=None, config_dir=None, root=None):
     return None
 
 
+def running_version(root=None):
+    """R-301: the version this chat runs, from the manifest under its own hook path (None when unreadable)."""
+    return _manifest(root or _plugin_root())[1]
+
+
+def installed_version(config_dir=None, root=None):
+    """R-301: the highest valid version of this plugin in Claude Code's registry (None when there is none)."""
+    try:
+        name, _disk = _manifest(root or _plugin_root())
+        found = [v for _m, v in _installs(_config_dir(config_dir), name) if v] if name else []
+        return max(found, key=_key) if found else None
+    except Exception:
+        return None
+
+
+def older(version, than):
+    """True when both are valid versions and `version` is lower than `than`."""
+    return valid_version(version) and valid_version(than) and _key(version) < _key(than)
+
+
+def chat_is_stale(config_dir=None, root=None):
+    """R-301: this chat runs a lower version than the one installed; a new or resumed chat would load the newer one."""
+    return older(running_version(root), installed_version(config_dir, root))
+
+
 def target(config_dir=None, root=None):
     """The two names the floating Brote needs to run the update after the user's click: {"plugin", "market"}, each a safe name."""
     name, _disk = _manifest(root or _plugin_root())
@@ -166,12 +193,11 @@ def target(config_dir=None, root=None):
     return {"plugin": name or NEW_PLUGIN, "market": market if _NAME.match(market) else DEFAULT_MARKETPLACE}
 
 
-def suffix(state, t):
-    """The tail of the status line for `state` (empty when None); `t` gives the reopen text."""
-    if not state:
+def suffix(state):
+    """The tail of the status line for `state` (empty when None). A stale chat gets none (R-467): the mod reloads it by itself, a new
+    chat loads the new version, and the mod's own button is the fallback, so the line never nags the person to type /reload-plugins."""
+    if not state or state["kind"] == "stale-chat":
         return ""
-    if state["kind"] == "stale-chat":
-        return " " + t("status.update_reopen")
     return " ↑" + state["available"]
 
 

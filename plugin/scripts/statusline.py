@@ -16,8 +16,9 @@ def main():
         d = json.load(sys.stdin)
         import budget
         rl = d.get("rate_limits") or {}
-        pair = lambda k: ((rl[k]["used_percentage"], rl[k]["resets_at"])
-                          if isinstance(rl.get(k), dict) and "used_percentage" in rl[k] and "resets_at" in rl[k] else None)
+        # R-525: resets_at is optional (and five_hour is absent on Ultra); a window with no reset time still counts
+        pair = lambda k: ((rl[k]["used_percentage"], rl[k].get("resets_at"))
+                          if isinstance(rl.get(k), dict) and rl[k].get("used_percentage") is not None else None)
         seven, five = pair("seven_day"), pair("five_hour")
         old = budget.load().get("limits", {})
         changed = any(v is not None and (old.get(k) or {}).get("used") != float(v[0])

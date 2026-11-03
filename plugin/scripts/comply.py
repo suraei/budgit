@@ -2,6 +2,8 @@
 
 Checks per main session (~/.claude/projects/<dir>/<session>.jsonl + <session>/subagents/agent-*.jsonl):
 - agents_without_model: Agent calls with no `model=` (the budget rule: pass it on EVERY call)
+- models_above_policy: Agent calls whose `model=` is dearer than the role's policy at the level, with no `ESCALATE:` in the
+  prompt and not lowered by the PreToolUse hook (R-383; lowered and escalated calls are shown, not counted)
 - bursts_over_limit: one assistant message launching more agents than the level's parallel cap
 - agents_over_call_budget: subagents whose tool calls exceed the level's per-agent budget
 - compactions_without_checkpoint: compactions with no progress.md write since the previous one
@@ -18,9 +20,10 @@ import time
 import budget
 import studiolib as sl
 
-COUNTERS = ("agents_without_model", "bursts_over_limit", "agents_over_call_budget",
+COUNTERS = ("agents_without_model", "models_above_policy", "bursts_over_limit", "agents_over_call_budget",
             "compactions_without_checkpoint", "untracked_inputs", "research_unsaved")
-LABELS = {"agents_without_model": "agents without model=", "bursts_over_limit": "bursts over parallel cap",
+LABELS = {"agents_without_model": "agents without model=", "models_above_policy": "model above policy",
+          "bursts_over_limit": "bursts over parallel cap",
           "agents_over_call_budget": "agents over call budget",
           "compactions_without_checkpoint": "compactions w/o checkpoint",
           "untracked_inputs": "untracked inputs", "research_unsaved": "research not saved"}
@@ -98,9 +101,10 @@ def audit(main_path, level=None, project=None, registry=None):
     pol = budget.POLICY[level]
     sid = os.path.basename(main_path)[:-6]
     r = dict.fromkeys(COUNTERS, 0)
-    r.update(session=sid, level=level, agents=0, compactions=0, models_filled=0)
+    r.update(session=sid, level=level, agents=0, compactions=0, models_filled=0, models_lowered=0, models_escalated=0)
     per_message, checkpointed = {}, False
     filled = budget.filled_ids(sid)   # the PreToolUse hook filled these (model fill); shown, not violations
+    lowered = budget.rewritten_ids(sid)   # ... and lowered these to the role's policy (R-383)
     lookup = _skill_lookup(registry) if registry else None
     asked = False
     if lookup is not None:
@@ -131,6 +135,15 @@ def audit(main_path, level=None, project=None, registry=None):
                         r["models_filled"] += 1
                     else:
                         r["agents_without_model"] += 1
+                else:
+                    given = block.get("input") or {}
+                    if budget.above_policy(given.get("subagent_type"), level, given.get("model")):
+                        if block.get("id") in lowered:
+                            r["models_lowered"] += 1
+                        elif budget.escalated(given.get("prompt")):
+                            r["models_escalated"] += 1
+                        else:
+                            r["models_above_policy"] += 1
     r["bursts_over_limit"] = sum(1 for n in per_message.values() if n > max(pol["subagents"], 1))
     subs = list(_subagents(main_path))
     r["agents_over_call_budget"] = sum(1 for _, _, calls, _ in subs if calls > pol["agent_calls"])
@@ -210,6 +223,12 @@ def table(rows):
     if n_filled:
         out.append("(%d agent model%s filled by hook: not violations, but the brain forgot model=)"
                    % (n_filled, "" if n_filled == 1 else "s"))
+    n_lowered, n_escalated = sum(r.get("models_lowered", 0) for r in rows), sum(r.get("models_escalated", 0) for r in rows)
+    if n_lowered:
+        out.append("(%d model%s lowered to the role policy by the hook: not violations, but the brain asked for a dearer one)"
+                   % (n_lowered, "" if n_lowered == 1 else "s"))
+    if n_escalated:
+        out.append("(%d dearer model%s kept with ESCALATE:)" % (n_escalated, "" if n_escalated == 1 else "s"))
     if quiet:
         out.append("(%d quiet session%s hidden: no agents, no violations)" % (len(quiet), "" if len(quiet) == 1 else "s"))
     return "\n".join(out)

@@ -48,11 +48,18 @@ def layout_problem(home=None):
     return "records" if seen else None
 
 
-def chat_link(prefix, home=None):
-    """The link of the one live chat whose CLI session id starts with `prefix`; None for no match, several, or a bad prefix."""
+def local_id(prefix, home=None):
+    """The app's id (local_<uuid>) of the one live chat whose CLI session id starts with `prefix`; None for no match,
+    several, or a bad prefix. R-297: the id the app's session tools (archive, message) take."""
     if not valid_prefix(prefix):
         return None
     ids = {rec["sessionId"] for rec in _records(home)
            if isinstance(rec.get("cliSessionId"), str) and rec["cliSessionId"].startswith(prefix)
            and not rec.get("isArchived") and isinstance(rec.get("sessionId"), str) and _LOCAL.match(rec["sessionId"])}
-    return LINK + ids.pop() if len(ids) == 1 else None
+    return ids.pop() if len(ids) == 1 else None
+
+
+def chat_link(prefix, home=None):
+    """The link of the one live chat whose CLI session id starts with `prefix`; None for no match, several, or a bad prefix."""
+    found = local_id(prefix, home)
+    return LINK + found if found else None

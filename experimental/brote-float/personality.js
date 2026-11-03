@@ -186,22 +186,22 @@ const CAT=[];
 const A=(id,grp,st,ev,an,dur,cd,pri,att,src,plumb,f,x)=>CAT.push(Object.assign({id,grp,st,ev,an,dur,cd,pri,att,src,plumb,f},x||{}));
 
 A('ag_walk',0,'agotado',0,0,9,60,2,0,0,0,
- (S,ft)=>{ Object.assign(S,{sit:false,stretch:-1,leaf:'wilt',mouth:'wavy',eyes:ft<60?(alt(ft,25)?'sleep':'spent'):'spent'}); POSE.walk(S,ft,4); S.stretch=-1; S.look=0; S.dy=(ft%8<2)?1:0; S.dx=Math.round(lerp(-6,5,ft/68));
-   if(ft<68) snot(S,ft,8); else if(ft<76){ S.eyes='sleep'; S.dy=1; S.feet='stand'; S.dx=5; snot(S,ft,8) } else if(ft<82){ S.eyes='wide'; S.mouth='o'; S.dy=-2; S.feet='stand'; S.dx=5; S.bubble=-1; S.ex.push(['bang',-6,15+5,false]) } else { S.feet='stand'; S.dx=5; S.eyes='blink' } },{walk:1});
+ (S,ft)=>{ Object.assign(S,{sit:false,stretch:-1,leaf:'wilt',mouth:'wavy',eyes:ft<60?(alt(ft,25)?'half':'spent'):'spent'}); POSE.walk(S,ft,4); S.stretch=-1; S.look=0; S.dy=(ft%8<2)?1:0; S.dx=Math.round(lerp(-6,5,ft/90));
+   if(ft<68){} else if(ft<76){ S.eyes='half'; S.dy=1; S.feet='stand'; S.dx=5 } else if(ft<82){ S.eyes='wide'; S.mouth='o'; S.dy=-2; S.feet='stand'; S.dx=5; S.bubble=-1; S.ex.push(['bang',-6,15+5,false]) } else { S.feet='stand'; S.dx=5; S.eyes='blink' } },{walk:1});
 A('ag_bubbles',0,'agotado',0,0,6,30,1,0,0,0,
- (S,ft)=>{ S.eyes='sleep'; S.mouth='small'; snot(S,ft,0); if(ft>38) zs(S,ft) });
+ (S,ft)=>{ S.sit=true; S.leaf='wilt'; if(ft<14){ S.eyes='spent'; S.mouth='small' } else if(ft<34){ S.eyes='half'; S.mouth='yawn'; S.armL='up'; S.tear=ft>=24 } else { S.eyes=alt(ft,12)?'blink':'half'; S.mouth='small'; bub(S,'calendar') } });
 A('ag_nod_off',0,'agotado',0,0,5,45,2,0,0,0,
- (S,ft)=>{ S.sit=false; S.stretch=-1; S.leaf='wilt'; S.mouth='small'; if(ft<20){ S.eyes=ft<8?'half':'sleep'; S.dy=ft>10?1:0; if(ft>14) snot(S,ft,14) } else if(ft<28){ S.eyes='sleep'; S.dy=1; snot(S,ft,14) } else if(ft<36){ S.eyes='wide'; S.mouth='o'; S.dy=-2; S.bubble=-1; S.ex.push(['bang',-6,15,false]) } else { S.eyes=ft<42?'blink':'spent'; S.dx=alt(ft,2) } });
+ (S,ft)=>{ S.sit=false; S.stretch=-1; S.leaf='wilt'; S.mouth='small'; if(ft<20){ S.eyes=ft<8?'open':'half'; S.dy=ft>10?1:0 } else if(ft<28){ S.eyes='half'; S.dy=1 } else if(ft<36){ S.eyes='wide'; S.mouth='o'; S.dy=-2; S.bubble=-1; S.ex.push(['bang',-6,15,false]) } else { S.eyes=ft<42?'blink':'spent'; S.dx=alt(ft,2) } });
 A('ag_catch',0,'agotado',0,0,3,60,2,0,0,0,
- (S,ft)=>{ S.sit=false; S.leaf='wilt'; if(ft<8){ S.dx=ft>>1; S.eyes='half'; POSE.walk(S,ft,3); S.stretch=-1; S.look=0 } else if(ft<18){ S.stretch=0; S.eyes='wide'; S.mouth='o'; S.armL=alt(ft,2)?'up':'up2'; S.armR=alt(ft,2)?'up2':'up'; S.feet=alt(ft,2)?'kickA':'kickB'; S.dx=[4,3,4,2,3,2,1,2,1,1][ft-8]; S.ex.push(['sweat',2,17,false]) } else { S.stretch=-1; S.eyes='sleep'; S.mouth='o'; S.ex.push(['puff',11,-3-((ft-18)>>2),false]) } });
+ (S,ft)=>{ S.sit=false; S.leaf='wilt'; if(ft<8){ S.dx=ft>>1; S.eyes='half'; POSE.walk(S,ft,3); S.stretch=-1; S.look=0 } else if(ft<18){ S.stretch=0; S.eyes='wide'; S.mouth='o'; S.armL=alt(ft,2)?'up':'up2'; S.armR=alt(ft,2)?'up2':'up'; S.feet=alt(ft,2)?'kickA':'kickB'; S.dx=[4,3,4,2,3,2,1,2,1,1][ft-8]; S.ex.push(['sweat',2,17,false]) } else { S.stretch=-1; S.eyes='spent'; S.mouth='o'; S.ex.push(['puff',11,-3-((ft-18)>>2),false]) } });
 A('ag_lean',0,'agotado',0,0,7,60,1,0,0,0,
- (S,ft)=>{ S.sit=false; S.leaf='wilt'; S.eyes='sleep'; S.mouth='small'; S.lookY=1; S.stretch=-1; S.dx=ft<12?Math.round(lerp(2,5,ft/12)):(ft<16?6:5); if(ft>=12){ S.ex.push(['flatA',3,15,false],['flatB',12,15,false]) } S.ex.push(['wallv',-6,23,true]); snot(S,ft,0); if(ft>20) zs(S,ft,14) });
+ (S,ft)=>{ S.sit=false; S.leaf='wilt'; S.eyes=ft%48<44?'half':'blink'; S.mouth=(ft>20&&ft<30)?'yawn':'small'; S.lookY=1; S.stretch=-1; S.dx=ft<12?Math.round(lerp(2,5,ft/12)):(ft<16?6:5); if(ft>=12){ S.ex.push(['flatA',3,15,false],['flatB',12,15,false]) } S.ex.push(['wallv',-6,23,true]) });
 A('ag_dust',0,'agotado',0,0,6,50,1,0,0,0,
- (S,ft)=>{ Object.assign(S,{sit:false,stretch:-1,eyes:'spent',mouth:'wavy',leaf:'wilt'}); POSE.walk(S,ft,4); S.stretch=-1; S.look=0; S.dx=Math.round(lerp(5,-5,ft/60)); if(ft%8<3&&ft<46) S.ex.push(['puff',14,S.dx+(ft%16<8?16:-2),true]); if(ft>=46){ S.eyes='sleep'; S.mouth='o'; S.feet='stand'; S.ex.push(['puff',10,-1-Math.min(1,(ft-46)>>3),false]) } },{walk:-1});
+ (S,ft)=>{ Object.assign(S,{sit:false,stretch:-1,eyes:'spent',mouth:'wavy',leaf:'wilt'}); POSE.walk(S,ft,4); S.stretch=-1; S.look=0; S.dx=Math.round(lerp(5,-5,ft/60)); if(ft%8<3&&ft<46) S.ex.push(['puff',14,S.dx+(ft%16<8?16:-2),true]); if(ft>=46){ S.eyes='half'; S.mouth='o'; S.feet='stand'; S.ex.push(['puff',10,-1-Math.min(1,(ft-46)>>3),false]) } },{walk:-1});
 
 const FLEE_LIM=d=>d<0?-8:5;
 A('ag_grumble',0,'agotado',0,0,3,0,4,0,0,0,
- (S,ft)=>{ S.leaf='wilt'; S.look=0; if(ft<6){ S.eyes='half'; S.mouth='small' } else if(ft<20){ S.eyes=(ft>=12&&ft<14)?'blink':'open'; S.mouth='neutral' } else { S.eyes='sleep'; S.mouth='small'; S.ex.push(['Z',-3,15,false]) } });
+ (S,ft)=>{ S.leaf='wilt'; S.look=0; if(ft<6){ S.eyes='half'; S.mouth='small' } else if(ft<20){ S.eyes=(ft>=12&&ft<14)?'blink':'open'; S.mouth='neutral' } else { S.eyes='half'; S.mouth='small' } });
 A('ag_annoyed',0,'agotado',0,0,3.5,0,4,0,0,0,
  (S,ft)=>{ S.leaf='wilt'; S.look=0; S.cheeks='c'; if(ft<6){ S.eyes='half'; S.mouth='small' } else { S.eyes=ft%24<20?'flat':'blink'; S.mouth='pout'; S.dx=(ft>>3)%2; if(ft%12<5) S.ex.push(['puff',9,19+((ft%12)>>1),false]); if(ft>=24&&ft<30){ S.armL='side'; S.armR='side'; S.dy=-1 } } });
 A('ag_angry',0,'agotado',0,0,2.5,0,5,0,0,0,
@@ -227,7 +227,7 @@ A('tr_up',0,'contento',0,0,3,0,3,0,0,0,
 A('tr_down',0,'cansado',0,0,3,0,3,0,0,0,
  (S,ft)=>{ S.leaf=ft<6?'up':'droop'; if(ft>=6&&ft<22){ S.eyes='sleep'; S.mouth=ft<9?'small':'yawn'; S.armL=ft>=9?'up':'none'; S.armR=S.armL; S.stretch=ft>=9?1:0; S.tear=ft>=16 } });
 A('tr_agotado',0,'agotado',0,0,3,0,3,0,0,0,
- (S,ft)=>{ if(ft<5){ S.sit=false; S.dy=-1-(ft>>1); S.eyes='wide'; S.mouth='o' } else { S.stretch=-1; if(ft<12) S.ex.push(['puff',14,-4,true],['puff',14,18,true]); else S.ex.push(['sweat',2+((ft-12)>>2),17,false]) } });
+ (S,ft)=>{ if(ft<5){ S.sit=false; S.dy=-1-(ft>>1); S.eyes='wide'; S.mouth='o' } else { S.stretch=-1; if(ft<12) S.ex.push(['puff',14,-4,true],['puff',14,18,true]); else { S.ex.push(['sweat',2+((ft-12)>>2),17,false]); if(ft>=16) bub(S,'calendar') } } });
 A('tr_enfermo',0,'enfermo',0,0,3,0,3,0,0,0,
  (S,ft)=>{ S.thermo=ft>10; S.dx=ft%2; if(ft<10){ S.eyes='wide'; S.mouth='o' } });
 A('tr_dormido',0,'dormido',0,0,4,0,3,0,0,0,
@@ -351,7 +351,7 @@ A('pc_away',0,'contento',0,0,3,0,3,0,0,0,
    if(ft<4){ lapPut(S,'lp_think0'); typing(S,ft,2) } else if(ft<8) lapPut(S,'lp_mid'); else if(ft<12) lapPut(S,'lp_half'); else if(ft<16) lapPut(S,'lp_closed'); else S.ex.push(['puff',10,13,true],['puff',12,19,true]) }
   else { S.dx=Math.round(lerp(-7,0,Math.min(1,(ft-20)/8))); S.eyes='happy'; S.mouth='open' } });
 A('pc_sleep',0,'agotado',0,0,6,0,2,0,0,0,
- (S,ft)=>{ S.leaf='wilt'; if(ft<24){ work(S,'lp_code'+((ft>>3)%12)); S.eyes='half'; S.lookY=1; S.ex.push(['hand',alt(ft,3)?9:10,13,true]) } else { work(S,'lp_off'); S.eyes='sleep'; S.dy=2; S.stretch=-1; snot(S,ft,24); S.ex.push(['Z',-3,3,true]) } });
+ (S,ft)=>{ S.leaf='wilt'; work(S,'lp_code'+((ft>>3)%12)); S.lookY=1; if(ft<24||ft%36<24){ S.eyes=ft%36<20?'half':'spent'; S.ex.push(['hand',alt(ft,5)?9:10,13,true]) } else { S.eyes='half'; S.mouth='yawn'; S.armL='up'; S.tear=ft%36>=30 } });
 
 A('w_hello',0,'contento',0,0,1.6,0,3,0,0,0,(S,ft)=>{ S.armR=(ft>>1)%2?'up':'up2'; S.eyes='happy'; S.mouth='open'; S.cheeks='C' });
 A('w_poke',0,'contento',0,0,1.6,0,3,0,0,0,(S,ft)=>{ Object.assign(S,{eyes:'heart',mouth:'open',cheeks:null,dy:[0,-1,-2,-2,-1][ft]||0,armL:ft<6?'up':'none',armR:ft<6?'up':'none'}); if(ft>=2) S.ex.push(['heart',-2-Math.min(3,(ft-2)>>1),15,false]) });
@@ -376,7 +376,7 @@ A('ti_evening',0,'cansado',0,0,5,86400,1,0,0,0,(S,ft)=>{ S.eyes=alt(ft,10)?'half
 A('ti_night',0,'cansado',0,0,6,3600,1,0,0,0,(S,ft)=>{ S.eyes='half'; S.look=0; S.armR='side'; S.ex.push(['cup',alt(ft,14)?8:7,14,false],[alt(ft,5)?'steam1':'steam2',alt(ft,14)?3:2,17,false]); if(ft>30) bub(S,'moon') });
 A('ti_idle5',0,'contento',0,0,6,300,1,0,0,0,(S,ft)=>{ S.sit=true; S.look=ft<20?-1:ft<40?1:0; S.mouth='cat'; S.ex.push(['note',-4-(ft>>2)%6,19,false]) });
 A('ti_idle20',0,'contento',0,0,6,1200,2,0,0,0,(S,ft)=>{ S.sit=true; if(ft<20){ S.eyes='half'; if(ft>=12) S.ex.push(['puff',12,-4,true],['puff',12,20,true]) } else if(ft<30){ S.eyes='sleep'; S.cap=ft>24; S.ex.push(['bed',4,-4,true]) } else { S.eyes='sleep'; S.cap=true; S.mouth='small'; S.ex.push(['bed',4,-4,true]); zs(S,ft,15); S.stretch=alt(ft,12) } });
-A('ti_return',0,'dormido',0,0,3.5,0,3,0,0,0,(S,ft)=>{ S.bubble=-1; S.cheeks='C'; if(ft<10){ S.sit=true; S.cap=ft<6; S.eyes=ft<6?'sleep':'half'; S.mouth='yawn'; S.ex.push(['bed',4,-4,true]) } else { S.eyes='happy'; S.mouth='open'; S.stretch=ft<18?1:0; S.armL='up'; S.armR=alt(ft,2)?'up':'up2'; if(ft<14) S.ex.push(['puff',14,-4,true],['puff',14,18,true]); if(ft>=14) sparks(S,ft,3) } });
+A('ti_return',0,'dormido',0,0,3.5,0,3,0,0,0,(S,ft)=>{ S.cap=ft<8; S.eyes=ft<10?'sleep':'happy'; S.mouth=ft<10?'yawn':'open'; S.stretch=ft>=8&&ft<16?1:0; S.armL=ft>=8?'up':'none'; S.armR=ft>=8?(alt(ft,2)?'up':'up2'):'none'; S.bubble=-1; S.cheeks='C'; if(ft>=12) sparks(S,ft,3) });
 A('ti_weekend',0,'radiante',0,0,6,3600,1,0,0,0,(S,ft)=>{ S.sit=true; S.eyes='happy'; S.mouth='cat'; S.armR='up'; S.ex.push(['fan',alt(ft,3)?5:6,14,false],['sunray',-9,-5,true]) });
 A('sys_battery',0,'cansado',0,0,5,1800,2,0,0,0,(S,ft)=>{ S.eyes='half'; S.mouth='wavy'; S.stretch=-1; bub(S,'battery') });
 
@@ -440,7 +440,7 @@ A('bk_read_aha',0,'contento',0,0,3.5,0,2,0,0,0,
  (S,ft)=>{ lap(S,true); if(ft<16){ scan(S,ft,3); S.eyes='open'; S.mouth='small' } else { S.lookY=0; S.eyes='wide'; S.mouth='o'; S.leaf='perk'; S.dy=alt(ft,3)?-1:0; bub(S,'idea') } },
  {v:'bk_read_up'});
 A('bk_read_snooze',0,'agotado',0,0,7,0,2,0,0,0,
- (S,ft)=>{ lap(S,true); S.leaf='wilt'; if(ft<26){ S.eyes='half'; S.lookY=1; S.mouth='small'; S.look=((ft/6|0)%3)-1 } else if(ft<52){ S.eyes='sleep'; S.mouth='small'; S.stretch=-1; snot(S,ft,26); zs(S,ft,15) } else { S.eyes='wide'; S.mouth='o'; S.dy=-1; S.ex.push(['bang',-6,15,false]) } },
+ (S,ft)=>{ lap(S,true); S.leaf='wilt'; if(ft<26){ S.eyes='half'; S.lookY=1; S.mouth='small'; S.look=((ft/6|0)%3)-1 } else if(ft<52){ S.eyes='half'; S.mouth=ft%16<8?'yawn':'small'; S.stretch=-1; S.dy=ft%12<6?1:0; S.lookY=1 } else { S.eyes='wide'; S.mouth='o'; S.dy=-1; S.ex.push(['bang',-6,15,false]) } },
  {v:'bk_read_up'});
 A('bk_drop',0,'contento',0,0,2.8,0,5,0,0,0,
  (S,ft)=>{ if(ft<10){ S.dy=ft<6?-2:-1; S.eyes='wide'; S.mouth='o'; S.armL='up'; S.armR='up'; S.cheeks='C'; if(ft<8) S.ex.push(['bang',-6,15,false]);
@@ -474,7 +474,7 @@ A('bk_sitnext',0,'contento',0,0,6,300,1,0,0,0,
  (S,ft)=>{ S.sit=true; S.look=ft%40<26?1:0; S.eyes=ft%36>33?'blink':'open'; S.mouth='smile'; S.leaf=alt(ft,15)?'perk':'up'; if(ft===34) S.ex.push(['twink',5,19,false]); floorBook(S) },
  {amb:1,cd:300});
 A('bk_guard',0,'agotado',0,0,7,600,1,0,0,0,
- (S,ft)=>{ S.sit=true; S.leaf='wilt'; S.look=1; if(ft<14){ S.eyes='half'; S.mouth='small' } else { S.eyes='sleep'; S.mouth='small'; S.stretch=-1; snot(S,ft,14); zs(S,ft,15) } floorBook(S) },
+ (S,ft)=>{ S.sit=true; S.leaf='wilt'; S.look=1; if(ft<14){ S.eyes='half'; S.mouth='small' } else { S.eyes=ft%40<34?'half':'blink'; S.mouth=(ft%60>20&&ft%60<30)?'yawn':'small'; S.stretch=-1 } floorBook(S) },
  {amb:1,cd:600});
 
 const deskAmb=(S,ft,n,act)=>{

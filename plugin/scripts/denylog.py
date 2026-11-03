@@ -44,6 +44,13 @@ def _subject(tool, tool_input):
     return tool_input.get("file_path") or tool_input.get("path") or json.dumps(tool_input, sort_keys=True)
 
 
+def fingerprint(tool, tool_input):
+    """`sha256=<hash> cmd="<masked head>"` of a call, for the audit lines of a guard that stopped it (R-360): the full
+    command is never kept, so a later count can tell one repeated command from many different ones."""
+    text = _subject(tool, tool_input or {})
+    return 'sha256=%s cmd="%s"' % (hashlib.sha256(text.encode("utf-8", "replace")).hexdigest(), scrub(text, 60))
+
+
 def log_denies(project, tool, tool_input, named):
     """named = [(guard, (\"deny\", reason)), ...]; one line per guard that denied."""
     text = _subject(tool, tool_input or {})
@@ -54,6 +61,48 @@ def log_denies(project, tool, tool_input, named):
         deny_id = os.urandom(4).hex()          # two identical denies in one millisecond still get two ids
         sl.audit(project, '%s %s %s %s sha256=%s cmd="%s" why="%s"'
                  % (DENY_TAG, deny_id, tool, guard, digest, head, scrub(decision[1], 100)))
+
+
+ALARM_DENIES = 5            # more unmarked denies than this from one guard in ALARM_DAYS opens a ledger item
+ALARM_DAYS = 7
+ALARM_TAG = "guard-alarm"
+
+
+def alarm(project):
+    """R-360: a guard that denies more than ALARM_DENIES times in ALARM_DAYS days with no `--fp` mark puts one item in the
+    ledger (asking whether the guard is wrong), at most one per guard per ALARM_DAYS days, closed items included. Runs
+    under the project lock the hook bookkeeping already holds; best effort, it never costs a decision. Returns the ids."""
+    try:
+        denies, fps = _parse(project)
+        cutoff = _cutoff("%dd" % ALARM_DAYS)
+        counts = {}
+        for d in denies:
+            if d["ts"] >= cutoff and d["id"] not in fps:
+                counts[d["guard"]] = counts.get(d["guard"], 0) + 1
+        loud = sorted(g for g, n in counts.items() if n > ALARM_DENIES and re.fullmatch(r"[a-z0-9-]{1,24}", g))
+        if not loud:
+            return []
+        if sl.ledger_tampered(project):
+            return []                                  # a hand edit not accepted yet: saving would make it the baseline
+        data = sl.load_ledger(project)
+        opened = []
+        for guard in loud:
+            marker = "%s %s:" % (ALARM_TAG, guard)
+            if any(it["text"].startswith(marker) and str(it.get("created", "")) >= cutoff for it in data["items"]):
+                continue
+            text = ("%s %d denies in %d days with no false-positive mark. Look at `budgit denies --since %dd`: mark the "
+                    "wrong ones with `budgit denies --fp <id> --note \"why\"` and fix the guard, or tell the user what it "
+                    "keeps stopping." % (marker, counts[guard], ALARM_DAYS, ALARM_DAYS))
+            inbox_id = sl.append_inbox(project, text, None, ALARM_TAG)
+            if not inbox_id:
+                continue
+            opened.append(sl.add_item(data, text, [inbox_id], title="Guard %s denies often" % guard)["id"])
+        if opened:
+            sl.save_ledger(project, data)
+        return opened
+    except Exception:
+        sl.log_error("guard alarm")
+        return []
 
 
 def _parse(project):

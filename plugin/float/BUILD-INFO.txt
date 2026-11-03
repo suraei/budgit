@@ -1,4 +1,4 @@
-source brote.swift sha256 cd4dcf76dee8d050a050bbb0c70ce0c217093d6b9d6709ec0941487292af1e42
+source brote.swift sha256 29967135152837afea020108de22d2a5e95324a49436e3a9d305c42681770c32
 target arm64-apple-macos13.0 x86_64-apple-macos13.0
 swiftc swift-driver version: 1.127.14.1 Apple Swift version 6.2.3 (swiftlang-6.2.3.3.21 clang-1700.6.3.2) Target: arm64-apple-macosx26.0
 sdk 26.2 build 25C57

@@ -129,12 +129,12 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|Read|Grep|Glob|WebSearch|WebFetch",
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|Read|Grep|Glob|WebSearch|WebFetch|mcp__.*",
         "hooks": [
           {
             "type": "command",
             "command": "env -u PYTHONDONTWRITEBYTECODE python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" pre-tool-use",
-            "timeout": 10,
+            "timeout": 20,
             "onFailure": "block"
           }
         ]

@@ -3,7 +3,7 @@ name: budgit-kickoff
 description: Use when the user starts a NEW project or idea (app, videogame, script, prompt/instructions, tool) — e.g. "proyecto nuevo", "tengo una idea", "quiero hacer una app/juego" — or resumes a project that has a `.budgit/` folder. Runs Budgit's phased workflow (validate → design → plan → build → QA → launch → retro) with an enforced input ledger, lenses per role and retros.
 ---
 
-# Budgit kickoff — v0.11.48 (2026-10-21)
+# Budgit kickoff — v0.13.2 (2026-10-28)
 
 Living process of Budgit (history in CHANGELOG.md). `<hub>` below = the folder `budgit hub` prints
 (research/, lessons/, projects/, ideas/; not set up yet → reference/setup.md). Reply in the user's language; code/docs in English.
@@ -13,10 +13,10 @@ agents and the hooks in `.claude/`; there the agents are `budgit-verifier`, `bud
 `.claude/budgit/bin/budgit`. The vendored guards accept both names; the plugin accepts `budgit:X` (`studio:X` too during the 0.12 compat window).
 This file is the must-keep core. Load the phase file and the lenses you need, when you need them:
 `phases/1-validate.md · 2-design.md · 3-plan-build.md · 5-qa.md · 6-launch.md · 7-retro.md`,
-`lenses/{product,design,writing,a11y,security,marketing-devrel,game,motion,data-safety,edge}.md`,
+`lenses/{product,design,writing,a11y,security,marketing-devrel,game,motion,data-safety,edge,versions-eol}.md`,
 `reference/ledger.md` (CLI), `reference/budget.md` (budget levels), `reference/brain.md` (typed [[links]] between
 notes; before trusting an old note: `budgit brain current <note>`), `reference/coordination.md` (the coordinating session),
-`reference/routing.md` (which skill or agent for which task).
+`reference/routing.md` (which skill or agent for which task), `reference/folders.md` (where plans, research, reports are saved).
 
 ## First action of every session on a project
 New project → `budgit new <slug> [--rigor mini|standard]` (folder in the projects root, git with noreply
@@ -37,14 +37,14 @@ reference/ledger.md). Record `CORRECTION #n` + root cause whenever the user corr
   Same for fixes: a review that keeps finding issues is closed after ≤3 rounds with the residual risk named to
   the user, not iterated forever.
 - **Budgit-level topics are not yours:** backups, storage, tooling, process, plugins, settings →
-  check `<hub>/research/` + `<hub>/docs/research/` + `<hub>/docs/decisions/`; not covered → write
+  check `<hub>/.budgit/research/` (older hubs: `<hub>/research/`, until `budgit hub --move-research`) + `<hub>/docs/research/` + `<hub>/docs/decisions/`; not covered → write
   `<hub>/lessons/inbox/<date>-<project>-<slug>.md` and tell the user. Never research or
   ask the user about them in parallel. Never edit Budgit files yourself.
 - **The user's weekly limit is finite:** research via `budgit:researcher` (sonnet), one agent per
   angle, reuse saved research first, announce heavy runs.
 - **New host surface or platform API:** a mod band, a desktop pane, a vendor API you have not used. Before the first
   build, read its official docs end to end and run `budgit:researcher` for prior art; notes are saved with URL + date (project
-  `.budgit/research/`, hub `<hub>/research/`). No build commit before the note exists; a lane that asks to iterate on the user's
+  `.budgit/research/`, hub `<hub>/.budgit/research/`). No build commit before the note exists; a lane that asks to iterate on the user's
   screen gets a probe that logs instead.
 - **Verify online, never from memory** (versions, APIs, prices, "best tool"). Never call a source "blocked"
   until its technique ladder was tried (public JSON → maintained library → real browser on the user's machine → other

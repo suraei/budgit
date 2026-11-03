@@ -19,6 +19,15 @@ Read this when you write a lane brief or start a task. For design, motion, writi
 
 ## In every lane brief
 - A `Skills:` line with the rows above that apply (or "none"), so the lane does not have to guess.
-- The order: `budgit activate --since-now <project dir>` first, then `budgit ledger start R-n`.
+- The order: `budgit activate --since-now <project dir>` first, then `budgit ledger start R-n`. This holds in every project, not only the hub: a lane works on one task and claims it, so its id shows wherever work is listed. If the work has no task yet, the PM adds one first with `budgit ledger add`.
 - A hard stop in tool calls, the one deliverable, and "send questions to the coordinator, never ask the user".
 - A read-only or security brief forbids any command that raises an operating-system password or permission prompt (keychain reads, `sudo`, system settings).
+
+## Sessions
+- One Project Manager (PM) per project: a chat opened in the project's own folder and titled `PM · <project>`, so it reads that project's instructions and memory at start. One Team Manager chat sits above all the PMs and never does project work.
+- A lane is started by its PM, works on one task, sends its questions to its PM and never asks the user.
+- A lane whose last report the PM has checked, with no open question or pending permission, is archived the same turn; the PM says so in one line.
+- A lane that has waited more than 4 hours with nothing left but the user's answer writes its handoff and is archived. Its question moves to the panel's "Wait for you" list. When the user answers, a new lane opens from that handoff.
+- A long chat is renewed by handoff: write the handoff, open a fresh chat that echoes it back, check the echo, then archive the old chat.
+- After each install, the TM runs `budgit portfolio` and tells the user which chats are on an old version. Each one renews itself on the user's next message, or the user types `/reload-plugins` in it.
+- The levels, the words for counting work, the renewal steps and the sweeps are in `reference/portfolio.md`.

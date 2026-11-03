@@ -231,7 +231,7 @@ def build(stage_dir, version, config, repo="OWNER/REPO", author=None):
     root = vendor.plugin_root()
     table = _scrub_table(config)
     plugin = os.path.join(stage_dir, "plugin")
-    for sub in ("agents", "bin", "hooks", "scripts"):
+    for sub in ("agents", "bin", "commands", "hooks", "scripts"):
         skip = tuple(o[len(sub) + 1:] for o in OMIT_FROM_EXPORT if o.startswith(sub + os.sep))
         _copy_tree(os.path.join(root, sub), os.path.join(plugin, sub), table, skip)
     _copy_prebuilt_float(root, plugin)
@@ -376,11 +376,46 @@ def _runs(text):
     return {" ".join(words[i:i + RUN_WORDS]) for i in range(len(words) - RUN_WORDS + 1)}
 
 
-def run_hits(stage_dir, texts):
-    """Any 6-word run of the user's own words that reached a shared file → [leak.Hit]."""
+def _distinctive(run):
+    """False for a run that cannot be anyone's words: every token 1-2 characters ('y m dt h m s', a date format) or half or more
+    of the tokens bare numbers. Never widens what counts as a quote; only drops runs that carry no wording."""
+    tokens = run.split()
+    return any(len(t) > 2 for t in tokens) and sum(t.isdigit() for t in tokens) * 2 < len(tokens)
+
+
+RUN_ALLOW = os.path.join("tools", "export-run-allow.json")       # in the repo, never in the export
+
+
+def run_allowed(root=None):
+    """The reviewed phrases that are generic wording which also occurs in the user's inputs: [{"path": exported path, "phrase": the exact
+    wording, 6 words or more}] -> {(path, 6-word run)}. An entry clears the runs inside its own wording, in that one file; a file that
+    cannot be read stops the export."""
+    path = os.path.join(os.path.dirname(root or vendor.plugin_root()), RUN_ALLOW)
+    if not os.path.lexists(path):
+        return set()
+    try:
+        if not lint._regular(path):
+            raise ValueError("not a regular file")
+        with open(path, encoding="utf-8") as f:
+            rows = json.load(f)
+        cleared = set()
+        for r in rows:
+            runs = _runs(r["phrase"])
+            if not runs:
+                raise ValueError("phrase of %s has fewer than %d words" % (r["path"], RUN_WORDS))
+            cleared |= {(r["path"], run) for run in runs}
+        return cleared
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise ExportRefused("could not read %s (%s); fix it and run the export again" % (RUN_ALLOW, exc))
+
+
+def run_hits(stage_dir, texts, allowed=()):
+    """Any 6-word run of the user's own words that reached a shared file → [leak.Hit]. `allowed`: {(exported path, phrase)} pairs
+    that are reviewed and cleared; the line's other runs still count."""
     runs = set()
     for t in texts:
         runs |= _runs(t)
+    runs = {r for r in runs if _distinctive(r)}
     hits = []
     if not runs:
         return hits
@@ -388,20 +423,25 @@ def run_hits(stage_dir, texts):
         dirs[:] = sorted(x for x in dirs if x not in lint.SKIP_DIRS)
         for f in sorted(files):
             text, _ = lint._text(os.path.join(d, f))
+            rel = os.path.relpath(os.path.join(d, f), stage_dir)
             for n, line in enumerate((text or "").splitlines(), 1):
-                for run in sorted(_runs(line) & runs)[:1]:
-                    hits.append(leak.Hit(os.path.relpath(os.path.join(d, f), stage_dir), n, "her words", run))  # voice-ok
+                for run in sorted(r for r in _runs(line) & runs if (rel, r) not in allowed)[:1]:
+                    hits.append(leak.Hit(rel, n, "her words", run))  # voice-ok
     return hits
 
 
 def gate(stage_dir, config):
     """leak.scan + the user's 6-word runs + `budgit secrets`. Returns the report text; raises on any hit."""
     allow = config.get("share_allow") or ()
-    hits = leak.scan(stage_dir, leak.terms(config), allow)
+    try:
+        terms = leak.terms(config)
+    except ValueError as exc:                      # a protected_dirs that cannot be read is never "clean"
+        raise ExportRefused("could not run the leak check (%s); fix config.json and run it again" % exc)
+    hits = leak.scan(stage_dir, terms, allow)
     prebuilt = os.path.join(stage_dir, "plugin", "float")
     if os.path.isdir(prebuilt):
-        hits += leak.scan_binary_strings(prebuilt, leak.terms(config), allow)      # the text scanners skip files with NUL bytes
-    hits += [h for h in run_hits(stage_dir, _ledger_texts(config))
+        hits += leak.scan_binary_strings(prebuilt, terms, allow)      # the text scanners skip files with NUL bytes
+    hits += [h for h in run_hits(stage_dir, _ledger_texts(config), run_allowed())
              if ("%s:%s" % (h.path, h.term)).lower() not in {a.lower() for a in allow}]
     rules = public_rules(stage_dir) + hidden_hits(stage_dir)
     if hits or rules:

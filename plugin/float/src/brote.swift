@@ -242,9 +242,9 @@ struct Stroll {
     var facingLeft = false
     var rest = K.strollRest.0                       // ticks he stands still before the next walk
     static func lively(_ state: String) -> Bool { state == "radiante" || state == "contento" }
-    /// How far he walks per 10 fps tick (faster radiante, slower cansado or agotado); nil: enfermo and dormido stay put.
+    /// How far he walks per 10 fps tick (faster radiante, slower cansado or agotado, slowest enfermo); nil: dormido stays put.
     static func pace(_ state: String) -> Double? {
-        switch state { case "radiante": return 4.5; case "contento", "justo": return 3; case "cansado", "agotado": return 1.5; default: return nil }
+        switch state { case "radiante": return 4.5; case "contento", "justo": return 3; case "cansado", "agotado": return 1.5; case "enfermo": return 1.0; default: return nil }
     }
     /// One 10 fps tick: he walks to a spot anywhere on `lo...hi` (the window top he stands on, or the floor), stands a few seconds, and goes on.
     /// `busy` (a gesture, a clip, the calm after one, hover) pauses the walk; it goes on afterwards.
@@ -2448,12 +2448,12 @@ func runSelftest(assets: String) -> Never {
         var short = Stroll(); short.rest = 0; var xs2 = 600.0
         short.tick(state: "contento", busy: false, x: &xs2, lo: 0, hi: 1000, rng: rng)
         check(short.target == 0, "a walk shorter than 60 pt goes to the farther end instead (\(short.target ?? -1))")
-        for (st, v) in [("radiante", 4.5), ("justo", 3.0), ("cansado", 1.5), ("agotado", 1.5)] {
+        for (st, v) in [("radiante", 4.5), ("justo", 3.0), ("cansado", 1.5), ("agotado", 1.5), ("enfermo", 1.0)] {
             var r = Stroll(); r.target = 900; var xr = 500.0
             r.tick(state: st, busy: false, x: &xr, lo: 0, hi: 1000, rng: rng)
             check(near(xr, 500 + v), "\(st) walks \(v) pt per tick")
         }
-        for st in ["enfermo", "dormido", "unknown"] {
+        for st in ["dormido", "unknown"] {
             var t = Stroll(); t.target = 900; var xt = 500.0
             t.tick(state: st, busy: false, x: &xt, lo: 0, hi: 1000, rng: rng)
             check(xt == 500 && !t.walking && t.target == nil, "\(st): never walks")
