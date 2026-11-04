@@ -2,6 +2,10 @@
 
 Update with `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, then `/reload-plugins` in Claude Code. The Release notes page of the wiki has the same notes.
 
+## 0.13.4
+
+- **Budgit checks for a new release once a day.** It does a plain GET of the public `plugin.json` on `raw.githubusercontent.com`, from a background process, and the line under the prompt says when a newer release is waiting. The request sends only your IP address and a standard User-Agent. Turn it off with `BUDGIT_NO_UPDATE_CHECK=1` in your environment or `"update_check": "off"` in Budgit's `config.json`.
+
 ## 0.13.3
 
 - **`budgit daily` is a morning read of your ledger.** It shows the counts of the day, batches of related items, probable duplicates (by id), the order of the next version with Class A first, and a preview of the housekeeping clean-up. It uses no network and no model tokens, and it never writes the ledger. `budgit daily NAME` reads one project of your list and `--all` reads every project; `--json` gives the same as JSON. If git was not checked, the preview says "not checked" instead of 0. A private project shows only a masked label and counts, and a private name never appears in any output. Once a day, the session start also offers it in one line.

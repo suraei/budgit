@@ -1,23 +1,31 @@
 """R-241: tell the user when Budgit has an update, never install one.
 
 Three read-only questions, all answered from files already on disk except `fetch_public_version`, which asks the public
-repo once and only when the user runs `budgit update --check`:
+repo (raw.githubusercontent.com, a plain GET) when the user runs `budgit update --check`, and once a day from a detached
+child unless BUDGIT_NO_UPDATE_CHECK=1 or "update_check": "off" in config.json turns it off:
   - stale chat: the plugin this chat loaded is not the one now on disk (a restart of the chat picks the new one up);
   - available: the marketplace clone Claude Code keeps holds a newer release than the one installed;
   - the commands the user can run to update (printed, never executed: the update runs only on their click).
 Every file read here is the user's own and untrusted: strict patterns, bounded sizes, any problem means "nothing to say"."""
+import fcntl
 import json
+import math
 import os
 import re
+import stat
+import subprocess
+import sys
+import time
 import urllib.request
 
 _HOMEPAGE = re.compile(r"^https://github\.com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)/?$")
 DEFAULT_MARKETPLACE = "budgit-hub"
 NEW_PLUGIN = "budgit"
 _REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
-_VERSION = re.compile(r"^\d{1,5}(\.\d{1,5}){0,3}$")
+_VERSION = re.compile(r"[0-9]{1,5}(?:\.[0-9]{1,5}){0,3}")
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _MAX_BYTES = 262144
+CHECK_EVERY = 24 * 3600
 
 
 class UpdateError(Exception):
@@ -25,7 +33,7 @@ class UpdateError(Exception):
 
 
 def valid_version(value):
-    return isinstance(value, str) and bool(_VERSION.match(value))
+    return isinstance(value, str) and bool(_VERSION.fullmatch(value))
 
 
 def _key(version):
@@ -156,6 +164,9 @@ def update_state(loaded=None, config_dir=None, root=None):
             clone = _clone_version(loc, name) if loc else None
             if clone and installed and _key(clone) > _key(installed):
                 return {"kind": "available", "running": installed, "available": clone}
+        public = _public_cached(root)
+        if is_newer(public, disk):
+            return {"kind": "available", "running": disk, "available": public}
     except Exception:
         pass                    # a notice must never break the line
     return None
@@ -255,3 +266,100 @@ def current_version(root=None):
 
 def is_newer(candidate, current):
     return valid_version(candidate) and valid_version(current) and _key(candidate) > _key(current)
+
+
+# R-555: Claude Code never refreshes a third-party marketplace clone by itself, so the clone check in update_state stays blind.
+# Once a day a detached child asks the public repo (the one fixed URL, a plain GET) and caches the version; the hook only reads it.
+def _cache_path():
+    import studiolib
+    return os.path.join(studiolib.home_state(), "update-check.json")
+
+
+def _check_disabled():
+    """BUDGIT_NO_UPDATE_CHECK=1 in the environment, or "update_check": "off" in the home config.json (read only)."""
+    if (os.environ.get("BUDGIT_NO_UPDATE_CHECK") or "").strip().lower() not in ("", "0", "false", "no"):
+        return True
+    import studiolib
+    return studiolib._home_config().get("update_check") == "off"
+
+
+def _read_cache():
+    """(checked_at, version). A checked_at that is not a finite number, or lies more than a day ahead, reads as 0 (stale)."""
+    path = _cache_path()
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):  # a FIFO or device must never be opened
+            return 0, None
+    except OSError:
+        return 0, None
+    data = _read_json(path)
+    if not isinstance(data, dict):
+        return 0, None
+    at, version = data.get("checked_at"), data.get("version")
+    if not isinstance(at, (int, float)) or isinstance(at, bool) or not math.isfinite(at) or at > time.time() + CHECK_EVERY:
+        at = 0
+    return at, (version if valid_version(version) else None)
+
+
+def _write_cache(at, version):
+    import studiolib
+    os.makedirs(os.path.dirname(_cache_path()), exist_ok=True)
+    studiolib.atomic_write(_cache_path(), json.dumps({"checked_at": at, "version": version}) + "\n")
+
+
+def _spawn_refresh(root=None):
+    """Claim the interval first (a burst of status lines starts one child, not many), then fetch in a detached child:
+    the hook never waits on the network. A non-blocking lock makes the stale-read-then-claim step atomic: a caller that
+    finds the lock busy leaves the work to the holder, and one that finds the cache fresh inside the lock has lost the race."""
+    import studiolib
+    home = studiolib.home_state()
+    os.makedirs(home, exist_ok=True)
+    fd = os.open(os.path.join(home, "update-check.lock"),             # O_NONBLOCK: a FIFO here fails fast, never hangs
+                 os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return
+        at, version = _read_cache()
+        if time.time() - at < CHECK_EVERY:
+            return
+        _write_cache(time.time(), version)
+    finally:
+        os.close(fd)  # closing releases the lock, before the child starts
+    args = [sys.executable, os.path.abspath(__file__), "--refresh-cache"] + ([root] if root else [])
+    subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def _public_cached(root=None):
+    """The cached public version (None when unknown or the check is off); starts a refresh when the cache is a day old."""
+    if _check_disabled():
+        return None
+    at, version = _read_cache()
+    if time.time() - at >= CHECK_EVERY and update_url(root=root):
+        try:
+            _spawn_refresh(root)
+        except Exception:
+            pass
+    return version
+
+
+def refresh_cache(root=None):
+    """The child's job: one fetch, then the cache. Any failure keeps the old version; checked_at is written either way."""
+    try:
+        if _check_disabled():
+            return
+        url = update_url(root=root)
+        if not url:
+            return
+        version = _read_cache()[1]
+        try:
+            version = fetch_public_version(url)
+        except Exception:
+            pass
+        _write_cache(time.time(), version)
+    except Exception:
+        pass
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["--refresh-cache"]:
+    refresh_cache(sys.argv[2] if len(sys.argv) > 2 else None)

@@ -9,7 +9,7 @@
   <a href="#install">Install</a> · <a href="#what-you-get">What you get</a> · <a href="#brote">Brote</a> · <a href="#how-a-project-moves">How a project moves</a> · <a href="../../wiki">Wiki</a>
 </p>
 
-<p align="center"><sub>version 0.13.3 · Claude Code 2.1.292 or newer · Python 3 · tested on macOS · speaks English and Spanish</sub></p>
+<p align="center"><sub>version 0.13.4 · Claude Code 2.1.292 or newer · Python 3 · tested on macOS · speaks English and Spanish</sub></p>
 
 You ask Claude Code for three things on Monday. By Thursday two of them are lost up the chat, your weekly limit is nearly spent, and the feature Claude called "done" has never run.
 
@@ -36,6 +36,9 @@ It asks you to confirm adding the marketplace, then shows Budgit's details. Choo
 > Budgit needs Claude Code 2.1.292 or newer, on a Pro, Max, Team or Enterprise plan or a Console account, and Python 3. Claude's chat and Cowork cannot install Budgit, because it ships its own `budgit` command, so add it through Claude Code, not under **Customize → Plugins** in the Claude app.
 
 Budgit is not in Anthropic's official marketplace or its plugin directory, so a search there will not find it. You add it once by its GitHub name, `suraei/budgit`.
+
+> [!TIP]
+> Get new releases on their own: type `/plugin`, open the **Marketplaces** tab, pick `budgit-hub` and choose **Enable auto-update**. Claude Code leaves it off for marketplaces outside Anthropic's. Either way, the line under the prompt shows an arrow and the version when a new release is waiting.
 
 <details>
 <summary><h3><img src="assets/icon-zero.svg" width="20" height="20" align="absmiddle" alt=""> New to Claude Code? Start from zero</h3></summary>
@@ -245,7 +248,7 @@ Claude runs these for you as you talk. The `budgit` command lives inside Claude 
 ## Privacy
 
 - **On your computer.** Your configuration stays in `~/.budgit/`. A project's ledger, notes and reports stay in its `.budgit/` folder, which `budgit activate` adds to the project's `.gitignore`, so none of it is committed unless you choose to. Files you committed before stay committed: the new defaults only apply to new files.
-- **No telemetry.** Budgit reaches the internet only when you run `budgit scout`, turn on the ChatGPT lane (text and images), or point `budgit design-check` at a web address. The research, verifier and persona agents can also browse inside Claude Code.
+- **No telemetry.** Budgit reaches the internet when you run `budgit scout`, turn on the ChatGPT lane (text and images), or point `budgit design-check` at a web address. The research, verifier and persona agents can also browse inside Claude Code. It also checks for a new release once a day: a plain GET of the public `plugin.json` on `raw.githubusercontent.com`, which sends only your IP address and a standard User-Agent. Turn it off with `BUDGIT_NO_UPDATE_CHECK=1` or `"update_check": "off"` in Budgit's `config.json`.
 - **Nothing slips out.** Guards stop secrets and real personal data from reaching commits and searches.
 
 The [Privacy and security](../../wiki/Privacy-and-security) page on the wiki lists every file Budgit writes and every hook it installs, including the commit-message clean-up hook and how to turn it off.
