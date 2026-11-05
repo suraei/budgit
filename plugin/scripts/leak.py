@@ -18,7 +18,8 @@ import lint
 import studiolib as sl
 
 MIN_LEN = 4
-GENERIC = {"index", "readme", "changelog", "license", "template", "inbox", "processed", "archive", "done"}   # names every hub has
+GENERIC = {"index", "readme", "changelog", "license", "template", "inbox", "processed", "archive", "done",   # names every hub has
+           "general"}      # R-578: a common word in code; a project folder of that name says nothing private
 QUOTE = re.compile(r"«(?:[^»\s]+[ \t]+){2,}[^»\s]+»")      # the user's quotes: 3+ words («MVP n/m» is a label)
 Hit = namedtuple("Hit", "path line kind term")
 PROTECTED = "protected project"      # a `protected_dirs` folder name: found in text files only, never printed (R-428)

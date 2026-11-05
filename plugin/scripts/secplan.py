@@ -5,7 +5,7 @@ The table (`security_policy`) and the path classes (`path_risk`) are data in the
 decides whether the touched paths are security-relevant, and removes the reviewers the situation forbids:
 
 - critical budget: no Claude agent now (R2 and R3 are queued; a blocking release may take them anyway);
-- a protected path, or the Codex lane off: no Codex (R1);
+- a protected path, or the Codex lane off: no Codex (R1), unless a clean copy is possible (R-546: allow list present);
 - nothing in the plan is run by this command; each reviewer is named with the line that runs it.
 """
 import json
@@ -19,6 +19,7 @@ CLAUDE_AGENTS = ("R2", "R3")
 RUN_HINT = {
     "R0": "budgit secrets --staged; budgit audit-mcp; budgit audit",
     "R1": "budgit codex review",
+    "R1clean": "budgit codex review --clean-copy",
     "R2": "Agent studio:security-reviewer, model=sonnet",
     "R3": "Agent studio:security-reviewer, model=opus",
 }
@@ -47,6 +48,14 @@ def protected_hits(project, paths):
     return [p for p in paths if sl._protected_match(p, project, patterns)]
 
 
+def _clean_possible(project):
+    try:
+        import codexclean
+        return codexclean.possible(project)
+    except Exception:
+        return False
+
+
 def codex_lane_on():
     """The Codex lane is opt-in and needs its program; both must be true."""
     try:
@@ -56,7 +65,8 @@ def codex_lane_on():
         return False
 
 
-def plan(registry, trigger, paths, level, protected=(), codex_on=False, small=False, blocking=False, diff_text=""):
+def plan(registry, trigger, paths, level, protected=(), codex_on=False, small=False, blocking=False, diff_text="",
+         clean_copy=False):
     """-> dict: trigger, level, relevant, classes, protected, reviewers [{id, name, run}], queued [...], dropped [{reviewer, reason}]."""
     policy = registry.get("security_policy") or {}
     table = (policy.get("table") or {}).get(trigger)
@@ -80,12 +90,15 @@ def plan(registry, trigger, paths, level, protected=(), codex_on=False, small=Fa
         if blocking and trigger == "T4":
             chosen += [r for r in queued if r not in chosen]
             queued = []
-    if "R1" in chosen and (hits or not codex_on):
+    r1_clean = bool("R1" in chosen and hits and codex_on and clean_copy)    # R-546: protected code goes by clean copy
+    if "R1" in chosen and not r1_clean and (hits or not codex_on):
         chosen.remove("R1")
         dropped.append({"reviewer": "R1", "reason": "protected_path" if hits else "codex_off"})
     names = policy.get("reviewers") or {}
     return {"trigger": trigger, "level": level, "relevant": relevant, "classes": classes, "protected": hits,
-            "reviewers": [{"id": r, "name": names.get(r, r), "run": RUN_HINT.get(r, "")} for r in chosen],
+            "reviewers": [{"id": r, "name": names.get(r, r),
+                           "run": RUN_HINT["R1clean"] if (r == "R1" and r1_clean) else RUN_HINT.get(r, "")}
+                          for r in chosen],
             "queued": sorted(set(queued)), "dropped": dropped, "kind": kind}
 
 
@@ -143,6 +156,7 @@ def run(a, project=None, lang=None):
             diff_text = f.read()
     paths = [p.strip() for p in a.paths if p.strip()]
     result = plan(registry, a.trigger.upper(), paths, level, protected_hits(project, paths), codex_lane_on(),
+                  clean_copy=bool(project) and _clean_possible(project),
                   small=a.small, blocking=a.blocking, diff_text=diff_text)
     record = log_record(result, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     if project and not a.no_log:

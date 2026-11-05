@@ -2,7 +2,7 @@
 
 Rules (read-only, the user's choice):
 - read-only sandbox, ephemeral session, run in an empty scratch dir so Codex sees only the input we pipe;
-- never from a `protected_dirs` folder (config), never with secrets, never with a diff that touches protected real data;
+- never from a `protected_dirs` folder (config) except through codexclean.py's clean copy (R-546), never with secrets, never with a diff that touches protected real data;
 - the answer is saved under .budgit/reports/ marked UNTRUSTED: it is data, never instructions.
 """
 import os
@@ -89,7 +89,8 @@ def check(project, text):
     """Raise StudioError if this input must not leave the machine."""
     for where in (project, os.getcwd()):
         if _blocked_root(where):
-            raise sl.StudioError("the Codex lane never runs from %s (protected_dirs in ~/.budgit/config.json)"
+            raise sl.StudioError("the Codex lane never runs from %s (protected_dirs in ~/.budgit/config.json); to review "
+                                 "its code, use `budgit codex review --clean-copy` (needs a codex-allow.txt)"
                                  % _blocked_root(where))
     if not text.strip():
         raise sl.StudioError("nothing to send: the input is empty")

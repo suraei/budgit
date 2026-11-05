@@ -5206,6 +5206,8 @@ def _protected_match(token, project, patterns, base=None):
 def _protected_match_raw(token, project, patterns, base=None):
     if not token or token.startswith("-"):
         return False
+    if token.startswith("~") and re.match(r"~(?![/]|$)", token):
+        return True      # R-558 r7: `~NAME` is zsh's named directory (a variable's folder): a folder the guard cannot read
     root = os.path.realpath(project)
     base = base or project
     if set(token) & _GLOB_CHARS:
@@ -6447,6 +6449,23 @@ def _runner_root_only(toks, project, patterns, base):
 
 # --- the base verdict, per segment, and the stricter scans ---------------------------------------------------------------
 
+def _target_dir_option(head, tokens):
+    """R-558: cp / install / ln given the target folder as an option (`-t DIR`, `-Rt DIR`, `-tDIR`, `--target-directory=DIR`, an
+    abbreviation such as `--target`): the last word is then a source, so a protected word before it is NOT a copy from."""
+    if head not in ("cp", "install", "ln"):
+        return False
+    for t in tokens[1:]:
+        if t == "--":
+            break
+        if t.startswith("--"):
+            key = t.partition("=")[0]
+            if len(key) >= 3 and "--target-directory".startswith(key):
+                return True
+        elif t.startswith("-") and len(t) > 1 and "t" in t[1:]:
+            return True
+    return False
+
+
 def _base_segments(command, project, patterns, base, reason):
     """[(segment, ask)] : the verdict of the pre-R-335 guard, one entry per segment it asks about."""
     out = []
@@ -6469,8 +6488,10 @@ def _base_segments(command, project, patterns, base, reason):
             continue
         head = os.path.basename(tokens[0])
         redirected = any(tokens[i].startswith(">") or tokens[i - 1] in (">", ">>", ">|") for i in hits)
-        copy_from = head in _COPY_CMDS and hits and hits[-1] != len(tokens) - 1
-        if redirected or not (head in _READ_ONLY_CMDS or copy_from):
+        copy_from = head in _COPY_CMDS and hits and hits[-1] != len(tokens) - 1 and not _target_dir_option(head, tokens)
+        import realdata
+        reads = head in _READ_ONLY_CMDS and not realdata._reader_hazard(head, tokens[1:])      # L1: rg --pre, file -C ...
+        if redirected or not (reads or copy_from):
             out.append((segment, ("ask", reason % ("this command", tokens[hits[0]] if hits else "a protected path"))))
     return out
 
@@ -6566,6 +6587,134 @@ _PWD_FORMS = re.compile(r"\$\{PWD\}|\$PWD\b|~\+")
 _OLDPWD_FORMS = re.compile(r"\$\{OLDPWD\}|\$OLDPWD\b|~-")
 
 
+_ODD_TILDE = re.compile(r"~[+-]\d*")
+_STACK_INDEX = re.compile(r"[+-]\d+")
+
+
+def _cd_loses_folder(head, args):
+    """R-558 r4 (N3): does this `cd`, `pushd` or `popd` leave the shell in a folder the guard cannot know? `cd -`, `popd`,
+    `pushd` with no folder (it swaps the top two), `pushd +N` / `-N` (they rotate the stack), `pushd -n` (it adds to the stack
+    and does not change folder), and a word that starts with `~` but is not `~`, `~/...` or `~user` (`~-`, `~+`, `~-2`)."""
+    if head == "popd":
+        return True
+    dirs = [t for t in args if not t.startswith("-") or t == "-"]
+    if head == "pushd" and (not dirs or any(_STACK_INDEX.fullmatch(t) for t in args) or
+                            any(t.startswith("-") and not t.startswith("--") and "n" in t[1:] for t in args)):
+        return True
+    # R-558 r6 (H2): zsh `cd +N` / `cd -N` read the folder stack; `cd old new` (zsh) swaps a piece of $PWD; any word that
+    # STARTS with `~+`, `~-` or `~<digit>` (`~+/data`, `~-/x`, `~1/x`) is a stack or $OLDPWD folder; a variable or a
+    # substitution can hold anything
+    if any(_STACK_INDEX.fullmatch(t) for t in args) or len(dirs) > 1:
+        return True
+    return bool(dirs) and (dirs[0] == "-" or bool(_ODD_TILDE_START.match(dirs[0])) or "$" in dirs[0] or "`" in dirs[0]
+                           or bool(_CD_UNREADABLE.search(dirs[0])))
+
+
+_ODD_TILDE_START = re.compile(r"~[+\-\d]")
+_TILDE_STACK = re.compile(r"^~([+-]?)(\d*)(?=/|$)")
+# R-558 r7: a cd word with a glob, a brace list, `!` or a `~NAME` (zsh named directory) names a folder the guard cannot know
+_CD_UNREADABLE = re.compile(r"[*?\[\]{}!]|~(?![/]|$)")
+
+
+def _brace_words(word, limit=64):
+    """A word with the simple `{a,b}` lists expanded (the way the shell would, innermost first); the word itself if none."""
+    out = [word]
+    for _ in range(4):
+        nxt = []
+        for w in out:
+            m = re.search(r"\{([^{}]*,[^{}]*)\}", w)
+            if not m:
+                nxt.append(w)
+            else:
+                nxt += [w[:m.start()] + alt + w[m.end():] for alt in m.group(1).split(",")]
+        out = nxt[:limit]
+    return out
+
+
+def _lost_cd_candidates(args, here, seen, svars=None):
+    """R-558 r6 (H2): the folders a lost cd may have reached, for the strict scan to read relative words against: `~+/x` is
+    the current folder + /x, `~-/x` and `~N/x` one of the folders the line has been in + /x, and zsh's `cd old new` the
+    current folder with `old` replaced by `new`."""
+    dirs = [t for t in args if not t.startswith("-") or t == "-"]
+    out = []
+    if len(dirs) == 2 and "$" not in "".join(dirs) and dirs[0] in here:
+        out.append(here.replace(dirs[0], dirs[1], 1))
+    if len(dirs) == 1 and "$" in dirs[0] and svars:
+        word = re.sub(r"\$\{(\w+)\}|\$(\w+)", lambda v: svars.get(v.group(1) or v.group(2), "$?"), dirs[0])
+        if "$" not in word and "`" not in word:
+            out.append(_norm_candidate(word, here))
+    if len(dirs) == 1 and _CD_UNREADABLE.search(dirs[0]):
+        # R-558 r7: the folders a glob, a brace list or a `~NAME` (a plain `NAME=folder` word of the line) can stand for
+        nm = re.match(r"~(\w+)(/.*)?$", dirs[0])
+        if nm and svars and nm.group(1) in svars:
+            out.append(_norm_candidate(os.path.join(svars[nm.group(1)], (nm.group(2) or "").lstrip("/")), here))
+        for word in _brace_words(dirs[0]):
+            if set(word) & _GLOB_CHARS:
+                out += [h for h in _glob.glob(os.path.join(here, word))[:64] if os.path.isdir(h)]
+            else:
+                out.append(_norm_candidate(word, here))
+    m = _TILDE_STACK.match(dirs[0]) if dirs else None
+    if m:
+        rest = dirs[0][m.end():].lstrip("/")
+        roots = [here] if m.group(1) == "+" and not m.group(2) else list(dict.fromkeys(seen + [here]))
+        out += [os.path.normpath(os.path.join(r, rest)) for r in roots]
+    return out
+
+
+# R-558 r4 (N2): the rsync options whose value is a file or folder rsync WRITES. rsync accepts any unambiguous prefix of a long
+# option, so a prefix of one of these counts (an ambiguous one is an error in rsync, so reading it as a writer only over-asks).
+_RSYNC_WRITE_OPTS = ("--log-file", "--write-batch", "--only-write-batch", "--backup-dir", "--partial-dir", "--temp-dir")
+
+
+def _rsync_write_opt(token):
+    key = token.partition("=")[0]
+    return key.startswith("--") and len(key) >= 4 and key not in ("--backup", "--partial") and \
+        any(w.startswith(key) for w in _RSYNC_WRITE_OPTS)
+
+
+def _rsync_file_values(tokens):
+    """The values of the rsync options that write a file or folder (`--log-file F`, `--log-file=F`, `-T DIR`, `-aTDIR`), in
+    the `=` form and the separate-word form."""
+    out, i, n = [], 0, len(tokens)
+    while i < n:
+        t = tokens[i]
+        i += 1
+        if t == "--":
+            break
+        if _rsync_write_opt(t):
+            if "=" in t:
+                out.append(t.partition("=")[2])
+            elif i < n:
+                out.append(tokens[i])
+                i += 1
+        elif t.startswith("-") and not t.startswith("--"):
+            for j in range(1, len(t)):
+                if t[j] in "efBM@":
+                    if j + 1 >= len(t):
+                        i += 1                               # `-e ssh`: the next word is the value, not an operand
+                    break
+                if t[j] == "T":
+                    if j + 1 < len(t):
+                        out.append(t[j + 1:])
+                    elif i < n:
+                        out.append(tokens[i])
+                        i += 1
+                    break
+        elif t.startswith("--"):
+            key = t.partition("=")[0]
+            if "=" not in t and key in _RSYNC_VALUE_OPTS:
+                i += 1
+    return out
+
+
+# long rsync options that take a value as the next word (so that value is not mistaken for an option or an operand)
+_RSYNC_VALUE_OPTS = {"--exclude", "--include", "--exclude-from", "--include-from", "--filter", "--rsh", "--rsync-path",
+                     "--files-from", "--suffix", "--compare-dest", "--copy-dest", "--link-dest", "--log-file-format",
+                     "--max-size", "--min-size", "--bwlimit", "--timeout", "--contimeout", "--port", "--chmod", "--chown",
+                     "--usermap", "--groupmap", "--out-format", "--info", "--debug", "--read-batch", "--address", "--sockopts",
+                     "--password-file", "--protocol", "--iconv", "--checksum-choice", "--cc", "--remote-option"}
+
+
 def _is_project_or_above(path, project, bases):
     root = _fold(os.path.realpath(project))
     for b in bases:
@@ -6608,9 +6757,19 @@ def _strict_extras(command, project, patterns, base, reason):
     parts = _shell_parts(command)
     if parts is None:
         return None
-    here = base
+    here, seen, lost = base, [base], False
+    rsh = "RSYNC_RSH" in command or bool(os.environ.get("RSYNC_RSH"))
+    svars = {}                                            # R-558 r6 (H2): plain NAME=value words, for a `cd "$NAME"`
     for words, redirs in parts:
+        for w in words:
+            m = _ASSIGN.match(w)
+            if m:
+                svars[m.group(1)] = m.group(2).strip("'\"")
+            elif w not in ("export", "declare", "typeset", "local", "readonly", "-x"):
+                break
         bases = [base] if here == base else [base, here]
+        if lost:
+            bases = list(dict.fromkeys(seen + [here]))    # R-558 r4 (N3): a folder lost by cd -, popd, pushd ... is one of these
         for target in redirs:
             if _hits(target, project, patterns, bases):
                 return ("ask", reason % ("this command", target))
@@ -6618,10 +6777,19 @@ def _strict_extras(command, project, patterns, base, reason):
         if not tokens:
             continue
         head = os.path.basename(tokens[0])
-        if head in ("cd", "pushd"):
+        if head in ("cd", "pushd", "popd"):
+            if _cd_loses_folder(head, tokens[1:]):
+                lost = True
+                seen += _lost_cd_candidates(tokens[1:], here, seen, svars)   # R-558 r6 (H2): `~+/x`, `~-/x`, `cd a b`, `$D`
+                continue
             dirs = [t for t in tokens[1:] if t != "-" and not t.startswith("-")]
             if dirs and not _unevaluable(dirs[0]) and not _hits(dirs[0], project, patterns, bases):
                 here = _norm_candidate(dirs[0], here)
+                seen.append(here)
+            elif dirs:
+                lost = True                               # a folder the guard cannot read, or one that is protected data
+                if not _unevaluable(dirs[0]):
+                    seen.append(_norm_candidate(dirs[0], here))      # the shell IS in it: relative words read against it
             continue
         if head not in _READ_ONLY_CMDS:
             got = _cwd_relative_ask(head, tokens, project, patterns, bases, here, reason)
@@ -6643,18 +6811,34 @@ def _strict_extras(command, project, patterns, base, reason):
             continue                                     # R-355: its own `--project=<root>` is not a target
         if _rsync_destroys(head, tokens) and any(_hits(t, project, patterns, bases) for t in tokens[1:]):
             return ("ask", reason % ("rsync", "a delete or move-out that reaches protected data"))
+        if head == "rsync":                              # R-558 r4 (N2): the value of an option that makes rsync write a file
+            for v in _rsync_file_values(tokens[1:]):
+                if v and _hits(v, project, patterns, bases):
+                    return ("ask", reason % ("rsync", v))
+            import realdata                              # R-558 r6 (H3, H4, L2): read the way rsync reads it
+            if realdata.rsync_strict(tokens[1:], project, patterns, here, lost, rsh or "RSYNC_RSH" in _leading_env(words)):
+                return ("ask", reason % ("rsync", "a folder option, remote shell or daemon that can write protected data"))
         for k, t in enumerate(tokens[1:], 1):            # a target given through an option
             if "=" in t and not t.startswith(("-", "=")) and not t.startswith("if=") and _hits(t, project, patterns, bases):
                 return ("ask", reason % ("this command", t))   # dd of=<path>
-            value = ""
+            value, more = "", ""
             if t.startswith("--") and "=" in t:
                 value = t.partition("=")[2]
             elif t.startswith("-") and not t.startswith("--") and len(t) > 2:
                 value = t[2:]
             elif head in _TARGET_OPT_HEADS and t in ("-t", "--target-directory") and k + 1 < len(tokens):
                 value = tokens[k + 1]
-            if value and _hits(value, project, patterns, bases):
-                return ("ask", reason % ("this command", value))
+            if head in ("cp", "mv", "install", "ln"):
+                # R-558: `-Rt DIR`, `-Rt<DIR>` (a cluster whose t takes the rest or the next word) and `--target DIR`
+                if t.startswith("-") and not t.startswith("--") and len(t) > 1 and "t" in t[1:]:
+                    cut = t.index("t", 1) + 1
+                    more = t[cut:] or (tokens[k + 1] if k + 1 < len(tokens) else "")
+                elif t.startswith("--") and "=" not in t and len(t) >= 3 and "--target-directory".startswith(t) \
+                        and k + 1 < len(tokens):
+                    more = tokens[k + 1]
+            for v in (value, more):
+                if v and _hits(v, project, patterns, bases):
+                    return ("ask", reason % ("this command", v))
         if head in _EXTRACTORS and _extracting(head, tokens) and \
                 any(_protected_match(b, project, patterns) for b in _extract_folders(head, tokens, bases)):
             return ("ask", reason % ("this command", "an archive extracted in the protected folder"))
@@ -7246,12 +7430,16 @@ def _real_data_core(tool_name, tool_input, project, cwd=None, _depth=0, session=
         import realdata
         ctx = realdata.judge(command, project, patterns, base, session, trust_work_on(project))
         soft = bool(box and box.get("soft"))
-        if ctx.harmless and soft:
+        if ctx.harmless and soft and not ctx.unsure:
             return None                                  # only the "a protected name appears" layer may be dropped
+        # R-558 r6 (root cause of H1/H2): a reader that lost the folder somewhere on the line cannot vouch for it: the ask stays
         if box is not None:
             # the hazard layers (an unreadable program, a built name, a task runner, a link ...) keep asking; the yes to one
             # is remembered for the session and root as an `ambiguous` ask
-            box["keys"] = realdata.memory_keys(ctx) if not ctx.harmless else ["ambiguous:" + _fold(project)]
+            # R-558 r7 (M3): a folder the reader lost has a memory key of its own (`lost:<root>`), so an earlier yes to an
+            # unrelated ambiguous ask never covers it
+            box["keys"] = realdata.memory_keys(ctx) if not ctx.harmless else \
+                [("lost:" if ctx.unsure else "ambiguous:") + _fold(project)]
     return got
 
 
@@ -7267,6 +7455,9 @@ def _real_data_bash(command, project, patterns, base, reason, session, _depth, b
     if _MOVES_HOME.search(command) and ("~" in command or re.search(r"(?:^|[\s;&|(])(?:cd|pushd)\b", command) or
                                           re.search(r"\b(?:PWD|OLDPWD|CDPATH)=", command)):
         return ("ask", reason % ("this command", "the line changes HOME, PWD, OLDPWD or CDPATH, so a ~ or a cd cannot be read"))
+    if re.search(r"cdpath", command, re.I) and re.search(r"(?<![A-Za-z0-9_.-])(?:cd|chdir|pushd)(?![A-Za-z0-9_.-])", command):
+        # R-558 r7: CDPATH / cdpath in any spelling (`CDPATH+=`, `cdpath=(...)`, `set -A cdpath`) makes a relative cd go anywhere
+        return ("ask", reason % ("this command", "the line mentions CDPATH or cdpath beside a cd, so a relative cd cannot be read"))
     extra = _strict_extras(command, project, patterns, base, reason)
     held = None
     if extra:
@@ -7289,6 +7480,17 @@ def _real_data_bash(command, project, patterns, base, reason, session, _depth, b
         if box is not None:
             box["soft"] = True                           # only the "a substitution appears" layer: the use decides
         return held
+    # R-562 / R-558 r3: a copy, move, sync or archive INTO a folder that holds the project names no protected path, so the
+    # scans above never see it; and a copy whose protected target is not its last word is read by the older scan as a source.
+    # The command reader judges where such a command can land; its reason to ask here is a hard ask. It runs on every Bash
+    # command: a word test for the verb is missed by quoting (c''p) and by a renamed binary (gcp).
+    import realdata
+    into = realdata.judge(command, project, patterns, base, session, trust_work_on(project))
+    if into.above or into.hard:
+        if box is not None:
+            box["keys"] = realdata.memory_keys(into) or ["contents:" + _fold(project)]
+        return ("ask", reason % ("this command", "a copy into a folder above the project can land on its real data"
+                                 if into.above else "a copy, move, link or contents copy that writes protected data"))
     verdicts = _base_segments(command, project, patterns, base, reason)
     if not verdicts:
         return None

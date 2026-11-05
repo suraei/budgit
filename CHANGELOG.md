@@ -2,6 +2,12 @@
 
 Update with `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, then `/reload-plugins` in Claude Code. The Release notes page of the wiki has the same notes.
 
+## 0.13.5
+
+- **Codex can review a protected project's code through a clean copy.** `budgit codex review --clean-copy` reads the allow list you write in the project's Budgit folder (`codex-allow.txt`, one git pathspec per line, tracked source and tests only), copies those files from the last commit into a random folder under `/private/tmp/codex-clean/`, leaves out data, keys, logs, reports and notes even if listed, scans the copy for secrets and personal data, runs Codex on it inside a deny-by-default macOS sandbox that can read only the copy and system files, write only its own scratch folder, and reach the network only on port 443, plus DNS name lookups through the system resolver, and deletes it every time. Any scan hit sends nothing. Known risk you accept by using it: Codex keeps its own shell tool and reads a per-run copy of your ChatGPT login, so hidden instructions in the copied code could make it send that login out; if you suspect that, run `codex logout` and then `codex login`, which ends the old token. Without an allow list it refuses and says how to write one. `budgit codex review` without the flag still refuses a protected folder. `budgit security plan` keeps the Codex reviewer on a protected path when an allow list exists. `budgit codex clean-copy-offer` prints the Claude Code auto-mode entry for clean copies and a command block you run yourself; Budgit never edits your settings.
+- **Safer copy checks.**
+- **`budgit export` no longer refuses ordinary words.** A private project whose folder name is a common word stops blocking the leak gate.
+
 ## 0.13.4
 
 - **Budgit checks for a new release once a day.** It does a plain GET of the public `plugin.json` on `raw.githubusercontent.com`, from a background process, and the line under the prompt says when a newer release is waiting. The request sends only your IP address and a standard User-Agent. Turn it off with `BUDGIT_NO_UPDATE_CHECK=1` in your environment or `"update_check": "off"` in Budgit's `config.json`.

@@ -28,6 +28,8 @@ import studiolib as sl
 _SIMPLE_VAR = re.compile(r"\$(?:(\w+)|\{(\w+)\})")
 _BRACE = re.compile(r"\{[^{}\s]*,[^{}\s]*\}|\{[^{}\s]*\.\.[^{}\s]*\}")
 _GLOB = set("*?[")
+TILDE_NAME = re.compile(r"~(?![/]|$)")                       # R-558 r7: a `~` that is not `~` or `~/...`
+_GLOB_IN_DIR = re.compile(r"[*?\[][^/]*/")                   # R-558 r7: a glob character before the last `/`
 _SAFE_VALUE = re.compile(r"^(?!~[+-])[A-Za-z0-9_./~@:+=,%-]+$")
 _HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
 
@@ -73,13 +75,33 @@ class Ctx:
         self.pure = set()                  # R-515: variables whose value is a file name (a read-only substitution, a loop over paths)
         self.safe_subs = set()
         self.noresolve = False
-        self.lost = False
+        self._lost = False
+        self.unsure = False                # R-558 r6: the folder was lost at some point; the base guard's ask then stands
+        self.cd_mode = "lose"              # R-558 r6: how the next cd of this segment moves the folder (move, lose, skip)
+        self.verb = ""                     # R-558 r6 (M1): the program being judged; hard-ask memory keys carry it
+        self.rsync_rsh = bool(os.environ.get("RSYNC_RSH"))   # R-558 r6: a remote shell set for rsync by the environment
+        self.above = False                 # R-562: a copy into a folder above the root has a reason to ask
+        self.hard = False                  # R-558 r3: a copy verb resolved a write key, or a contents copy that cannot be trusted
+        self.raw = ""                      # the whole Bash command (only the top-level context has it)
         self.loops = 0
         self.keys = []
         self.doubts = []
+        self.dclass = []                   # R-558 r4 (N4): the memory class of each doubt: "", "contents" (hard) or "above" (hard)
+        self.dverb = []                    # R-558 r6 (M1): the verb that raised each doubt
+        self.above_targets = []            # R-558 r4 (N4): the folders above the root a hard ask would write into
         self.bodies = []
         self.depth = 0
         self.root = os.path.realpath(project)
+
+    @property
+    def lost(self):
+        return self._lost
+
+    @lost.setter
+    def lost(self, value):
+        self._lost = bool(value)
+        if value:
+            self.unsure = True
 
     @property
     def harmless(self):
@@ -96,8 +118,24 @@ class Ctx:
         except Exception:
             self.keys.append(str(path))
 
-    def doubt(self, why):
+    def doubt(self, why, hard=False):
         self.doubts.append(why)
+        self.dclass.append("contents" if hard else "")
+        self.dverb.append(self.verb or "sh")
+        if hard:
+            self.hard = True
+
+    def mark_above(self, folder, since):
+        """R-562 / R-558 r4 (N4): the doubts added since index `since`, and the command itself, concern a write into `folder`,
+        which holds the project. A yes to this ask is remembered as `above:<folder>`, a class of its own."""
+        self.above = True
+        for i in range(since, len(self.dclass)):
+            if self.dclass[i] == "contents":
+                self.dclass[i] = "above"
+        try:
+            self.above_targets.append("%s:%s" % (self.verb or "sh", sl._fold(os.path.realpath(folder))))
+        except Exception:
+            self.above_targets.append("%s:%s" % (self.verb or "sh", sl._fold(str(folder))))
 
 
 # ------------------------------------------------------------------------------------------------------------ levels
@@ -172,8 +210,11 @@ def _tail_excludes(word, ctx):
     variable holds: `$S/out.txt` against `plans/*.handles.json`."""
     if "/" not in word and word.startswith("$"):
         return False
+    if TILDE_NAME.match(word):
+        return False                                      # R-558 r7: `~D/real/y.csv`
     tail = word.rsplit("/", 1)[-1]
-    if not tail or "$" in tail or "`" in tail or set(tail) & _GLOB or "{" in tail or tail.startswith(("~", "(")):
+    if not tail or tail in (".", "..") or "$" in tail or "`" in tail or set(tail) & _GLOB or "{" in tail or \
+            tail.startswith(("~", "(")):
         return False
     folded = sl._fold(tail)
     for m in _tail_matchers(ctx.patterns):
@@ -190,6 +231,8 @@ def val(word, ctx):
     if word is None:
         return None
     if word.startswith("~"):
+        if TILDE_NAME.match(word):
+            return None                                       # R-558 r7: `~NAME` is zsh's named directory; only `~` and `~/` are readable
         word = os.path.expanduser(word)
 
     def one(m):
@@ -207,6 +250,8 @@ def val(word, ctx):
         return None
     if "$" in out or "`" in out or "<(" in out or ">(" in out or _BRACE.search(out):
         return None
+    if ctx.lost and out and not out.startswith(("/", "-")):
+        return None                                       # R-558 r3: after `cd -`, popd, pushd or a cd to an unreadable name
     return out
 
 
@@ -253,19 +298,25 @@ def _set_var(name, value, ctx, persist=True):
         ctx.noresolve = True
     if name in _CODE_ENV:
         ctx.doubt("an environment variable that changes which program runs (%s)" % name)
-    v = val(value, ctx) if "$" in value else value
+    v = val(value, ctx) if ("$" in value or "~" in value) else value
     if persist and ctx.loops == 0 and v is not None and _SAFE_VALUE.match(v):
         ctx.known[name] = v
     else:
         ctx.known.pop(name, None)
 
 
+_FOUND = "$__FOUND"                                      # what `{}` stands for inside a find -exec command
+
+
 def target(word, ctx, destructive=False, what="a write"):
     """One word that a writer changes. A protected file is a write; a folder that holds protected data (or the project) is
     one only for a destructive verb; a word the guard cannot read is a doubt unless its file name cannot be protected."""
+    if _FOUND in word:
+        return                                            # `find S -exec chmod x {}`: the start folders are judged by find()
     v = val(word, ctx)
     if v is None:
-        if not _tail_excludes(word, ctx):
+        # R-558 r6: in a lost folder a relative name can be anything, whatever its file name says
+        if ctx.lost or not _tail_excludes(word, ctx):
             ctx.doubt("%s to a name the guard cannot read (%s)" % (what, word))
         return
     if v.startswith("/dev/"):
@@ -273,6 +324,8 @@ def target(word, ctx, destructive=False, what="a write"):
     lv = level(v, ctx)
     if lv == "exact" or (destructive and lv in ("ancestor", "root")):
         ctx.write(sl._norm_candidate(v, ctx.here) if not (set(v) & _GLOB) else os.path.join(ctx.here, v))
+    elif _GLOB_IN_DIR.search(v):
+        ctx.doubt("%s to a name with a glob in a folder part (%s)" % (what, word))   # R-558 r7: it may name any folder
 
 
 # ---------------------------------------------------------------------------------------------------------- parsing
@@ -326,7 +379,9 @@ def segments(text):
                 continue
             if words or outs:
                 segs.append((words, outs, op))
-            words, outs, want, op = [], [], None, tok
+                op = ""
+            # R-558 r6: every operator since the last command is kept (`) &&`, `; }`), so a group's end is never lost
+            words, outs, want, op = [], [], None, (op + " " + tok).strip()
             continue
         if want == ">":
             outs.append(tok)
@@ -418,8 +473,71 @@ def assign_only_subst(command, _depth=0):
         return False
 
 
+# R-558 r7: the folder is tracked on an ALLOWLIST. Six rounds of blocklisting shell forms ('!', a function body, a case `)`,
+# `~NAME`, a glob, `CDPATH+=`) each missed the next one, so the reader no longer models what a cd does. It believes the folder
+# moved on exactly one shape, and every other cd-like word on the line leaves the folder lost.
+_CD_NAMES = ("cd", "chdir", "pushd", "popd")
+_CD_TEXT = re.compile(r"(?<![A-Za-z0-9_.-])(?:cd|chdir|pushd|popd)(?![A-Za-z0-9_.-])")
+_CDPATH_TEXT = re.compile(r"cdpath", re.I)
+_CD_BAD_CHARS = set("$`~*?[]{}()!#^<>|&;\\\"'")
+_AFTER_CD_OK = {"&&", "|"}
+
+
+def _cd_operand(args):
+    """The one literal operand of a certain cd (`cd X`, `cd -- X`), or None. The word has none of `$ ` ~ * ? [ ] { } ( ) !`
+    (nor `# ^ < > | & ; \\`), no leading `-`, `+` or `=`, and CDPATH in the environment cannot redirect it."""
+    if len(args) == 2 and args[0] == "--":
+        args = args[1:]
+    if len(args) != 1:
+        return None
+    w = args[0]
+    if not w or w[0] in "-+=" or set(w) & _CD_BAD_CHARS:
+        return None
+    if os.environ.get("CDPATH") and not w.startswith(("/", "./", "../")) and w not in (".", ".."):
+        return None
+    return w
+
+
+def certain_cd(text, raw=""):
+    """True when the line is `[NAME=value ...] cd [--] WORD && ...` and nothing after the cd can run without it: only `&&`,
+    `|` and redirects follow, no `;`, `||`, `&` or newline, no second cd-like word anywhere, and CDPATH / cdpath is not
+    mentioned anywhere. Only then did the cd surely run and succeed before every later command."""
+    toks = sl._lex_raw(text)
+    if not toks or _CDPATH_TEXT.search(raw or text) or _CDPATH_TEXT.search(text):
+        return False
+    i = 0
+    while i < len(toks) and sl._ASSIGN.match(toks[i]):
+        i += 1
+    if i >= len(toks) or toks[i] != "cd":
+        return False
+    j = i + 1
+    while j < len(toks) and not (toks[j] and set(toks[j]) <= sl._PUNCT_ONLY):
+        j += 1
+    if j >= len(toks) or toks[j] != "&&" or _cd_operand(toks[i + 1:j]) is None:
+        return False
+    for t in toks[j:]:
+        if t and set(t) <= sl._PUNCT_ONLY and t not in _AFTER_CD_OK and ">" not in t and "<" not in t and t not in ("(", ")"):
+            return False
+    named = sum(1 for t in toks if os.path.basename(t) in _CD_NAMES)
+    return max(named, len(_CD_TEXT.findall(text))) == 1
+
+
+def cd_words(text):
+    """How many cd-like words the line has (cd, chdir, pushd, popd: as a token, or spelled anywhere in the text)."""
+    toks = sl._lex_raw(text) or []
+    return max(sum(1 for t in toks if os.path.basename(t) in _CD_NAMES), len(_CD_TEXT.findall(text)))
+
+
+def _walk(segs, ctx, certain=False):
+    """R-558 r7: judge the segments in order. Only the first one can move the folder, and only when `certain` (see
+    certain_cd); a cd anywhere else was already counted by run() and left the folder lost."""
+    for k, (words, outs, _op) in enumerate(segs):
+        _judge_segment(list(words), list(outs), ctx, "move" if (k == 0 and certain) else "lose")
+
+
 def run(command, ctx):
     ctx.depth += 1
+    saved = (ctx.here, ctx._lost)                         # R-558 r6 (H1): a nested run is another shell: its cd stays there
     try:
         if ctx.depth > 6:
             ctx.doubt("a command nested too deeply")
@@ -441,6 +559,7 @@ def run(command, ctx):
             run(inner, ctx)
         ctx.safe_subs = mine                              # the nested runs set their own
         if sl._MOVES_HOME.search(text):
+            ctx.lost = True                               # R-558 r7: no folder can be trusted after it
             ctx.doubt("the line changes HOME, PWD, OLDPWD or CDPATH")
             return
         if "$'" in text or '$"' in text:
@@ -449,15 +568,39 @@ def run(command, ctx):
         if segs is None:
             ctx.doubt("a shell form the guard cannot read")
             return
-        for words, outs, _op in segs:
-            judge_segment(list(words), list(outs), ctx)
+        certain = certain_cd(text, ctx.raw)
+        if cd_words(text) > (1 if certain else 0):
+            ctx.lost = True                               # R-558 r7: any cd-like word but the one certain cd loses the folder
+        _walk(segs, ctx, certain)
     finally:
         ctx.depth -= 1
+        if ctx.depth:
+            ctx.here, ctx._lost = saved
 
 
 # --------------------------------------------------------------------------------------------------------- segments
 
-def judge_segment(words, outs, ctx):
+_RSH_KEEPERS = {"export", "declare", "typeset", "readonly", "local"}
+
+
+def _judge_segment(words, outs, ctx, cd_mode="lose"):
+    """R-558 r7 (Codex low): `RSYNC_RSH=x cmd` and `env RSYNC_RSH=x cmd` set the remote shell for that command only; an
+    assignment on its own line or an `export` keeps it for the rest of the line."""
+    prefix, was = any(w.startswith("RSYNC_RSH=") for w in words), ctx.rsync_rsh
+    try:
+        _judge_segment_inner(words, outs, ctx, cd_mode)
+    finally:
+        if prefix and was is False:
+            rest = [w for w in words if w not in _LEAD]
+            while rest and sl._ASSIGN.match(rest[0]):
+                rest = rest[1:]
+            if rest and rest[0] not in _RSH_KEEPERS:
+                ctx.rsync_rsh = was
+
+
+def _judge_segment_inner(words, outs, ctx, cd_mode="lose"):
+    if any(w.startswith("RSYNC_RSH=") for w in words):
+        ctx.rsync_rsh = True                              # R-558 r6 (H3): `RSYNC_RSH=env rsync`, `env RSYNC_RSH=x rsync`
     for w in words + outs:
         if "$(" in w:
             subs = inner_substs(w)
@@ -484,6 +627,8 @@ def judge_segment(words, outs, ctx):
         return
     env = {sl._ASSIGN.match(a).group(1): sl._ASSIGN.match(a).group(2) for a in assigns}
     head = words[0]
+    # R-558 r7: only the shell's own `cd` can move the folder, and only as the certain first command (see certain_cd)
+    direct = head == "cd"
     if head == "done":
         ctx.loops = max(0, ctx.loops - 1)
         return
@@ -507,10 +652,18 @@ def judge_segment(words, outs, ctx):
         head = words[0]
     if head in ("fi", "esac", "in", ";;", "case", "function"):
         return
+    split = any(os.path.basename(w) == "env" for w in words[:2]) and any(
+        t == "--split-string" or t.startswith("--split-string=") or (t.startswith("-") and not t.startswith("--") and "S" in t[1:])
+        for t in words[1:])
     words = unwrap(words)
     if not words:
         return
+    before = len(ctx.keys)
+    ctx.cd_mode = cd_mode if direct and words[0] == head else "lose"
     command(words, env, ctx)
+    ctx.cd_mode = "lose"
+    if split and len(ctx.keys) > before:
+        ctx.hard = True                               # H5: the older scan reads `env -S '<cmd>'` as one word, whatever it runs
 
 
 def redirect(tok, ctx):
@@ -536,10 +689,22 @@ def unwrap(words):
                      "caffeinate", "setsid", "unbuffer", "builtin", "noglob", "arch"}:
             return words
         i, valued = 1, _WRAP_VALUE_OPTS.get(w, set())
+        split = None
         while i < len(words):
             t = words[i]
             if w == "env" and sl._ASSIGN.match(t):
                 i += 1
+            elif w == "env" and (t == "--split-string" or t.startswith("--split-string=") or
+                                 (t.startswith("-") and not t.startswith("--") and "S" in t[1:])):
+                # R-558 r3: `env -S 'cp x R/data.json'` splits the string into the command it runs
+                if t.startswith("--split-string="):
+                    split, i = t.partition("=")[2], i + 1
+                elif t == "--split-string":
+                    split, i = (words[i + 1] if i + 1 < len(words) else ""), i + 2
+                else:
+                    rest = t[t.index("S") + 1:]
+                    split, i = (rest, i + 1) if rest else ((words[i + 1] if i + 1 < len(words) else ""), i + 2)
+                break
             elif t == "--":
                 i += 1
                 break
@@ -547,6 +712,15 @@ def unwrap(words):
                 i += 2 if t in valued else 1
             else:
                 break
+        if split is not None:
+            try:
+                extra = shlex.split(split)
+            except ValueError:
+                return ["eval", split]                    # a string the guard cannot split: judged as a built command line
+            while extra and sl._ASSIGN.match(extra[0]):
+                extra = extra[1:]
+            words = extra + words[i:]
+            continue
         if w == "timeout" and i < len(words):
             i += 1                                        # the duration
         if w == "lockf" and i < len(words):
@@ -576,9 +750,23 @@ def _flags_ops(args, valued=()):
     return flags, ops
 
 
+def _long(f, name, minlen):
+    """The long option `name` or an abbreviation of it that cp / rsync accept (`--rec`, `--arc`), with or without =value."""
+    key = f.partition("=")[0]
+    return key.startswith("--") and len(key) >= minlen and name.startswith(key)
+
+
 def _recursive(flags):
-    return any(f in ("--recursive", "-r", "-R") or (f.startswith("-") and not f.startswith("--") and re.search("[rR]", f))
-               for f in flags)
+    return any(f in ("--recursive", "-r", "-R") or _long(f, "--recursive", 5)
+               or (f.startswith("-") and not f.startswith("--") and re.search("[rR]", f)) for f in flags)
+
+
+def _archive(f):
+    return _long(f, "--archive", 4) or (f.startswith("-") and not f.startswith("--") and "a" in f)
+
+
+def _dereference(f):
+    return _long(f, "--dereference", 5) or (f.startswith("-") and not f.startswith("--") and bool(re.search("[LH]", f)))
 
 
 _FLAG_WRITERS = {"sed", "sort", "find", "perl", "awk", "gawk", "mawk", "nawk", "tee", "cp", "mv", "rsync", "dd", "install", "ruby"}
@@ -622,9 +810,50 @@ def _flag_in_variable(head, args, ctx):
     return out
 
 
+_COPY_ALIASES = {"gcp": "cp", "gmv": "mv", "ginstall": "install", "gln": "ln"}
+_HARD_VERBS = {"cp", "mv", "install", "ditto", "rsync", "ln"}
+
+
 def command(words, env, ctx):
+    """Judge one simple command. R-558 r3 (H4): a write key a copy, move, install or link resolves is a hard ask for the
+    hook, wherever the protected word sits among the operands (the older scan reads a protected word that is not the last as
+    a source). GNU `g` prefixed names are the verbs."""
+    head = os.path.basename(words[0])
+    if head in _COPY_ALIASES:
+        words, head = [_COPY_ALIASES[head]] + list(words[1:]), _COPY_ALIASES[head]
+    ctx.verb = head
+    before = len(ctx.keys)
+    _command(words, env, ctx)
+    if head in _HARD_VERBS and len(ctx.keys) > before:
+        ctx.hard = True
+
+
+def _reader_hazard(head, args):
+    """L1: a reader or builtin on the lists whose options write a file or run another program."""
+    low = [a.partition("=")[0] for a in args]
+    if head == "rg":
+        return any(a in ("--pre", "--hostname-bin") for a in low)
+    if head == "file":
+        return any(a in ("-C", "--compile") or (a.startswith("-") and not a.startswith("--") and "C" in a) for a in args)
+    if head == "compgen":
+        return any(a.startswith("-") and not a.startswith("--") and "C" in a for a in args)
+    if head == "enable":
+        return any(a.startswith("-") and not a.startswith("--") and "f" in a for a in args)
+    if head == "hash":
+        return any(a.startswith("-") and not a.startswith("--") and "p" in a for a in args)
+    if head == "history":
+        return any(a.startswith("-") and not a.startswith("--") and bool(set(a) & set("wanrcd")) for a in args)
+    if head in ("let", "[[", "[", "test"):
+        return any("$(" in a or "`" in a for a in args)
+    return False
+
+
+def _command(words, env, ctx):
     head = os.path.basename(words[0])
     args = words[1:]
+    if _reader_hazard(head, args):
+        ctx.doubt("%s with an option that writes a file or runs a program" % head)
+        return
     m_plus = re.match(r"^(\w+)\+=", words[0])
     if m_plus:                                            # x+=y builds a name the guard does not follow
         ctx.known.pop(m_plus.group(1), None)
@@ -640,18 +869,15 @@ def command(words, env, ctx):
             if not a.startswith("-"):
                 target(a, ctx, destructive=True, what="install")
         return
-    if head in ("cd", "pushd"):
-        dirs = [t for t in args if not t.startswith("-") or t == "-"]
-        v = val(dirs[0], ctx) if dirs else None
-        if not dirs or dirs[0] == "-" or v is None:
-            ctx.lost = ctx.lost or bool(dirs)
-            if not dirs and head == "cd":
-                ctx.here = os.path.expanduser("~")
+    if head in _CD_NAMES:
+        # R-558 r7: the folder moves only for the shell's own `cd` that run() found certain, with one literal operand;
+        # pushd, popd, chdir, a wrapped cd or any other cd leaves it lost
+        mode, ctx.cd_mode = ctx.cd_mode, "lose"
+        operand = _cd_operand(args) if mode == "move" and head == "cd" and words[0] == "cd" else None
+        if operand is None:
+            ctx.lost = True
         else:
-            ctx.here = sl._norm_candidate(v, ctx.here)
-        return
-    if head == "popd":
-        ctx.lost = True
+            ctx.here = sl._norm_candidate(operand, ctx.here)
         return
     if head in ("export", "declare", "typeset", "local", "readonly"):
         for a in args:
@@ -780,7 +1006,7 @@ def writer(head, args, ctx):
         for o in ops:
             v = val(o, ctx)
             if v is None:
-                if not _tail_excludes(o, ctx):
+                if _FOUND not in o and not _tail_excludes(o, ctx):
                     ctx.doubt("ln with a name the guard cannot read")
             elif level(v, ctx):
                 ctx.write(sl._norm_candidate(v, ctx.here))
@@ -848,23 +1074,198 @@ def writer(head, args, ctx):
         target(o, ctx, what=head)
 
 
+def _above_root(path, ctx):
+    """R-562: is `path` a folder that holds the project root (a strict ancestor of it)? `level` is None for such a folder."""
+    try:
+        fp = sl._fold(sl._norm_candidate(path, ctx.here))
+        froot = sl._fold(ctx.root)
+        return fp != froot and froot.startswith(fp if fp.endswith(os.sep) else fp + os.sep)
+    except Exception:
+        return True
+
+
+def _can_reach_root(path, ctx):
+    """A target folder that is the root, inside it, or above it: anything else cannot lead to protected data."""
+    try:
+        fp = sl._fold(sl._norm_candidate(path, ctx.here))
+        froot = sl._fold(ctx.root)
+        return fp == froot or fp.startswith(froot + os.sep) or _above_root(path, ctx)
+    except Exception:
+        return True
+
+
+def _contents_hit(src, target_dir, ctx, limit=3000, deref=False):
+    """R-558: a copy whose source ends in `/` or `/.` (or a ditto source) writes what the folder HOLDS into the target.
+    The first target path that is protected data, or None. A source that cannot be listed (a glob, missing, not a folder,
+    unreadable, too big) counts as a doubt, so the command asks. With a copy that follows links (-L, -H) a symlinked
+    folder inside the source is a doubt: what it holds is not listed. Target folders that cannot lead to the root are
+    not entered (a copy into a folder above the project reads the source only where it can matter)."""
+    top = sl._norm_candidate(src, ctx.here)
+    if set(src) & _GLOB or not os.path.isdir(top):
+        ctx.doubt("a copy of the contents of a folder the guard cannot list (%s)" % src)
+        return None
+    seen = 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(top, onerror=_raise):
+            rel_dir = os.path.relpath(dirpath, top)
+            for name in dirnames + filenames:
+                seen += 1
+                if seen > limit:
+                    ctx.doubt("a copy of the contents of a folder too big to list (%s)" % src)
+                    return None
+                if deref and name in dirnames and os.path.islink(os.path.join(dirpath, name)):
+                    ctx.doubt("a copy that follows a symlinked folder inside its source (%s)" % src)
+                    return None
+                joined = os.path.normpath(os.path.join(target_dir, rel_dir, name))
+                if level(joined, ctx) == "exact":
+                    return joined
+            dirnames[:] = [d for d in dirnames if _can_reach_root(os.path.join(target_dir, rel_dir, d), ctx)]
+    except OSError:
+        ctx.doubt("a copy of the contents of a folder the guard cannot read (%s)" % src)
+    return None
+
+
+def _raise(err):
+    raise err
+
+
+_CP_PLAIN_OPTION = re.compile(r"-[RrapvfnX]+")
+_DITTO_PLAIN_OPTION = re.compile(r"-V")
+
+
+def _sole_plain_copy(ctx):
+    """R-558 r4: the listing of a contents copy is trusted only when the whole Bash command is ONE plain foreground `cp` or
+    `ditto`: no `&&`, `;`, `|`, `&`, loop, subshell, substitution, `bash -c`, here-document, env wrapper or xargs, so nothing
+    runs before or beside it that could fill the folder, AND every option comes from a short ALLOW-LIST: cp `-R -r -a -p -v
+    -f -n -X` (and groups of those letters), ditto no option or `-V`. Any other option, any long option and any other verb
+    (rsync, gcp, a path to a renamed binary) is not trusted: three rounds of denying option shapes each found new ones.
+    The listing can only ADD an ask, never remove one."""
+    raw = (ctx.raw or "").strip()
+    toks = sl._sole_simple(raw) if raw else None
+    if not toks:
+        return False
+    verb = toks[0]
+    if verb == "cp":
+        plain = _CP_PLAIN_OPTION
+    elif verb == "ditto":
+        plain = _DITTO_PLAIN_OPTION
+    else:
+        return False                                       # also /bin/cp, gcp, rsync: not the plain word
+    return all(plain.fullmatch(t) for t in toks[1:] if t.startswith("-") and t != "-")
+
+
+def _land(head, srcs, v, rec, deref, notarget, ctx):
+    n = len(ctx.keys) + len(ctx.doubts)
+    d0 = len(ctx.doubts)
+    try:
+        _land_inner(head, srcs, v, rec, deref, notarget, ctx)
+    finally:
+        if len(ctx.keys) + len(ctx.doubts) > n:
+            ctx.hard = True
+            for i in range(d0, len(ctx.dclass)):
+                ctx.dclass[i] = ctx.dclass[i] or "contents"
+
+
+def _land_inner(head, srcs, v, rec, deref, notarget, ctx):
+    """Judge what the sources write into the folder `v`, which is the project root, a folder inside it that holds protected
+    data, or (R-562) a folder above it. A source ending in `/` (or `/.`, `.`, `..`, a ditto source, or any folder under
+    -T) writes the files it HOLDS into `v` (R-558): they are listed. A source that is not `/.` also lands under its own
+    name (GNU cp copies `X/` to `v/X`), so that name is judged as well."""
+    contents = 0
+    for s in srcs or [""]:
+        sv = val(s, ctx) if s else ""
+        if sv is None:
+            ctx.doubt("%s into a folder that holds protected data, from a name the guard cannot read" % head)
+            continue
+        dotted = sv in (".", "..") or sv.endswith(("/.", "/.."))
+        if sv and (head == "ditto" or (rec and (sv.endswith("/") or dotted)) or
+                   (notarget and os.path.isdir(sl._norm_candidate(sv, ctx.here)))):
+            contents += 1
+            if not _sole_plain_copy(ctx):
+                ctx.doubt("a copy of the contents of a folder inside a command that is more than one plain copy (%s)" % sv,
+                          hard=True)
+            else:
+                held = _contents_hit(sv, v, ctx, deref=deref)
+                if held:
+                    ctx.write(sl._norm_candidate(held, ctx.here))
+            if head == "ditto" or dotted:
+                continue
+        joined = os.path.join(v, os.path.basename(sv.rstrip("/"))) if sv else v
+        jl = level(joined, ctx)
+        if jl is None and rec and _above_root(joined, ctx):
+            jl = "ancestor"                                # R-562: a folder that holds the project, merged with the source
+        if jl == "exact" or (rec and jl in ("ancestor", "root")) or (head == "ditto" and not sv):
+            ctx.write(sl._norm_candidate(joined, ctx.here))
+    if contents and len(srcs) > 1:
+        ctx.doubt("a copy of the contents of a folder together with other sources (one may land inside another)", hard=True)
+
+
+def _unknown_folders(dest, ctx):
+    """R-558 r4 (N3): the folders a destination word the guard cannot resolve may stand for, judged by the word's own last
+    name: the root, a folder above it, or a folder inside it that holds protected data, whose name is that last name.
+    Nothing when the last name is itself unreadable (a variable, `.`, `..`, a glob): that is the older doubt, as before."""
+    comps = [c for c in dest.rstrip("/").split("/") if c not in ("", ".")]
+    tail = comps[-1] if comps else ""
+    if not tail or tail == ".." or "$" in tail or "`" in tail or "{" in tail or set(tail) & _GLOB or tail.startswith("~"):
+        return []
+    cands = [ctx.root]
+    for p in ctx.patterns:
+        acc = ctx.root
+        for c in str(p).split("/"):
+            if not c or set(c) & _GLOB:
+                break
+            acc = os.path.join(acc, c)
+            cands.append(acc)
+    d = ctx.root
+    while os.path.dirname(d) != d:
+        d = os.path.dirname(d)
+        cands.append(d)
+    want = sl._fold(tail)
+    return list(dict.fromkeys(f for f in cands if sl._fold(os.path.basename(f)) == want))
+
+
 def copy_move(head, args, ctx):
-    flags, ops, dest, i = [], [], None, 0
+    flags, ops, dest, notarget, i = [], [], None, False, 0
     while i < len(args):
         a = args[i]
         i += 1
-        if a in ("-t", "--target-directory") and i < len(args):
-            dest = args[i]
-            i += 1
-        elif a.startswith("--target-directory="):
-            dest = a.partition("=")[2]
-        elif a.startswith("-t") and len(a) > 2 and not a.startswith("--"):
-            dest = a[2:]
-        elif a == "--":
+        if a == "--":
             ops += args[i:]
             break
+        if a.startswith("--"):
+            if a.partition("=")[0] in ("--suffix", "--no-preserve", "--sparse") or _long(a, "--suffix", 4):
+                if "=" not in a and i < len(args):
+                    i += 1                                   # R-558 r3: `--suffix .bak` takes the next word
+                flags.append(a)
+            elif _long(a, "--target-directory", 3):
+                if "=" in a:
+                    dest = a.partition("=")[2]
+                elif i < len(args):
+                    dest = args[i]
+                    i += 1
+            elif _long(a, "--no-target-directory", 6):
+                notarget = True
+            else:
+                flags.append(a)
         elif a.startswith("-") and a != "-":
-            flags.append(a)
+            cut = len(a)
+            for j in range(1, len(a)):                       # a cluster of short flags: `-Rt <dir>`, `-Rt<dir>`, `-aT`
+                if a[j] == "S" and head in ("cp", "mv"):
+                    if j + 1 >= len(a) and i < len(args):
+                        i += 1                               # `-S <suffix>`: the value is the next word
+                    cut = j + 1                              # `-RSt`: the rest of the cluster is the suffix
+                    break
+                if a[j] == "T":
+                    notarget = True
+                elif a[j] == "t" and head != "ditto":
+                    if j + 1 < len(a):
+                        dest = a[j + 1:]
+                    elif i < len(args):
+                        dest = args[i]
+                        i += 1
+                    cut = j + 1
+                    break
+            flags.append(a[:cut])
         else:
             ops.append(a)
     if head == "install" and any(f in ("-d", "--directory") for f in flags):
@@ -879,44 +1280,268 @@ def copy_move(head, args, ctx):
     if head == "mv":
         for s in srcs:
             target(s, ctx, destructive=True, what="a move")
-    rec = _recursive(flags) or head == "ditto"
+    rec = _recursive(flags) or head == "ditto" or (head == "cp" and any(_archive(f) for f in flags))   # cp -a is -R
+    deref = any(_dereference(f) for f in flags)
+    parents = head == "cp" and any(_long(f, "--parents", 4) for f in flags)
     v = val(dest, ctx)
     if v is None:
+        if _FOUND in dest:
+            return                                           # find's own start folders are judged by find()
         if not _tail_excludes(dest, ctx):
             ctx.doubt("%s into a name the guard cannot read (%s)" % (head, dest))
+        for f in _unknown_folders(dest, ctx):
+            # R-558 r4 (N3): a target the guard cannot read whose own name is the root's (or a folder above it, or one that
+            # holds protected data) may BE that folder: each source's name inside it is judged
+            (_land_above if _above_root(f, ctx) else _land)(head, srcs, f, rec, deref, notarget, ctx)
+        if parents:
+            ctx.doubt("cp --parents into %s, which the guard cannot read" % dest, hard=True)
+        if rec and dest.rstrip("/").rsplit("/", 1)[-1] in (".", ".."):
+            # L2: a folder copy into `<unreadable>/..` or `<unreadable>/.` can land on a folder that holds the project
+            ctx.doubt("%s of a folder into %s, whose folder the guard cannot read" % (head, dest), hard=True)
         return
     lv = level(v, ctx)
     if lv == "exact":
         ctx.write(sl._norm_candidate(v, ctx.here))
         return
     if lv in ("ancestor", "root"):
-        for s in srcs or [""]:
-            sv = val(s, ctx) if s else ""
-            if sv is None:
-                ctx.doubt("%s into a folder that holds protected data, from a name the guard cannot read" % head)
-                continue
-            joined = os.path.join(v, os.path.basename(sv.rstrip("/"))) if sv else v
-            jl = level(joined, ctx)
-            if jl == "exact" or (rec and jl in ("ancestor", "root")) or (head == "ditto" and not sv):
-                ctx.write(sl._norm_candidate(joined, ctx.here))
-            elif head == "ditto":
-                ctx.write(sl._norm_candidate(v, ctx.here))
+        if parents:                                          # N1: --parents rebuilds the source's folders under the target
+            ctx.doubt("cp --parents into a folder that holds protected data", hard=True)
+        _land(head, srcs, v, rec, deref, notarget, ctx)
+    elif lv is None:
+        if _GLOB_IN_DIR.search(v):
+            ctx.doubt("%s into a name with a glob in a folder part (%s)" % (head, dest))     # R-558 r7
+        for d in _above_candidates(v, ctx):                # R-562: a folder above the project is judged too
+            if parents:
+                since = len(ctx.doubts)
+                ctx.doubt("cp --parents into a folder that holds the project", hard=True)
+                ctx.mark_above(d, since)
+            _land_above(head, srcs, d, rec, deref, notarget, ctx)
+
+
+def _land_above(head, srcs, v, rec, deref, notarget, ctx):
+    """R-562: `_land` into a folder that holds the project. The older name scan never sees such a target, so a reason to ask
+    found here is marked (ctx.above) for the hook to act on by itself."""
+    before, d0 = len(ctx.keys) + len(ctx.doubts), len(ctx.doubts)
+    _land(head, srcs, v, rec, deref, notarget, ctx)
+    if len(ctx.keys) + len(ctx.doubts) > before:
+        ctx.mark_above(v, d0)
+
+
+def _above_candidates(v, ctx):
+    """The folders `v` can mean that hold the project root (v itself, or each glob hit)."""
+    if set(v) & _GLOB:
+        hits = _glob.glob(os.path.join(ctx.here, os.path.expanduser(v)))
+        return [h for h in hits if _above_root(h, ctx)]
+    return [v] if _above_root(v, ctx) else []
+
+
+_RSYNC_VALUED = {"--exclude", "--include", "--exclude-from", "--include-from", "--filter", "--rsh", "--rsync-path",
+                 "--files-from", "--backup-dir", "--suffix", "--temp-dir", "--partial-dir", "--compare-dest", "--copy-dest",
+                 "--link-dest", "--log-file", "--log-file-format", "--max-size", "--min-size", "--bwlimit", "--timeout",
+                 "--contimeout", "--port", "--chmod", "--chown", "--usermap", "--groupmap", "--out-format", "--info",
+                 "--debug", "--compress-level", "--compress-choice", "--skip-compress", "--block-size", "--modify-window",
+                 "--read-batch", "--write-batch", "--only-write-batch", "--address", "--sockopts", "--password-file",
+                 "--protocol", "--iconv", "--checksum-choice", "--cc", "--checksum-seed", "--max-alloc", "--stop-after",
+                 "--stop-at", "--time-limit", "--early-input", "--outbuf", "--remote-option", "--fuzzy-basis"}
+_RSYNC_BOOL = {"--checksum", "--backup", "--partial", "--compress", "--verbose", "--delete", "--archive", "--recursive",
+               "--dry-run", "--update", "--links", "--times", "--perms", "--owner", "--group", "--progress", "--stats",
+               "--human-readable", "--quiet", "--force", "--inplace", "--append", "--relative", "--prune-empty-dirs"}
+_RSYNC_SHORT_VALUED = "efTBM@"
+
+
+def _rsync_split(args):
+    """-> (flags, operands): rsync options may follow the operands, and some take a value (`--exclude foo`, `-e ssh`,
+    `-ae ssh`): the value is not an operand. A long option that is a prefix of one that takes a value counts as taking it
+    (rsync accepts unambiguous abbreviations); the booleans that are also such a prefix are listed."""
+    flags, ops, writes, runners, remote, i, after = [], [], [], [], [], 0, False
+    while i < len(args):
+        a = args[i]
+        i += 1
+        if after or a == "-" or not a.startswith("-"):
+            ops.append(a)
+        elif a == "--":
+            after = True
+        elif a.startswith("--"):
+            key = a.partition("=")[0]
+            flags.append(a)
+            takes = key in _RSYNC_VALUED or (key not in _RSYNC_BOOL and len(key) >= 4 and
+                                             any(v.startswith(key) for v in _RSYNC_VALUED))
+            if len(key) >= 4 and ("--rsh".startswith(key) or "--rsync-path".startswith(key)):
+                # round 5: the remote shell, and the program it starts, are commands rsync runs; an abbreviation counts
+                if "=" in a:
+                    runners.append(a.partition("=")[2])
+                elif i < len(args):
+                    runners.append(args[i])
+            if sl._rsync_write_opt(a):                       # R-558 r4 (N2): its value is a file or folder rsync writes
+                rel = next((d for d in _RSYNC_DEST_DIRS if d.startswith(key)), None)  # r6 (H4): read from the destination
+                if "=" in a:
+                    writes.append((a.partition("=")[2], rel))
+                elif i < len(args):
+                    writes.append((args[i], rel))
+            if len(key) >= 4 and "--remote-option".startswith(key):  # r6 (H4): an option handed to the other rsync
+                if "=" in a:
+                    remote.append(a.partition("=")[2])
+                elif i < len(args):
+                    remote.append(args[i])
+            if takes and "=" not in a and i < len(args):
+                i += 1
+        else:
+            cut = len(a)
+            for j in range(1, len(a)):
+                if a[j] in _RSYNC_SHORT_VALUED:
+                    cut = j + 1
+                    if a[j] == "e":                          # -e is --rsh
+                        if j + 1 < len(a):
+                            runners.append(a[j + 1:])
+                        elif i < len(args):
+                            runners.append(args[i])
+                    if a[j] in "TM":                         # -T is --temp-dir; -M is --remote-option (r6)
+                        got = a[j + 1:] if j + 1 < len(a) else (args[i] if i < len(args) else None)
+                        if got is not None:
+                            (writes.append((got, "--temp-dir")) if a[j] == "T" else remote.append(got))
+                    if j + 1 >= len(a) and i < len(args):
+                        i += 1
+                    break
+            flags.append(a[:cut])
+    return flags, ops, writes, runners, remote
+
+
+_RSYNC_DEST_DIRS = ("--backup-dir", "--partial-dir", "--temp-dir")
+
+
+def _rsync_remote_path(op):
+    """`host:path` -> `path` (`host:` -> `.`); None for a local word, a daemon `host::module` or an rsync:// URL. A colon
+    before any slash makes a word remote, as rsync reads it."""
+    if ":" not in op or op.startswith("/") or "/" in op.partition(":")[0] or op.startswith("rsync://"):
+        return None
+    rest = op.partition(":")[2]
+    if rest.startswith(":"):
+        return None
+    return rest or "."
+
+
+def _holds_protected(folder, ctx):
+    """R-558 r6: the folder is the root, a folder above it, or a folder inside the project that protected data sits under."""
+    f = sl._fold(os.path.realpath(folder)).rstrip(os.sep) + os.sep
+    root = sl._fold(ctx.root).rstrip(os.sep) + os.sep
+    if root.startswith(f):
+        return True
+    for pat in ctx.patterns:
+        pre = _static_prefix(str(pat)).strip("/")
+        if pre and sl._fold(os.path.join(ctx.root, pre)).startswith(f):
+            return True
+    return False
+
+
+def _rsync_dest_dirs(writes, dest, ctx):
+    """R-558 r6 (H4): rsync reads a relative --backup-dir from the destination folder, and a relative --partial-dir or
+    -T/--temp-dir from each file's own folder in it (any folder of the tree), not from the current folder."""
+    for w, rel in writes:
+        if not rel or not w:
+            continue
+        word, w = w, val(w, ctx)
+        if w is None:
+            ctx.doubt("an rsync folder option the guard cannot read (%s)" % word)   # R-558 r7: `$X`, a backtick, `~NAME`
+            continue
+        if w.startswith("/"):
+            continue
+        if _GLOB & set(w):
+            ctx.doubt("an rsync folder option with a glob (%s)" % w)
+            continue
+        if dest is None:
+            ctx.doubt("an rsync folder option read from a destination the guard cannot read (%s)" % w)
+            continue
+        if rel == "--backup-dir":                       # the destination folder (or, for a file, the folder holding it)
+            for d in dict.fromkeys((dest, os.path.dirname(dest.rstrip(os.sep)) or os.sep)):
+                target(os.path.join(d, w), ctx, destructive=True, what="rsync --backup-dir")
+            continue
+        if ".." in w.replace("\\", "/").split("/"):
+            ctx.doubt("an rsync folder option that climbs out of the destination (%s)" % w)
+            continue
+        target(os.path.join(dest, w), ctx, destructive=True, what="an rsync folder option")
+        if _holds_protected(dest, ctx):
+            ctx.doubt("an rsync folder option inside a destination that holds protected data (%s)" % w)
 
 
 def rsync(args, ctx):
-    flags, ops = _flags_ops(args)
-    if any(f in ("-n", "--dry-run") or (f.startswith("-") and not f.startswith("--") and "n" in f[1:]) for f in flags):
+    flags, ops, writes, runners, remote = _rsync_split(args)
+    if any(f.startswith("--") and len(f.partition("=")[0]) >= 4 and "--daemon".startswith(f.partition("=")[0]) for f in flags):
+        ctx.doubt("rsync --daemon serves folders its configuration names")          # r6 (L2)
+    rsh = bool(runners) or ctx.rsync_rsh
+    if remote:                                               # r6 (H4): -M / --remote-option values are rsync options too
+        _f, _o, more, _r, _m = _rsync_split(remote)          # r7: joined in order (`-M--backup-dir -M../data/real`)
+        writes += more
+    for code in runners:                                     # round 5: -e / --rsh runs its value like `sh -c`
+        sub = Ctx(ctx.project, ctx.patterns, ctx.base, ctx.session, ctx.trusted)
+        sub.here, sub.depth, sub.lost, sub.rsync_rsh = ctx.here, ctx.depth, ctx.lost, ctx.rsync_rsh
+        run(code, sub)
+        _absorb(ctx, sub)
+        if sub.keys:
+            ctx.hard = True                                  # the older scan reads the value as one word
+    for w, _rel in writes:                                   # N2: --log-file, --write-batch, --backup-dir, -T ... write there,
+        target(w, ctx, destructive=True, what="an rsync option that writes a file")   # a dry run (-n) included
+    if rsh:
+        # r6 (H3): with a remote shell set (-e, --rsh, RSYNC_RSH) the "remote" rsync may run here (`-e env`): host:path is
+        # also the local path `path`. r7: and `host::module` / `rsync://` then read a module of an rsyncd.conf in the
+        # current folder, whose path the guard cannot know: that asks
+        for o in ops:
+            if o.startswith("rsync://") or "::" in o.split("/")[0]:
+                ctx.doubt("rsync operand %s may be a module of a daemon run by the remote shell" % o, hard=True)
+        ops = [_rsync_remote_path(o) or o for o in ops]
+    local = [o for o in ops if _rsync_remote_path(o) is None]
+    dest_dir = None
+    if local and len(ops) > 1 and local[-1] == ops[-1]:
+        dv = val(ops[-1], ctx)
+        dest_dir = None if dv is None else sl._norm_candidate(dv, ctx.here)
+    if len(ops) > 1 and (local and local[-1] == ops[-1] or rsh):
+        _rsync_dest_dirs(writes, dest_dir, ctx)
+    if any(f in ("-n", "--dry-run") or _long(f, "--dry-run", 5) or (f.startswith("-") and not f.startswith("--") and "n" in f[1:])
+           for f in flags):
         return
     ops = [o for o in ops if not re.match(r"^[\w.-]+@?[\w.-]*:[^/]", o) or o.startswith("/")]
     if not ops:
         return
     dest, srcs = ops[-1], ops[:-1]
     if any(f.startswith("--remove-source") for f in flags):
-        for s in srcs:
-            target(s, ctx, destructive=True, what="rsync --remove-source-files")
+        for s_ in srcs:
+            target(s_, ctx, destructive=True, what="rsync --remove-source-files")
     if ":" in dest and not dest.startswith("/"):
         return
     target(dest, ctx, destructive=True, what="rsync")
+    v = val(dest, ctx)
+    if v is None:
+        # a target the guard cannot read whose own name is the root's, or a folder above it: the same as a known one
+        for f in _unknown_folders(dest, ctx):
+            if _above_root(f, ctx):
+                since = len(ctx.doubts)
+                ctx.doubt("rsync into %s, which may be a folder that holds the project" % dest, hard=True)
+                ctx.mark_above(f, since)
+        return
+    # R-558 r4 (N1): rsync is not a trusted verb. Into a folder above the project it ALWAYS asks: its -R / --relative and
+    # --files-from rebuild source paths under the target, --delete removes what the source lacks (the project among it),
+    # -L -k -K follow links, and every option shape added a way to land on the project
+    for d in _above_candidates(v, ctx):
+        since = len(ctx.doubts)
+        ctx.doubt("rsync into a folder that holds the project", hard=True)
+        if any(f.startswith("--del") for f in flags):
+            ctx.write(sl._norm_candidate(d, ctx.here))
+        ctx.mark_above(d, since)
+
+
+_R6_RSYNC_DOUBT = re.compile(r"rsync folder option|rsync --daemon|module of a daemon")
+
+
+def rsync_strict(args, project, patterns, here, lost, rsh):
+    """R-558 r6, for the base guard's strict scan: True when rsync writes resolved protected data (an option value, a host:path
+    run by a local remote shell, a destination-relative folder option) or raises a round-6 doubt (a folder option that climbs
+    out of the destination or sits in one that holds protected data, rsync --daemon)."""
+    ctx = Ctx(project, patterns, here)
+    ctx.here, ctx.lost, ctx.rsync_rsh = here, lost, ctx.rsync_rsh or rsh
+    try:
+        rsync(list(args), ctx)
+    except Exception:
+        return True
+    return bool(ctx.keys) or any(_R6_RSYNC_DOUBT.search(d) for d in ctx.doubts)
 
 
 def archive(head, toks, ctx):
@@ -932,6 +1557,12 @@ def archive(head, toks, ctx):
         for d in sl._extract_folders(head, [val(t, ctx) or t for t in toks], [ctx.here]):
             if level(d, ctx):
                 ctx.write(d)
+            elif _above_root(d, ctx) and not (head == "unzip" and any(re.fullmatch(r"-[a-zA-Z]*[ltpvZ][a-zA-Z]*", t)
+                                                                      for t in toks[1:])):         # unzip -l lists only
+                # M2 / R-562: the archive may hold a folder named like the project, which then lands on its real data
+                since = len(ctx.doubts)
+                ctx.doubt("an archive extracted into a folder that holds the project", hard=True)
+                ctx.mark_above(d, since)
         return
     if head in ("tar", "bsdtar", "gtar"):
         out = None
@@ -954,17 +1585,44 @@ def archive(head, toks, ctx):
             target(ops[0], ctx, what="an archive")
 
 
+_FIND_EXECS = ("-exec", "-execdir", "-ok", "-okdir")
+_FIND_FILE_PRIMARIES = ("-fprint", "-fprint0", "-fprintf", "-fls")
+
+
+def _find_execs(args):
+    """R-558 r3 (H3): the command words each -exec / -execdir / -ok / -okdir runs, up to its `+` (a `;` already ended the
+    segment), with `{}` replaced by an unreadable name."""
+    out = []
+    for i, t in enumerate(args):
+        if t in _FIND_EXECS:
+            cmd = []
+            for w in args[i + 1:]:
+                if w == "+":
+                    break
+                cmd.append(w.replace("{}", _FOUND))
+            out.append(cmd)
+    return out
+
+
 def find(args, ctx):
     ops = sl._find_operands(["find"] + list(args))
     writers = [t for t in args if t in sl._FIND_WRITERS]
     if not writers:
         return
-    execs = []
     for i, t in enumerate(args):
-        if t in ("-exec", "-execdir", "-ok", "-okdir") and i + 1 < len(args):
-            execs.append(os.path.basename(args[i + 1]))
-    pure_read = writers and all(t in ("-exec", "-execdir", "-ok", "-okdir") for t in writers) and execs and \
-        all(e in _READERS or e in ("true", "echo", "printf") for e in execs)
+        if t in _FIND_FILE_PRIMARIES and i + 1 < len(args):
+            target(args[i + 1], ctx, destructive=True, what="find " + t)
+    execs = _find_execs(args)
+    for cmd in execs:                                                      # H3: the command it runs is judged like any other
+        words = unwrap(cmd)
+        if words:
+            before = len(ctx.keys)
+            command(words, {}, ctx)
+            if len(ctx.keys) > before:
+                ctx.hard = True                                            # the older scan never reads what find runs
+    names = [os.path.basename(c[0]) for c in execs if c]
+    pure_read = writers and all(t in _FIND_EXECS for t in writers) and names and \
+        all(e in _READERS or e in ("true", "echo", "printf") for e in names)
     if pure_read:
         return
     for o in ops:
@@ -1032,15 +1690,25 @@ def _exact_args(args, ctx):
     return hit
 
 
+def _absorb(ctx, sub):
+    ctx.keys += sub.keys
+    ctx.doubts += sub.doubts
+    ctx.dclass += sub.dclass
+    ctx.dverb += sub.dverb
+    ctx.unsure = ctx.unsure or sub.unsure
+    ctx.above_targets += sub.above_targets
+    ctx.above = ctx.above or sub.above
+    ctx.hard = ctx.hard or sub.hard
+
+
 def shell(head, args, ctx):
     code_at = next((i for i, a in enumerate(args) if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a)), None)
     if code_at is not None and code_at + 1 < len(args):
         code = val(args[code_at + 1], ctx) or args[code_at + 1]
         sub = Ctx(ctx.project, ctx.patterns, ctx.base, ctx.session, ctx.trusted)
-        sub.here, sub.depth, sub.lost = ctx.here, ctx.depth, ctx.lost
+        sub.here, sub.depth, sub.lost, sub.rsync_rsh = ctx.here, ctx.depth, ctx.lost, ctx.rsync_rsh
         run(code, sub)
-        ctx.keys += sub.keys
-        ctx.doubts += sub.doubts
+        _absorb(ctx, sub)
         return
     ops = [a for a in args if not a.startswith("-")]
     if ops:
@@ -1050,10 +1718,9 @@ def shell(head, args, ctx):
     if ctx.bodies:
         body = ctx.bodies.pop(0)
         sub = Ctx(ctx.project, ctx.patterns, ctx.base, ctx.session, ctx.trusted)
-        sub.here, sub.depth, sub.lost = ctx.here, ctx.depth, ctx.lost
+        sub.here, sub.depth, sub.lost, sub.rsync_rsh = ctx.here, ctx.depth, ctx.lost, ctx.rsync_rsh
         run(body, sub)
-        ctx.keys += sub.keys
-        ctx.doubts += sub.doubts
+        _absorb(ctx, sub)
         return
     ctx.doubt("a shell that runs a program read from its input")
 
@@ -1279,10 +1946,24 @@ _SCRIPTISH = re.compile(r"program|script|code|here-document|shell that runs|runs
 def memory_keys(ctx):
     """What the user's yes to this ask would cover (see studiolib.real_data_yes_covers): `write:<path>` for each protected
     path a write reaches, `script:<root>` for a program whose writes cannot be read, `ambiguous:<root>` for a write whose
-    target cannot be read. A path or class the user did not answer for is never covered by another."""
+    target cannot be read, `lost:<root>` when a cd left the folder lost, `contents:<verb>:<root>` and `above:<verb>:<folder>` for the hard asks. A path or class the user did not answer
+    for is never covered by another."""
     keys = ["write:" + sl._fold(p) for p in dict.fromkeys(ctx.keys)]
-    classes = {"script" if _SCRIPTISH.search(d) else "ambiguous" for d in ctx.doubts}
-    return keys + ["%s:%s" % (c, sl._fold(ctx.root)) for c in sorted(classes)]
+    classes = set()
+    for why, klass, verb in zip(ctx.doubts, ctx.dclass, ctx.dverb):
+        if klass == "above":
+            continue                                       # remembered as `above:<verb>:<folder>` below
+        if klass == "contents":
+            classes.add("contents:" + sl._fold(verb))      # R-558 r6 (M1): a yes to one verb never covers another
+        else:
+            classes.add("script" if _SCRIPTISH.search(why) else "ambiguous")
+    if ctx.unsure:
+        classes.add("lost")                                # R-558 r7 (M3): the folder was lost: a key of its own, never `ambiguous`
+    # R-558 r4 (N4): a hard ask has a memory class of its own, so a yes to an unrelated `ambiguous` or `script` ask never
+    # passes it: `contents:<root>` for a copy whose listing cannot be trusted, `above:<folder>` for one into a folder that
+    # holds the project (one yes per folder). R-558 r6 (M1): both carry the verb (`contents:cp:<root>`, `above:rsync:<folder>`)
+    return keys + ["%s:%s" % (c, sl._fold(ctx.root)) for c in sorted(classes)] + \
+        ["above:" + t for t in dict.fromkeys(ctx.above_targets)]
 
 
 def has_write_signal(command):

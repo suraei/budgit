@@ -9,7 +9,7 @@
   <a href="#install">Install</a> · <a href="#what-you-get">What you get</a> · <a href="#brote">Brote</a> · <a href="#how-a-project-moves">How a project moves</a> · <a href="../../wiki">Wiki</a>
 </p>
 
-<p align="center"><sub>version 0.13.4 · Claude Code 2.1.292 or newer · Python 3 · tested on macOS · speaks English and Spanish</sub></p>
+<p align="center"><sub>version 0.13.5 · Claude Code 2.1.292 or newer · Python 3 · tested on macOS · speaks English and Spanish</sub></p>
 
 You ask Claude Code for three things on Monday. By Thursday two of them are lost up the chat, your weekly limit is nearly spent, and the feature Claude called "done" has never run.
 
