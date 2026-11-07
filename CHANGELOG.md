@@ -5,6 +5,7 @@ Update with `claude plugin marketplace update budgit-hub`, then `claude plugin u
 ## 0.13.6
 
 - **Brote stays where you put him, keeps off the middle of the Claude window, and climbs and flies more.** Drop him in a corner and he wanders only a little around it, then comes back after every outing. He keeps off the middle of the Claude window and its input box (and the same for terminals and editors), unless you put him there yourself. He now climbs up the side of the screen, flies up to a corner and hovers, and goes back home. This needs no new permission.
+- **Known issue (Brote).** When you switch Space or app, Brote can fly to a corner and slide back, and his outings are rare, so the climbing and flying described above shows far less than it reads. The fix comes in 0.13.7.
 - **The daily cleanup job now survives updates.** Budgit rewrites a small launcher at the first session after each update, with no command to run.
 - **`budgit housekeeping --schedule on` is stricter.** It refuses when BUDGIT_HOME or CLAUDE_CONFIG_DIR is set, when the LaunchAgents folder is not yours, or when the state home is not the default. A rebuilt job keeps only its time, Nice, low-priority IO and BUDGIT_HOME, and bad values fall back to 09:30. Off macOS the step does nothing.
 - **The README has a new "Folders Budgit creates" section.**

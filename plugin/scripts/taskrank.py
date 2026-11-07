@@ -41,7 +41,7 @@ def _parts(item, cited_by, at):
 
 
 def ranked(data, at=None):
-    """Every open or doing item in order, as rows {id, status, title, score, parts, rank}."""
+    """The live items (statuses in OPEN), best first, as rows {id, status, title, score, parts, rank}."""
     at = at if at is not None else time.time()
     items = [it for it in data["items"] if it.get("status") in OPEN]
     cited_by = {}

@@ -130,6 +130,17 @@ Then it creates the project, writes your idea as the first ledger item and start
 - **Big jobs split cleanly.** Independent pieces of work get their own Claude Code session while one session coordinates, and two sessions never build the same item.
 - **It learns your taste.** `budgit retro-mine` reads your past sessions on your machine, finds what you keep correcting, and turns the repeats into lessons Claude follows next time.
 
+### Long chats keep their place
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/checkpoint-dark.svg">
+    <img src="assets/checkpoint-light.svg" width="100%" alt="A timeline of four stops: a long chat, Claude compacts it, Budgit saves a checkpoint just before, and the next session is pointed to the newest checkpoint">
+  </picture>
+</p>
+
+Just before Claude compacts a long chat, Budgit writes a **checkpoint**: the open items, the last tool calls, the git state and the top of `progress.md`. The next session is pointed to the newest one, so it picks up where the work stopped. Checkpoints stay in your home folder, never in the project.
+
 ## Brote
 
 In the terminal, Brote lives above your prompt and tells you, at a glance, how your week is going. His health follows your projected weekly use. When the 5-hour window runs hot, he sweats, then steams.
@@ -151,6 +162,17 @@ In the terminal, Brote lives above your prompt and tells you, at a glance, how y
 - **Click him**, or type `/brote`, to open the notebook: what is in progress (stalled items first), what is next, what waits for later.
 - **Drag him around** the band. Click him four times in a row and he gets grumpy. `/brote still` stops his animation.
 - **Stalled items** (nobody touched them for a week) make Brote point at the notebook.
+
+**Floating Brote, in short** (macOS):
+
+| Where he is | What he does |
+| --- | --- |
+| **Home** | Drop him in a corner and that is his home. He wanders only a little around it and comes back after every outing. |
+| **Zone** | He keeps off the middle of the Claude window and its input box, and the same for terminals and editors, unless you put him there yourself. |
+| **Outings** | Now and then he climbs the side of the screen, flies to a corner or hovers. They are rare, and need no new permission. |
+
+> [!NOTE]
+> **Known issue.** When you switch Space or app, Brote can fly to a corner and slide back, and his outings are rarer than described. A fix is planned for the next release.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/wiki/suraei/budgit/images/brote-float.gif" width="100%" alt="Brote, drawn flat, standing and moving on top of a Claude window">
@@ -220,6 +242,9 @@ Claude runs these for you as you talk. The `budgit` command lives inside Claude 
 | `budgit secrets` | Scan for secrets and vulnerable dependencies. |
 | `budgit scout …` | Search Hacker News, GitHub, arXiv or Wikipedia, with no keys. |
 | `budgit retro-mine` | Find what you keep correcting, in a private report. |
+| `budgit daily` | A morning read of your ledger: counts, batches, the order of the next version. Changes nothing. |
+| `budgit housekeeping` | Lists merged worktrees and branches. Changes nothing until you add `--apply`. `--schedule on` runs it daily on macOS. |
+| `budgit codex review --clean-copy` | A Codex review of a protected project's code through a clean copy. See the extras below. |
 | `budgit lang` | Show or set the language of Brote and the status line (`en`, `es`, `auto`). |
 | `budgit setup --force …` | Change your setup. |
 
@@ -243,6 +268,9 @@ Claude runs these for you as you talk. The `budgit` command lives inside Claude 
 
 - **Other skills.** The phases mention skills such as `superpowers:test-driven-development` or `impeccable`. You need none of them. When one is missing, Claude does the plain step written next to it.
 - **The ChatGPT lane** ships off. Turn it on to get `budgit codex draft` (long drafts with your ChatGPT account), `budgit codex review` (a second opinion on your changes) and `budgit image`. Install `codex`, sign in, then run `budgit setup --force --codex on`.
+- **Codex on a protected project, through a clean copy.** `budgit codex review --clean-copy` copies only the files in your `codex-allow.txt` into a scratch folder, scans them, reviews them in a sandbox and deletes the copy. Any scan hit sends nothing.
+- **Read the risk first.** Codex keeps its own shell tool, so see the [release notes](../../wiki/Release-notes) before you use the clean copy.
+- **The daily cleanup job.** `budgit housekeeping --schedule on` (macOS) runs the cleanup each morning through a small launcher that Budgit rewrites after every update. It refuses when `BUDGIT_HOME` or `CLAUDE_CONFIG_DIR` is set, when the LaunchAgents folder is not yours, or when the state home is not the default.
 
 </details>
 
