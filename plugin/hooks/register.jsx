@@ -4,7 +4,7 @@
 // soft. A plugin names ONE hooks module, so both live here. $.store holds only Brote's last `status --brote` answer
 // per project and the "still" switch. The Client (brote-client.js) draws on the terminal only (R-172: on the desktop Brote lives in the floating window, no band); where AbovePrompt is
 // not raised (VS Code, mobile) only the status line and /brote exist.
-// Docs: https://code.claude.com/docs/en/plugins/mods/reference (types checked against Claude Code 2.1.299).
+// Docs: the Claude Code plugin mods reference (types checked against Claude Code 2.1.299).
 
 // Every word the user reads comes from `budgit status --brote` (`t`, in the user's language; the catalog lives in
 // scripts/i18n.py). The English below is only the fallback for a first call that has not answered yet.

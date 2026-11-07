@@ -40,6 +40,7 @@ enum K {
     static let focusMinW = 300.0, focusMinH = 200.0         // a window this big in a focus app counts as the chat or the terminal
     static let inputBand = 170.0                            // the strip along the bottom of a chat window where the input box sits
     static let noGoEvery = 3.0                              // the focus window is looked for at most this often
+    static let noGoSettle = 0.5, noGoRecheck = 0.6, noGoGone = 4.0   // Space-switch fix: a window rect counts after two identical looks 0.5 s apart (rechecked every 0.6 s while it changes); missing for 4 s counts as gone
     static let edgeClimbMin = 220.0, edgeClimbMax = 380.0, clingSecs = 2.5, hoverSecs = 3.0, slideSpeed = 110.0
     static let skyFar = 250.0, walkHomeMax = 450.0          // a flight up goes at least this far from home; a walk home is at most this long
     static let statusTimeout = 5.0, statusEvery = 30.0
@@ -422,9 +423,16 @@ struct Route {
     static func clip(_ l: Leg) -> String? {
         switch l { case .climb, .cling, .descend: return "sf_climb"; case .ladder: return "sf_ladder"; case .fly, .hover: return "sf_fly"; default: return nil }
     }
+    /// The clip the app plays for a leg: `clip`, and for a floor walk a real walk look (Space-switch fix: with the sleep or work clip on screen he slid without one).
+    /// `drawsWalk`: his own state already draws a walk (awake, Stroll.pace is not nil), so a walk leg keeps the director's walk; asleep or at the laptop nothing does.
+    static func bodyClip(_ l: Leg, drawsWalk: Bool) -> String? {
+        if let c = clip(l) { return c }
+        if case .walk = l, !drawsWalk { return "fl_walk" }
+        return nil
+    }
     /// The stretch of a body clip that repeats while the move lasts (ticks), after its start.
     static func loop(_ clip: String) -> (Int, Int)? {
-        ["sf_climb": (0, 40), "sf_ladder": (6, 50), "sf_fly": (6, 30), "sf_ride": (0, 30)][clip]
+        ["sf_climb": (0, 40), "sf_ladder": (6, 50), "sf_fly": (6, 30), "sf_ride": (0, 30), "fl_walk": (0, 50)][clip]
     }
     /// The arc's length in seconds: hops are quick, flights follow the fly speed.
     static func arcTime(_ a: Pt, _ b: Pt, fly: Bool) -> Double { fly ? max(0.8, a.dist(b) / K.flySpeed) : 0.45 + a.dist(b) / 900 }
@@ -486,6 +494,8 @@ struct Route {
 /// one every K.tripEvery at most; a window trip lasts K.tripAway.
 struct Explorer {
     var lastTrip = -1e9, awaySince: Double?
+    /// The zone flew him off (Space-switch fix). An outing in progress and the trip clock are none of its business: zone routes must not starve outings.
+    mutating func zoneFled() {}
     func mayLeave(state: String, idle: Bool, now: Double) -> Bool {
         awaySince == nil && Stroll.lively(state) && idle && now - lastTrip >= K.tripEvery
     }
@@ -601,6 +611,32 @@ struct ZoneCtl: Equatable {
 
 /// Is the focus window due to be looked for? Every `K.noGoEvery` seconds, or at once when forced (a drop: the flag must not judge a stale zone).
 func noGoDue(now: Double, at: Double, force: Bool) -> Bool { force || now >= at }
+
+/// Space-switch fix: the focus window as the zone may trust it. A Space or app switch makes macOS animate the window, and the window list reports the rects in flight
+/// (x=1532, none, 594, 981, 0): a zone built from one of them sent him to the corner. A rect counts only after two identical looks at least
+/// K.noGoSettle apart, fully inside the screens' x range. While it is unstable or the window is missing the last trusted rect stays; missing for K.noGoGone s clears it.
+struct ZoneLook: Equatable {
+    var accepted: Rc?, pending: Rc?, pendingAt = 0.0, missingSince: Double?
+    /// One look. `window` is the trusted rect after it; `settled` says the next look may wait for the normal cadence.
+    mutating func look(_ w: Rc?, now: Double, screens: [Rc], force: Bool = false) -> (window: Rc?, settled: Bool) {
+        let fits = w.map { r in
+            guard let lo = screens.map({ $0.minX }).min(), let hi = screens.map({ $0.maxX }).max() else { return false }
+            return r.minX >= lo - 1 && r.maxX <= hi + 1
+        } ?? false
+        if let w = w, fits {
+            missingSince = nil
+            if w == accepted { pending = nil; return (accepted, true) }
+            if force || (pending == w && now - pendingAt >= K.noGoSettle) { accepted = w; pending = nil; return (w, true) }
+            if pending != w { pending = w; pendingAt = now }
+            return (accepted, false)
+        }
+        pending = nil
+        if accepted == nil { return (nil, true) }
+        if missingSince == nil { missingSince = now }
+        if now - (missingSince ?? now) >= K.noGoGone { accepted = nil; missingSince = nil; return (nil, true) }
+        return (accepted, false)
+    }
+}
 
 /// The stretches of `lo...hi` (his left edge) where, at height `y`, his picture covers none of the zone.
 func freeSpans(lo: Double, hi: Double, y: Double, zone: [Rc]) -> [(lo: Double, hi: Double)] {
@@ -3164,6 +3200,50 @@ func runSelftest(assets: String) -> Never {
         var zcf = ZoneCtl()
         check(!zcf.onPurpose && effectiveHome(zx, saved: homeCovered, onPurpose: zcf.onPurpose, screen: screen) != homeCovered && zFleeSpot(zStep(&zcf, zx, home: homeCovered, at: homeCovered)) != nil,
               "after a restart the on-purpose flag is gone (it lives only for the session): a home in the zone counts as covered and he is moved out, erring toward keeping him off the chat")
+        // Space-switch fix T1/T2/T4: a Space switch animates Claude's window; the rects in flight (from a real probe.log) must not move him, a window that settles over him must
+        do {
+            let scr = [Rc(0, 0, 1470, 923)], steady = Rc(0, 0, 1470, 923), him = Pt(1500, 300)
+            func zNew() -> ZoneLook { var z = ZoneLook(); _ = z.look(steady, now: 100, screens: scr); _ = z.look(steady, now: 100.6, screens: scr); return z }
+            check(zNew().accepted == steady, "T1 set-up: a window seen twice 0.6 s apart is trusted")
+            // T1 on a real geometry (probe.log 7 Nov 12:31:48-50): a 1470x956 screen (floor at y 93), Claude's 1470x923 window on another Space (none), him at home on the floor at x 438.
+            // The rects in flight came 594, 0, 981, none; the window at 0,0 sits over his home, so a zone built from that one look sent him to (117.5, 93).
+            let primaryH = 956.0, vis = Rc(0, 93, 1470, 830), home = Pt(438.4, 93), pscr = [Rc(0, 0, 1470, primaryH)]
+            func app(_ x: Double) -> Rc { flipY(Rc(x, 0, 1470, 923), primaryHeight: primaryH) }
+            let replay: [(Double, Rc?)] = [(48.571, app(594)), (49.009, app(0)), (49.561, app(981)), (50.100, nil), (50.7, nil), (51.3, nil)]
+            var rz = ZoneLook(), rc = ZoneCtl(), rawCtl = ZoneCtl(), seenActs = 0, rawActs = 0
+            for (at, r) in replay {
+                let w = rz.look(r, now: at, screens: pscr).window
+                if rc.tick(zone: w.map { noGoZone(window: $0) } ?? [], home: home, at: home, held: false, calling: false, screen: vis, homeScreen: vis) != .none { seenActs += 1 }
+                if rawCtl.tick(zone: r.map { noGoZone(window: $0) } ?? [], home: home, at: home, held: false, calling: false, screen: vis, homeScreen: vis) != .none { rawActs += 1 }
+            }
+            check(seenActs == 0 && rz.accepted == nil, "T1: the real Space switch replay (594, 0, 981, none; 0.4-0.5 s apart; him at home on the floor) gives no flee and no go-home, and the zone stays empty (\(seenActs))")
+            check(rawActs > 0, "T1: the same rects read raw (no debounce) make him flee, so the replay catches the bug (\(rawActs))")
+            var rs = ZoneLook(), rsc = ZoneCtl(), rsActs = 0
+            for at in [60.0, 60.6, 61.2] { if rsc.tick(zone: rs.look(app(0), now: at, screens: pscr).window.map { noGoZone(window: $0) } ?? [], home: home, at: home, held: false, calling: false, screen: vis, homeScreen: vis) != .none { rsActs += 1 } }
+            check(rsActs > 0, "T1: and a window that really stays at 0,0 over his home still makes him flee (0.6 s later)")
+            var zo = zNew()
+            _ = zo.look(Rc(1532, 0, 1470, 923), now: 110, screens: scr); _ = zo.look(Rc(1532, 0, 1470, 923), now: 110.6, screens: scr); _ = zo.look(Rc(1532, 0, 1470, 923), now: 111.2, screens: scr)
+            check(zo.accepted == steady, "an off-screen rect is never trusted, even seen three times")
+            var zg = zNew()
+            _ = zg.look(nil, now: 120, screens: scr)
+            let held1 = zg.look(nil, now: 123.9, screens: scr), gone = zg.look(nil, now: 124.0, screens: scr)
+            check(held1.window == steady && gone.window == nil, "a window missing for less than K.noGoGone keeps its zone; missing that long, it is gone")
+            var zs = zNew(), zcs2 = ZoneCtl()
+            let settled = Rc(1100, 0, 1200, 800)
+            let s1 = zs.look(settled, now: 130, screens: [Rc(0, 0, 2400, 923)]), a1 = zStep(&zcs2, s1.window.map { noGoZone(window: $0) } ?? [], home: nil, at: him)
+            let s2 = zs.look(settled, now: 130.6, screens: [Rc(0, 0, 2400, 923)]), a2 = zStep(&zcs2, s2.window.map { noGoZone(window: $0) } ?? [], home: nil, at: him)
+            check(!s1.settled && s2.settled && a1 == .none && zFleeSpot(a2) != nil, "T2: a static window that settles over him is trusted on the second look 0.6 s later, and he flees")
+            var ex = Explorer(lastTrip: 50, awaySince: 50)
+            for _ in 0..<10 { ex.zoneFled() }
+            check(ex.lastTrip == 50 && ex.awaySince == 50 && ex.shouldReturn(now: 50 + K.tripAway), "T4: zone flights leave the trip clock alone: the window trip still ends on time")
+            ex.awaySince = nil
+            check(ex.mayLeave(state: "radiante", idle: true, now: 50 + K.tripEvery) && !ex.mayLeave(state: "radiante", idle: true, now: 50 + K.tripEvery - 1), "T4: after 10 zone flights an outing in radiante still starts K.tripEvery after the last one")
+        }
+        // Space-switch fix T3: a routed floor walk has a walk clip, which is a walking clip of the catalog
+        check(Route.bodyClip(.walk(x: 100), drawsWalk: false) == "fl_walk" && Route.bodyClip(.fly(to: Pt(1, 1)), drawsWalk: false) == "sf_fly" && Route.bodyClip(.hop(to: Pt(1, 1)), drawsWalk: false) == nil && Route.loop("fl_walk") != nil,
+              "T3: with nothing drawing a walk (asleep, at the laptop) a floor walk leg plays fl_walk (looping); climbs and flights keep theirs; a hop none")
+        check(["radiante", "contento", "justo", "cansado", "agotado", "enfermo"].allSatisfy { Route.bodyClip(.walk(x: 100), drawsWalk: Stroll.pace($0) != nil) == nil } && Stroll.pace("dormido") == nil,
+              "T3: awake (Stroll.pace not nil) a walk leg keeps the director's own walk, no extra clip; a state without a pace draws none, so it gets fl_walk")
         // m4: he is in the zone far from his covered home: the flight goes to where he lives now (eff), not to the free spot nearest to him
         let zM4Home = Pt(420, 0), zM4Him = Pt(960, 0)
         var zM4 = ZoneCtl()
@@ -4000,6 +4080,13 @@ func runSelftest(assets: String) -> Never {
             check(w0 == -6 && (db.walkDx() ?? 0) >= 5 && db.ctx.evaluateScript("__d.spec().dx")?.toInt32() == 0, "sf_top: drawn in place, a walk of 12 art px for the app")
             db.stopClip(); for _ in 0..<2 { db.tick() }; _ = db.step()
             check(db.walkDx() == nil, "a stopped walk: no shift left")
+            // Space-switch fix T3: the walk home plays fl_walk over a sleep clip that was on screen: it is a walking clip (drawn in place, shift for the app), never a slide
+            db.play("ag_nod_off"); _ = db.step()
+            db.stopClip(); db.play("fl_walk", loop: Route.loop("fl_walk")); _ = db.step(); let fw0 = db.walkDx()
+            for _ in 0..<120 { db.tick() }; _ = db.step()
+            check(fw0 != nil && db.ctx.evaluateScript("__d.spec().id || __d.clip.id")?.toString() == "fl_walk" && db.ctx.evaluateScript("__d.spec().dx")?.toInt32() == 0 && db.walkDx() != nil,
+                  "T3: after a sleep clip, the routed floor walk plays fl_walk for 12 s (looping), drawn in place with a shift for the app")
+            db.stopClip(); for _ in 0..<2 { db.tick() }; _ = db.step()
             check(!db.working, "no turn open: not working")
             db.feed("prompt w1\npre w1 Edit\n"); db.tick()
             check(db.working, "a turn open: working (he goes home)")
@@ -5279,7 +5366,8 @@ final class Brote: NSObject {
     var route: Route?, routeTarget: Plat?, routeArrive: String?, routeClip: String?, routeMirror = false
     var routeTimer: Timer?, lastRouteStep = 0.0
     var explorer = Explorer(lastTrip: uptime() - (K.tripEvery - K.firstTrip))      // the first outing comes K.firstTrip s after launch
-    var noGo: [Rc] = [], noGoAt = 0.0, strayAt = 0.0          // the zone of the focus window (looked for every K.noGoEvery s), and the last look for a stray
+    var zoneLook = ZoneLook()
+    var noGo: [Rc] = [], noGoAt = 0.0, strayAt = 0.0         // the zone of the focus window (looked for every K.noGoEvery s), and the last look for a stray
     var zc = ZoneCtl()                                         // the zone controller's flags (on purpose, displaced); every decision is the pure ZoneCtl code
     var homePending = false, homeHostID: Int?                // the user let go of him: the next landing is home; the window home stands on
     var falling = false, riding = false, rideUntil = 0.0
@@ -6139,10 +6227,12 @@ final class Brote: NSObject {
     /// The zone of the frontmost focus-app window, looked for at most every few seconds. Any failure leaves it empty (home only).
     func refreshNoGo(_ list: [WinInfo], now: Double, force: Bool = false) {
         guard scenario == nil, noGoDue(now: now, at: noGoAt, force: force) else { return }
-        noGoAt = now + K.noGoEvery
         let pids = Set(NSWorkspace.shared.runningApplications.filter { isFocusBundle($0.bundleIdentifier) }.map { Int($0.processIdentifier) })
         let primary = Double(NSScreen.screens.first?.frame.height ?? 0)
-        noGo = focusWindow(list, pids: pids, primaryHeight: primary).map { noGoZone(window: $0) } ?? []
+        // Space-switch fix: a window the system is animating (a Space or app switch) is not trusted: the last settled zone stays until two looks agree
+        let seen = zoneLook.look(focusWindow(list, pids: pids, primaryHeight: primary), now: now, screens: NSScreen.screens.map { Brote.rc($0.frame) }, force: force)
+        noGoAt = now + (seen.settled ? K.noGoEvery : K.noGoRecheck)
+        noGo = seen.window.map { noGoZone(window: $0) } ?? []
     }
     func traceLook(_ s: Scenario, support: String) {
         s.write("look", ["pos": [layout.pos.x, layout.pos.y], "host": layout.host.map { $0.id as Any } ?? NSNull(), "support": support,
@@ -6279,7 +6369,7 @@ final class Brote: NSObject {
             let started = goHome(why: "zone-left")
             zc.wentHome(started: started, homeKnown: savedHomeTarget() != nil)
         case .flee(let spot):
-            explorer.awaySince = nil
+            explorer.zoneFled()      // Space-switch fix: the trip clock and an outing in progress stay as they are
             if Stroll.pace(glue.bridge.state) == nil { glue.bridge.stopClip() }      // asleep: wake the picture for the flight
             let t = homeTarget()
             startRoute([.fly(to: spot)], to: t?.pt == spot ? t?.plat : nil, arrive: nil, why: "zone")      // he flies to where he lives now
@@ -6320,8 +6410,10 @@ final class Brote: NSObject {
         routeMirror = r.mirrored(at: p)
         r.step(&p, dt: dt)
         route = r
-        let clip = r.leg.flatMap(Route.clip)
+        let drawsWalk = Stroll.pace(glue.bridge.state) != nil
+        let clip = r.leg.flatMap { Route.bodyClip($0, drawsWalk: drawsWalk) }
         if clip != routeClip {
+            if Stroll.pace(glue.bridge.state) == nil { glue.bridge.stopClip() }      // asleep or at the laptop: wake the picture first (Space-switch fix: the walk home slid under it)
             if let c = clip { glue.bridge.play(c, loop: Route.loop(c)) } else if routeClip != nil { glue.bridge.stopClip() }
             routeClip = clip
         }

@@ -3688,6 +3688,34 @@ def _program_files(tokens, base):
     return out
 
 
+def _names_home_in(text, names):
+    """True when text spells one of the home candidates as a whole path component (R-733): the character after it is the
+    end, a separator, a quote, a space or an operator, never `-`, `_`, `.` or a letter (`.budgit-jobs` is not `.budgit`)."""
+    for n in names:
+        if not n:
+            continue
+        if n[-1] in "/\\":
+            if n in text:
+                return True
+            continue
+        if re.search(re.escape(n) + r"(?![\w.\-])", text):
+            return True
+    return False
+
+
+_SYNTAX_SHELLS = {"bash", "sh"} | {d + "/" + n for d in ("/bin", "/usr/bin", "/opt/homebrew/bin", "/usr/local/bin")
+                                    for n in ("bash", "sh")}
+
+
+def _is_syntax_check(words):
+    """The ONE accepted shape (R-733): exactly three raw words, `bash|sh` (bare or under a system bin folder), `-n`, and a
+    plain file name. No assignment prefix, no wrapper, no other flag: anything else is not the shortcut. A BASH_ENV or ENV
+    inherited from the parent environment is not seen (residual, same class as R-722)."""
+    if len(words) != 3 or words[0] not in _SYNTAX_SHELLS or words[1] != "-n":
+        return False
+    return bool(re.fullmatch(r"[\w./~-]+", words[2])) and words[2][0] not in "-+"
+
+
 def _file_names_home(path, base, named):
     """A small file that spells out a Budgit home (or its trust file) and writes."""
     try:
@@ -3698,7 +3726,7 @@ def _file_names_home(path, base, named):
             text = _fold(fh.read())
     except (OSError, ValueError):
         return False
-    return any(n and n in text for n in list(named) + ["trust.json", "trust-offered", "budgit_home", "studio_home"]) \
+    return (_names_home_in(text, named) or any(n in text for n in ("trust.json", "trust-offered", "budgit_home", "studio_home"))) \
         and bool(_CODE_WRITES.search(text))
 
 
@@ -3741,7 +3769,7 @@ def _home_write_decision(tool, tool_input, cwd=None, verifier=False, box=None):
                      _fold(os.path.join(user_home, ".studio")), ".budgit", ".studio", "trust.js", "trust-offered",
                      "budgit_home"]
     named = [n for n in cands + [hints[len(cands)], hints[len(cands) + 1], hints[len(cands) + 2]] if n]
-    names_a_home = any(n in low for n in named)          # a home folder spelled out, as written or as resolved
+    names_a_home = _names_home_in(low, named)         # a home folder spelled out, as written or as resolved
     delims = set(re.findall(r"<<-?\s*['\"]?(\w+)", text))     # heredoc delimiters are words of the line, not operands
     parts = _shell_parts(text)
     if parts is None:                                    # cannot be lexed: ask when anything points at a home
@@ -3771,9 +3799,14 @@ def _home_write_decision(tool, tool_input, cwd=None, verifier=False, box=None):
                 asks.add(got[4:])
         if not tokens or step["book"]:                   # Budgit's own bookkeeping writes the project's .studio only
             continue
+        if len(steps) == 1 and not redirs and _is_syntax_check(words) and not re.search(r"[;|&<>`\n]|\$\(", text):
+            continue                                     # R-733: `bash -n FILE` only parses FILE, it never runs it
         if names_a_home:
             if os.path.basename(words[0]) == "eval":
                 return deny                              # eval of a command line that names a home
+            if name_of(head) in _HOME_INTERP_NAMES and any(re.match(r"(?i)(?:bash_)?env=", w) and _names_home_in(
+                    _fold(re.sub(r"^((?i:(?:bash_)?env=))~(?=/|$)", lambda m: m.group(1) + user_home, w)), named) for w in words):
+                return deny                              # a startup file in a home runs before the shell reads its script
             fed = name_of(head) in _HOME_INTERP_NAMES and not [t for t in tokens[1:] if not t.startswith("-") and t not in delims] \
                 and not any(t in _CODE_FLAGS for t in tokens[1:])
             if fed and ("<<" in text or "|" in text) and (_CODE_WRITES.search(low) or ">" in low):

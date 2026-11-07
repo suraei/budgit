@@ -2,6 +2,12 @@
 
 Update with `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, then `/reload-plugins` in Claude Code. The Release notes page of the wiki has the same notes.
 
+## 0.13.7
+
+- **Brote no longer flies to the bottom-left corner after you switch tab, app or Space.** He waits for the window to settle (a short recheck after 0.6 s, another after 3 s) and then walks with the walking animation.
+- **A plain script syntax check is no longer refused.** `bash -n` or `sh -n` with a system shell (from /bin, /usr/bin, /opt/homebrew/bin or /usr/local/bin) now runs without the home-folder guard stopping it.
+- **New README and wiki.** The README shows how Budgit works in animated pictures. The details moved to the wiki, with new pages: Using Budgit well, Task management, Folders and files and Customise.
+
 ## 0.13.6
 
 - **Brote stays where you put him, keeps off the middle of the Claude window, and climbs and flies more.** Drop him in a corner and he wanders only a little around it, then comes back after every outing. He keeps off the middle of the Claude window and its input box (and the same for terminals and editors), unless you put him there yourself. He now climbs up the side of the screen, flies up to a corner and hovers, and goes back home. This needs no new permission.

@@ -1,353 +1,350 @@
 <p align="center">
   <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/hero-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/hero-mobile-light.svg">
     <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
-    <img src="assets/hero-light.svg" width="100%" alt="Budgit: Claude Code projects, on budget. Brote, a small lilac pet, sits above the prompt and says Doing fine, makes it to Monday. The status line reads: 2 in progress, 5 to do, 3 ideas, week 37 percent used, you make it to the reset">
+    <img src="assets/hero-light.svg" width="100%" alt="Budgit: Claude Code projects, on budget. Brote, a small lilac pet, sits above the prompt and says Doing fine, makes it to Monday">
   </picture>
 </p>
 
 <p align="center">
-  <a href="#install">Install</a> · <a href="#what-you-get">What you get</a> · <a href="#brote">Brote</a> · <a href="#how-a-project-moves">How a project moves</a> · <a href="../../wiki">Wiki</a>
+  <img src="https://img.shields.io/badge/version-0.13.7-7d68c4?style=flat-square" alt="Version 0.13.7">
+  <img src="https://img.shields.io/badge/Claude_Code-2.1.292%2B-D97757?style=flat-square&logo=claude&logoColor=white" alt="Claude Code 2.1.292 or newer">
+  <img src="https://img.shields.io/badge/Python-3-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3">
+  <img src="https://img.shields.io/badge/macOS-tested-000000?style=flat-square&logo=apple&logoColor=white" alt="Tested on macOS">
+  <img src="https://img.shields.io/badge/license-MIT-6f6076?style=flat-square" alt="MIT license">
 </p>
 
-<p align="center"><sub>version 0.13.6 · Claude Code 2.1.292 or newer · Python 3 · tested on macOS · speaks English and Spanish</sub></p>
+<p align="center">
+  <a href="#install">Install</a> · <a href="#what-budgit-creates">What it creates</a> · <a href="#how-it-works">How it works</a> · <a href="#use-it-well">Use it well</a> · <a href="#a-week-with-budgit">A week</a> · <a href="#brote">Brote</a> · <a href="#make-it-yours">Make it yours</a> · <a href="#guards">Guards</a> · <a href="#commands">Commands</a> · <a href="#updates">Updates</a> · <a href="#faq">FAQ</a> · <a href="../../wiki">Wiki</a>
+</p>
 
-You ask Claude Code for three things on Monday. By Thursday two of them are lost up the chat, your weekly limit is nearly spent, and the feature Claude called "done" has never run.
+## What it is
 
-Budgit takes a project from idea to finished, in phases. It writes down every request you make, paces the work to your plan's limits, and sends a fresh reviewer to test each piece before it counts as done. It talks to you in your language: it follows your Claude Code language, then your computer's, and ships with English and Spanish.
+<p align="center"><b>A Claude Code plugin that runs your project in phases, from the first idea to the launch.</b><br>It paces the work to your plan, writes down every request, and has a fresh reviewer test each piece.</p>
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/compare-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/compare-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/compare-dark.svg">
+    <img src="assets/compare-light.svg" width="100%" alt="Two columns, the same four facts. Left, the problem: asks forgotten, the weekly limit nearly spent, a feature called done that never ran, rules the model can forget. Right, what Budgit does: a ledger, four pace levels, a fresh reviewer, guards as scripts">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/parts-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/parts-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/parts-dark.svg">
+    <img src="assets/parts-light.svg" width="100%" alt="Eight parts, each with an icon: pacing, the ledger, proof, lanes, lessons, guards, privacy and Brote">
+  </picture>
+</p>
 
 ## Install
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/steps-dark.svg">
-    <img src="assets/steps-light.svg" width="100%" alt="Three steps: 1, get Claude Code and Python 3; 2, add Budgit with /plugin install budgit in a Claude Code session; 3, reload and tell Claude what you want to build">
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/install-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/install-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/install-dark.svg">
+    <img src="assets/install-light.svg" width="100%" alt="An animated first run in a terminal: /plugin install budgit, choose Install for you, /reload-plugins, Brote appears above the status line, Claude asks four setup questions, and the first idea is saved as R-1, so the status line shows 1 to do">
   </picture>
 </p>
 
-Start Claude Code with `claude`, then type this at its prompt, not at the shell prompt:
+> The Claude desktop app's Cowork and Customize > Plugins screens cannot install Budgit. Install it from Claude Code with `/plugin install budgit --marketplace suraei/budgit`, or from a shell with `claude plugin marketplace add suraei/budgit` then `claude plugin install budgit@budgit-hub`.
 
 ```
 /plugin install budgit --marketplace suraei/budgit
 ```
 
-It asks you to confirm adding the marketplace, then shows Budgit's details. Choose **Install for you**. Then type `/reload-plugins` and tell Claude what you want to build, for example *"I have an idea: a small app to plan meals for the week."*
+Claude Code 2.1.292+ and Python 3. [Getting started](../../wiki/Getting-started) has the rest.
 
-> [!IMPORTANT]
-> Budgit needs Claude Code 2.1.292 or newer, on a Pro, Max, Team or Enterprise plan or a Console account, and Python 3. Claude's chat and Cowork cannot install Budgit, because it ships its own `budgit` command, so add it through Claude Code, not under **Customize → Plugins** in the Claude app.
+## What Budgit creates
 
-Budgit is not in Anthropic's official marketplace or its plugin directory, so a search there will not find it. You add it once by its GitHub name, `suraei/budgit`.
-
-> [!TIP]
-> Get new releases on their own: type `/plugin`, open the **Marketplaces** tab, pick `budgit-hub` and choose **Enable auto-update**. Claude Code leaves it off for marketplaces outside Anthropic's. Either way, the line under the prompt shows an arrow and the version when a new release is waiting.
-
-<details>
-<summary><h3><img src="assets/icon-zero.svg" width="20" height="20" align="absmiddle" alt=""> New to Claude Code? Start from zero</h3></summary>
-
-- **A plan that includes it.** Claude Code needs a Claude Pro, Max, Team or Enterprise plan, or a Console account. The free plan does not include it.
-- **The Claude Code terminal app.** On macOS, in the Terminal:
-
-  ```bash
-  curl -fsSL https://claude.ai/install.sh | bash
-  ```
-
-  Or with Homebrew: `brew install --cask claude-code`. Then open a new Terminal window and check that it answers:
-
-  ```bash
-  claude --version
-  ```
-
-  It must print 2.1.292 or newer. You add Budgit with this app even if you then work in the Claude desktop app's **Code** tab or in VS Code. All three read the same settings.
-- **Python 3.** `python3 --version` must print `Python 3.x`. If it does not, run `xcode-select --install` on macOS.
-
-</details>
-
-<details>
-<summary><h3><img src="assets/icon-ways.svg" width="20" height="20" align="absmiddle" alt=""> Other ways to install</h3></summary>
-
-**From your shell, without a session:**
-
-```bash
-claude plugin install budgit --marketplace suraei/budgit
-```
-
-It adds the `budgit-hub` marketplace and prints `Successfully installed plugin: budgit@budgit-hub`.
-
-**Ask Claude.** In any Claude Code chat, the terminal or the desktop app's Code tab, paste:
-
-> Install the Budgit plugin: run `claude plugin marketplace add suraei/budgit` and `claude plugin install budgit@budgit-hub`, then tell me to run /reload-plugins.
-
-This works when `claude --version` answers in your Terminal, because Claude runs that same terminal app for you. The desktop app's own built-in copy is not one Claude can run. If you only have the desktop app, get the terminal app first.
-
-**In VS Code.** Type `/plugins` in the Claude Code panel. Add `suraei/budgit` on the **Marketplaces** tab, then install Budgit from the **Plugins** tab.
-
-**The Claude desktop app** does not run the `/plugin` commands in its Code tab. Use one of the ways above once, and Budgit shows up there too.
-
-</details>
-
-<details>
-<summary><h3><img src="assets/icon-fix.svg" width="20" height="20" align="absmiddle" alt=""> If the install fails</h3></summary>
-
-| You see | What to do |
-| --- | --- |
-| `claude: command not found` | The Claude Code terminal app is not installed, or not on your PATH yet. Get it from zero (above), then open a new Terminal window. |
-| `no such file or directory: /plugin` | You typed `/plugin` at the shell prompt. Start `claude` first and type it there, or use the `claude plugin …` commands. |
-| `/plugin isn't available in this environment` | You are in the desktop app's Code tab or in VS Code. Ask Claude, or use the steps for that place above. |
-| `Unknown command: /plugin`, or a `claude plugin` error about an unknown command | Your Claude Code is too old. Run `claude update` (with Homebrew, `brew upgrade claude-code`), then check `claude --version`. |
-| `Plugin "budgit" not found` | The marketplace is not added yet. Use the `--marketplace suraei/budgit` form above, or run `claude plugin marketplace add suraei/budgit` first. |
-| Claude cannot use any tool | Python is almost certainly missing. The guards cannot start, and to stay safe they block everything. From the Terminal (not from Claude), run `claude plugin disable budgit@budgit-hub`, install Python, then `claude plugin enable budgit@budgit-hub`. |
-
-Windows is not supported and the install there is untested. The [FAQ](../../wiki/FAQ) has more answers.
-
-</details>
-
-### Your first run
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/wiki/suraei/budgit/images/first-run.svg" width="100%" alt="A Claude Code terminal in a demo folder. After /reload-plugins, Brote appears above the prompt and says Going well, the week just started; the status line shows no ledger here and the week at 12 percent. Then the user types an idea, and the status line shows 1 to do">
-</p>
-
-The first time, Claude asks you up to four setup questions:
-
-1. Your GitHub account, so your commits use its private noreply address.
-2. A folder for your hub, where ideas, research and lessons live.
-3. A folder for your projects.
-4. Whether to turn on the optional ChatGPT lane.
-
-Then it creates the project, writes your idea as the first ledger item and starts the first phase. Every step that stops tells you the next one.
-
-## What you get
+Three folders, all yours. Your requests stay out of git unless you choose.
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/rails-dark.svg">
-    <img src="assets/rails-light.svg" width="100%" alt="Budgit does five things: paces your plan, writes every request down, proves it is done, splits the work into lanes, learns from your corrections. Brote, a small lilac pet, shows the week at a glance">
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/folders-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/folders-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/folders-dark.svg">
+    <img src="assets/folders-light.svg" width="100%" alt="The three folders Budgit creates, as a tree: the hub, ~/.budgit in your home and .budgit in each project, with when each appears and whether it is in git">
   </picture>
 </p>
 
-- **Your week lasts.** Budgit reads your weekly and 5-hour limits and picks one of four working levels: ample, normal, tight or critical. The level decides how many helper agents run at once and how much each one may do.
-- **Nothing you ask gets lost.** Every request goes into a ledger, word for word, with a status. Claude cannot end a turn while a request sits unanswered.
-- **"Done" means tested.** A reviewer that never saw the build tries to break it and answers PASS or FAIL. The agent that built the item cannot write its own PASS.
-- **Big jobs split cleanly.** Independent pieces of work get their own Claude Code session while one session coordinates, and two sessions never build the same item.
-- **It learns your taste.** `budgit retro-mine` reads your past sessions on your machine, finds what you keep correcting, and turns the repeats into lessons Claude follows next time.
+[Folders and files](../../wiki/Folders-and-files) lists every file, whether it is in git, and what is safe to delete.
 
-### Long chats keep their place
+## How it works
+
+### One request, from prompt to release
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/checkpoint-dark.svg">
-    <img src="assets/checkpoint-light.svg" width="100%" alt="A timeline of four stops: a long chat, Claude compacts it, Budgit saves a checkpoint just before, and the next session is pointed to the newest checkpoint">
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/flow2-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/flow2-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/flow2-dark.svg">
+    <img src="assets/flow2-light.svg" width="100%" alt="An animated walk through one request: a marker stops on each step, the reviewer answers FAIL once and the work goes back to build, then PASS, and the release step lights up. Guards run on every tool call">
   </picture>
 </p>
 
-Just before Claude compacts a long chat, Budgit writes a **checkpoint**: the open items, the last tool calls, the git state and the top of `progress.md`. The next session is pointed to the newest one, so it picks up where the work stopped. Checkpoints stay in your home folder, never in the project.
+A FAIL is normal: the work goes back to build until a fresh reviewer passes it.
+
+### Seven phases, one approval each
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/phases2-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/phases2-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/phases2-dark.svg">
+    <img src="assets/phases2-light.svg" width="100%" alt="Seven phases on one line, with an approval mark after each and three notes: design is checked like code with no model tokens; build makes the smallest working version first and new ideas wait in later; launch covers positioning, a README people finish and a first-run test. A small script takes the short route">
+  </picture>
+</p>
+
+## Use it well
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/habits-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/habits-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/habits-dark.svg">
+    <img src="assets/habits-light.svg" width="100%" alt="Five habits as comic panels: one ask per message; park new ideas in later; read and approve each phase note; ship only after a PASS; start the day with budgit daily and open a new chat when one slows down">
+  </picture>
+</p>
+
+[Using Budgit well](../../wiki/Using-Budgit-well) has each habit with an example.
+
+### Task management
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/board-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/board-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/board-dark.svg">
+    <img src="assets/board-light.svg" width="100%" alt="An animated task board with five columns: later, open, doing, done, verified. A message becomes R-4, is claimed, moves to doing and done, fails once, then passes and lands in verified. A new idea drops into later. Below, budgit daily and budgit triggers">
+  </picture>
+</p>
+
+Every ask becomes a card. It is finished only when a fresh reviewer passes it. [Task management](../../wiki/Task-management) has every command.
+
+### Skills and helpers, phase by phase
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/skills-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/skills-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/skills-dark.svg">
+    <img src="assets/skills-light.svg" width="100%" alt="A map of which skill, helper agent or command acts in which phase. Optional skills are drawn dashed">
+  </picture>
+</p>
+
+Seven helper agents ship with Budgit, each starting fresh. A missing skill has a plain fallback. [Skills workflow](../../wiki/Skills-workflow)
+
+### Light context: skills load only when needed
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/context-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/context-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/context-dark.svg">
+    <img src="assets/context-light.svg" width="100%" alt="An animated gauge of what Claude holds in mind: the kickoff core stays, a phase file comes and goes, skills wait as names until skills why loads one, and after a compaction the next chat starts from a checkpoint">
+  </picture>
+</p>
+
+`budgit skills load-plan` shows which skills could load by name only. It prints; it never writes.
+
+## A week with Budgit
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/chart-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/chart-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/chart-dark.svg">
+    <img src="assets/chart-light.svg" width="100%" alt="A line chart of one example week, with the four pace levels as bands around a dashed pace line. Use ends the week at 88 percent">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/pacing-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/pacing-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/pacing-dark.svg">
+    <img src="assets/pacing-light.svg" width="100%" alt="The four pace levels as a ladder, and what changes at each one">
+  </picture>
+</p>
+
+`budgit budget` shows the numbers. `budgit budget set tight` and `budgit budget auto` change the level.
 
 ## Brote
 
-In the terminal, Brote lives above your prompt and tells you, at a glance, how your week is going. His health follows your projected weekly use. When the 5-hour window runs hot, he sweats, then steams.
+A small pet whose mood is your week. He lives above your prompt, and on macOS in his own window.
 
 <p align="center">
   <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/week-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/week-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/week-dark.svg">
+    <img src="assets/week-light.svg" width="100%" alt="An animated example week. Brote and the status line change day by day; the week ends at 88 percent. The numbers are illustrative">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/brote-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/brote-mobile-light.svg">
     <source media="(prefers-color-scheme: dark)" srcset="assets/brote-dark.svg">
-    <img src="assets/brote-light.svg" width="100%" alt="Brote in his seven states, each with the projected weekly use it stands for: plenty of room, on pace, tight, tired, drained, sick, and asleep when the quota is gone">
+    <img src="assets/brote-light.svg" width="100%" alt="Brote in his seven states, from plenty of room to asleep when the quota is gone">
   </picture>
 </p>
 
 <p align="center">
   <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/brote-moves-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/brote-moves-mobile-light.svg">
     <source media="(prefers-color-scheme: dark)" srcset="assets/brote-moves-dark.svg">
-    <img src="assets/brote-moves-light.svg" width="100%" alt="Four of Brote's moves: point at him and he waves; click him for heart eyes and a hop; drop him from high up and he sees stars; a request closes and confetti falls">
+    <img src="assets/brote-moves-light.svg" width="100%" alt="Four of Brote's moves, drawn still: point at him and he waves; click him for heart eyes and a hop; drop him from high up and he sees stars; a request closes and confetti falls">
   </picture>
 </p>
 
-- **Click him**, or type `/brote`, to open the notebook: what is in progress (stalled items first), what is next, what waits for later.
-- **Drag him around** the band. Click him four times in a row and he gets grumpy. `/brote still` stops his animation.
-- **Stalled items** (nobody touched them for a week) make Brote point at the notebook.
-
-**Floating Brote, in short** (macOS):
-
-| Where he is | What he does |
-| --- | --- |
-| **Home** | Drop him in a corner and that is his home. He wanders only a little around it and comes back after every outing. |
-| **Zone** | He keeps off the middle of the Claude window and its input box, and the same for terminals and editors, unless you put him there yourself. |
-| **Outings** | Now and then he climbs the side of the screen, flies to a corner or hovers. They are rare, and need no new permission. |
-
-> [!NOTE]
-> **Known issue.** When you switch Space or app, Brote can fly to a corner and slide back, and his outings are rarer than described. A fix is planned for the next release.
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/where-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/where-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/where-dark.svg">
+    <img src="assets/where-light.svg" width="100%" alt="Where Brote shows up: the terminal, the desktop app, VS Code, the phone and the macOS desktop">
+  </picture>
+</p>
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/wiki/suraei/budgit/images/brote-float.gif" width="100%" alt="Brote, drawn flat, standing and moving on top of a Claude window">
 </p>
 
-The status line under the prompt sums it all up in one row. When your week will run out early, the end shows the day and hour instead, such as `ends Fri 18h`.
+**Floating window (macOS):** `/budgit-brote on` brings him back and `/budgit-brote off` closes him. The floating window runs on macOS only.
 
-```
-budgit  ✿ 2 in progress ⁘ 5 to do ✧ 3 ideas ┊ ▰▰▱▱▱▱ 37 % · you make it
-```
+> [!NOTE]
+> **Known issue.** If you drop Brote by hand at the very moment your Mac slides to another Space, he can still run to a corner once. A live switch between two Spaces has not been tested on a real Mac yet.
 
-The line shows in any folder. Inside a project it is the project's; elsewhere it shows `no ledger here` and your plan limit. Run `/budgit-bar-probe` to see what your screen does with it. Chats opened before an update keep the old line until you reopen them.
+The [Brote page](../../wiki/Brote) has the rest, and the [animation bank](../../wiki/Brote-animation-bank) shows every animation and what makes it play.
 
-| Where | What you see |
-| --- | --- |
-| Terminal | Brote above the prompt, when the folder you opened has a `.budgit` or `.studio` folder directly inside it and the window has at least 15 rows. Below 15 rows, a text line and a **Notebook** button. |
-| Desktop app (Code tab) | The status line, and `/brote` for the notebook. Brote does not draw above the prompt there: on the desktop he is the floating window, which opens by itself the next message you send in any chat after installing (no new chat, no command). |
-| VS Code and mobile | The status line and `/brote` for the notebook. |
-| Floating window (macOS) | Brote in his own small window on your desktop, with a book he carries and a notebook panel. It ships prebuilt inside the plugin and opens by itself the next message you send in any chat after installing or updating (no new chat, no command): it copies the app and opens it with your Claude sessions. `/budgit-brote off` closes him and keeps him off for good, `/budgit-brote on` brings him back, `/budgit-brote status` says whether he is running and `/budgit-brote uninstall` removes every file it wrote; in a terminal the same words work as `budgit brote on|off|status|stop|uninstall`. A Mac that is not at its own screen (an SSH login) is left alone, and `BUDGIT_FLOAT_AUTO=off` in your environment stops it everywhere. Tested on Apple chips; the Intel half is built but not yet run on an Intel Mac. |
-
-Every animation, with a preview and what makes it play, is in the [Brote animation bank](../../wiki/Brote-animation-bank) on the wiki.
-
-## How a project moves
+## Make it yours
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/phases-dark.svg">
-    <img src="assets/phases-light.svg" width="100%" alt="A project walks seven phases: validate, design, plan, build, review, launch, retro. You approve a short document after each one. A small script takes the short route: plan, build, review, retro">
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/settings-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/settings-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/settings-dark.svg">
+    <img src="assets/settings-light.svg" width="100%" alt="A settings window with three columns: for you, per project, and right now. Each control shows its key or command">
   </picture>
 </p>
 
-- **The smallest working version comes first.** Each project names early the smallest version that works end to end. New ideas wait in a "later" list.
-- **Design gets checked like code.** Visual work passes deterministic design checks (`budgit design-check`, no model tokens) and a written rubric before you see it.
-- **Launch is part of the job.** The launch phase helps with positioning, a README people finish, and a first-run test.
+[Customise](../../wiki/Customise) lists every key, its values and its default.
 
-Budgit works the same with one session and one model. With a plan that has only one model, that model fills every agent role and the rules stay the same.
+## Guards
 
-## Guards you will meet
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/guard-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/guard-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/guard-dark.svg">
+    <img src="assets/guard-light.svg" width="100%" alt="An animated guard gate: git status passes silently; writing ~/.zshrc and git push --force ask you; a builder writing a verify report and a commit with a real email get no">
+  </picture>
+</p>
 
-The guards are plain scripts, so they cost no model tokens and hold even when the model forgets a rule. Each one either asks you or says no.
+Scripts, not prompts: no model tokens, and they hold when the model forgets a rule.
 
-| Guard | What it stops, and why | Turn it off |
-| --- | --- | --- |
-| Commit identity | A commit to a GitHub repo signed with a real email address. Keeps your private address out of public history. | Set a noreply address: `git config user.email <id>+<login>@users.noreply.github.com` |
-| Protected paths | Writes to the files you list in `protected_paths` (asks). Your real data stays untouched. | Edit the list in `.budgit/project.json` |
-| Verifier reports | Anyone but the reviewer writing `.budgit/verify/`, which would forge a PASS. | No switch. This is the point. |
-| Scout quarantine | Reading raw web results directly. Text from the web can carry instructions. | No switch. Only `budgit:scout-reader` reads them. |
-| Hook bypass | `git commit --no-verify` and similar (asks). Skipped hooks hide problems. | Answer yes when you mean it |
-| Contract lock | Weakening the checks that define "done" (asks). Nobody loosens a test to turn red into green. | Answer yes when you mean it |
-| Ledger check | Ending a turn with a request unanswered. | Answer it with `budgit ledger add --phase mvp --text "…"`, or set a remark aside with `budgit ledger ack I-n --note "why"` |
-| Push reminder | Nothing. It reminds you about unpushed work. | `budgit setup --force --push-after-commit never` (default `ask`: Claude asks before it pushes) |
+## Your data stays yours
 
-To switch everything off for a while, run `claude plugin disable budgit@budgit-hub`.
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/data-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/data-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/data-dark.svg">
+    <img src="assets/data-light.svg" width="100%" alt="Four tiles: on your computer, out of git; no telemetry and no account; guards are scripts; Codex sees only a scanned copy">
+  </picture>
+</p>
+
+Guards stop accidents and hostile repo files, not a determined agent. [Privacy and security](../../wiki/Privacy-and-security)
 
 ## Commands
 
-Claude runs these for you as you talk. The `budgit` command lives inside Claude Code sessions, not in a plain Terminal, so to run one yourself, ask Claude ("show my budgit status").
+Claude runs these as you talk. To run one yourself, ask Claude.
 
-| Command | What it does |
-| --- | --- |
-| `budgit new <name>` | Start a project with git and a ledger. |
-| `budgit status` | Which phase you are in and what comes next. |
-| `budgit idea "<text>"` | Keep an idea for later. |
-| `budgit ledger add --phase <phase> --text "<text>"` | Add a request (phase: mvp, later, a release like 0.13.2 or a workflow phase). `budgit ledger list` shows them all. |
-| `budgit budget` | How the work is pacing against your plan limits. |
-| `budgit activate <folder>` | Pick a project back up in this session. |
-| `budgit secrets` | Scan for secrets and vulnerable dependencies. |
-| `budgit scout …` | Search Hacker News, GitHub, arXiv or Wikipedia, with no keys. |
-| `budgit retro-mine` | Find what you keep correcting, in a private report. |
-| `budgit daily` | A morning read of your ledger: counts, batches, the order of the next version. Changes nothing. |
-| `budgit housekeeping` | Lists merged worktrees and branches. Changes nothing until you add `--apply`. `--schedule on` runs it daily on macOS. |
-| `budgit codex review --clean-copy` | A Codex review of a protected project's code through a clean copy. See the extras below. |
-| `budgit lang` | Show or set the language of Brote and the status line (`en`, `es`, `auto`). |
-| `budgit setup --force …` | Change your setup. |
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/commands-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/commands-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/commands-dark.svg">
+    <img src="assets/commands-light.svg" width="100%" alt="Commands grouped by moment: morning, while you work, before a release, tidy up, and optional extras drawn dashed">
+  </picture>
+</p>
 
-<details>
-<summary><h3><img src="assets/icon-agents.svg" width="20" height="20" align="absmiddle" alt=""> Seven helper agents</h3></summary>
+[Commands](../../wiki/Commands) lists all of them and the seven helper agents.
 
-| Agent | Job |
-| --- | --- |
-| `budgit:builder` | Builds a briefed item in its own worktree. |
-| `budgit:verifier` | PASS or FAIL. |
-| `budgit:plan-critic` | Reviews a plan before anything is built. |
-| `budgit:researcher` | Keeps every finding with its source. |
-| `budgit:security-reviewer` | Before a release or a new plugin. |
-| `budgit:persona-sim` | Plays an end user: a hypothesis, never proof. |
-| `budgit:scout-reader` | Reads untrusted web results in quarantine. |
+## Updates
 
-</details>
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/update-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/update-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/update-dark.svg">
+    <img src="assets/update-light.svg" width="100%" alt="An animated update loop: once a day a quiet check; the line under the prompt shows an arrow and the new version; you update and reload; the first session after runs its one-time step. Budgit never installs by itself">
+  </picture>
+</p>
 
-<details>
-<summary><h3><img src="assets/icon-extras.svg" width="20" height="20" align="absmiddle" alt=""> Optional extras</h3></summary>
+To switch the daily check off: `"update_check": "off"` in `~/.budgit/config.json`. [Getting started](../../wiki/Getting-started) has the rest.
 
-- **Other skills.** The phases mention skills such as `superpowers:test-driven-development` or `impeccable`. You need none of them. When one is missing, Claude does the plain step written next to it.
-- **The ChatGPT lane** ships off. Turn it on to get `budgit codex draft` (long drafts with your ChatGPT account), `budgit codex review` (a second opinion on your changes) and `budgit image`. Install `codex`, sign in, then run `budgit setup --force --codex on`.
-- **Codex on a protected project, through a clean copy.** `budgit codex review --clean-copy` copies only the files in your `codex-allow.txt` into a scratch folder, scans them, reviews them in a sandbox and deletes the copy. Any scan hit sends nothing.
-- **Read the risk first.** Codex keeps its own shell tool, so see the [release notes](../../wiki/Release-notes) before you use the clean copy.
-- **The daily cleanup job.** `budgit housekeeping --schedule on` (macOS) runs the cleanup each morning through a small launcher that Budgit rewrites after every update. It refuses when `BUDGIT_HOME` or `CLAUDE_CONFIG_DIR` is set, when the LaunchAgents folder is not yours, or when the state home is not the default.
+## FAQ
 
-</details>
+Tap a question to open the answer. The short answer is already next to it.
 
-## Folders Budgit creates
+### Cost and limits
 
-Budgit writes in three places: a hub folder, one hidden folder in your home, and one hidden folder inside each project. It creates nothing anywhere else.
+<details><summary><b>Does it cost extra?</b> → <b>No.</b></summary><p>Budgit is free and MIT licensed. The helper agents use your Claude plan, and the budget level decides how many run at once.<br><sub>Depth: <a href="../../wiki/FAQ">FAQ</a></sub></p></details>
+<details><summary><b>Do I need ChatGPT?</b> → <b>No.</b></summary><p>The ChatGPT lane ships off.<br><sub>Depth: <a href="../../wiki/How-Budgit-works">How Budgit works</a></sub></p></details>
+<details><summary><b>What if I run over my limit?</b> → <b>It slows down first.</b></summary><p>Budgit slows down before that. It cannot raise your plan's limit.<br><sub>Depth: <a href="../../wiki/FAQ">FAQ</a></sub></p></details>
 
-| Folder | What it holds | In git? | Safe to delete? |
-| --- | --- | --- | --- |
-| Hub: `<projects root>/budgit-hub` (for example `~/Projects/budgit-hub`), made by `budgit setup` | Your shared notes across projects: `.budgit/research/INDEX.md`, `lessons/INDEX.md`, `lessons/inbox/`, `projects/`, `ideas/`, `docs/decisions/`. Setup only adds what is missing and never overwrites a file. | Up to you. Setup writes no git rules there. | Keep it. Your research, lessons and ideas live there. |
-| Home state: `~/.budgit/` | `config.json` (your setup answers), `portfolio.json` (the list of your projects), `sessions/` and `hooks.log` (what the hooks track), and a few small working files (`triggers.json`, `approved_prepare.json`, `ckpt/`, `ctxwarn/`, `notask/`, `session-writes/`). | No. It is in your home, not in a repo. | Keep it. Deleting `config.json` means running `budgit setup` again. |
-| Save points: `~/.budgit/checkpoints/<project key>/` | A short save point written just before Claude compacts a long chat: open ledger items, the last tool calls, `git status` and the top of `progress.md`. The next session is pointed to it. Budgit keeps the newest 20 per project and removes older ones. | No. It is in your home, never in the repo. | Keep it. It is cheap, and the newest one is how a compacted chat finds where it was. |
-| Quarantine: `~/.budgit/raw/<project>-<id>/` | The raw results of `budgit scout`. Only `budgit:scout-reader` reads them, because web text can carry instructions. The folder is readable only by you and ignores itself. | No. | Keep it. |
-| Job launcher: `~/.budgit/bin/budgit-job` | The small launcher the daily cleanup job runs. Budgit rewrites it by itself after each update, so the job keeps working. | No. It is in your home, not in a repo. | Keep it. |
-| Install record: `~/.budgit/install.json` | Which Budgit version this computer last set up, so each update's one-time step runs once. | No. It is in your home, not in a repo. | Keep it. |
-| Project data: `<project>/.budgit/` | The ledger (`ledger.json`, `ledger.md`), `progress.md`, `project.json`, plus `plans/`, `research/`, `reports/`, `verify/` and `handover/` as the work needs them. | Mostly ignored: `budgit activate` adds the ledger, progress, `project.json`, `reports/` and `verify/` to `.gitignore`, along with the state and lock files. Set `"track_ledger": true` in `project.json` to commit the ledger. | Keep it. It is the memory of the project: deleting it loses the ledger, notes and reports. |
-| Old name: `<project>/.studio/` | The same data under the name Budgit had before 0.12. Budgit still reads it when it exists. | As above. | Keep it. Ask Claude to run `budgit migrate` to rename it to `.budgit`. |
+### Control and updates
 
-Budgit does not leave worktree folders behind. When it checks `main` in a clean copy it makes a temporary worktree outside your project and removes it afterwards.
+<details><summary><b>Can I turn a guard off?</b> → <b>Most of them.</b></summary><p>Most of them, yes. Two have no switch on purpose: only the verifier writes PASS reports, and only the quarantined reader sees raw web results.<br><sub>Depth: <a href="../../wiki/Privacy-and-security">Privacy and security</a></sub></p></details>
+<details><summary><b>Can I use it with one model or one session?</b> → <b>Yes.</b></summary><p>That model fills every helper role, and the rules stay the same.<br><sub>Depth: <a href="../../wiki/FAQ">FAQ</a></sub></p></details>
+<details><summary><b>Will it update by itself?</b> → <b>No.</b></summary><p>It tells you when a new version is out. You choose when to update.<br><sub>Depth: <a href="../../wiki/Getting-started">Getting started</a></sub></p></details>
 
-Details for each project folder are in the [FAQ](../../wiki/FAQ#what-are-the-folders-budgit-creates).
+### Where it runs
 
-## Privacy
+<details><summary><b>Does it run on Linux or Windows?</b> → <b>macOS only, for now.</b></summary><p>It is tested on macOS. Linux is untested and may work. Windows is not supported yet.<br><sub>Depth: <a href="../../wiki/FAQ">FAQ</a> · what is planned is in the <a href="#roadmap">Roadmap</a> below</sub></p></details>
+<details><summary><b>Which language does it speak?</b> → <b>Yours.</b></summary><p>It follows your Claude Code language.<br><sub>Depth: <a href="../../wiki/FAQ">FAQ</a></sub></p></details>
 
-- **On your computer.** Your configuration stays in `~/.budgit/`. A project's ledger, notes and reports stay in its `.budgit/` folder, which `budgit activate` adds to the project's `.gitignore`, so none of it is committed unless you choose to. Files you committed before stay committed: the new defaults only apply to new files.
-- **No telemetry.** Budgit reaches the internet when you run `budgit scout`, turn on the ChatGPT lane (text and images), or point `budgit design-check` at a web address. The research, verifier and persona agents can also browse inside Claude Code. It also checks for a new release once a day: a plain GET of the public `plugin.json` on `raw.githubusercontent.com`, which sends only your IP address and a standard User-Agent. Turn it off with `BUDGIT_NO_UPDATE_CHECK=1` or `"update_check": "off"` in Budgit's `config.json`.
-- **Nothing slips out.** Guards stop secrets and real personal data from reaching commits and searches.
+More questions and longer answers: [FAQ](../../wiki/FAQ) in the wiki.
 
-The [Privacy and security](../../wiki/Privacy-and-security) page on the wiki lists every file Budgit writes and every hook it installs, including the commit-message clean-up hook and how to turn it off.
+## Roadmap
 
-**Platforms.** Budgit is tested on macOS. Linux is untested: the hooks need only `python3` and a POSIX shell, so it may work, and a report from you helps. Windows is not supported. The floating window runs on macOS only.
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/roadmap-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/roadmap-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/roadmap-dark.svg">
+    <img src="assets/roadmap-light.svg" width="100%" alt="A roadmap in two parts. Today: macOS, tested, works now; the floating Brote window runs on macOS only. Planned, with no dates: budgit guard, a read-only check of your machine and projects, designed and not built yet; Linux, tested support beyond may work; Windows, hooks, status line and the install; and other models, the ledger, pacing and guards beyond Claude">
+  </picture>
+</p>
 
-<details>
-<summary><h3><img src="assets/icon-update.svg" width="20" height="20" align="absmiddle" alt=""> Update, turn off or remove</h3></summary>
-
-Claude Code does not update Budgit on its own, because auto-update is off for marketplaces outside Anthropic's. To turn it on, type `/plugin` in a terminal session, open the **Marketplaces** tab, pick `budgit-hub` and choose **Enable auto-update**.
-
-To update by hand, from your shell:
-
-```bash
-claude plugin marketplace update budgit-hub
-```
-
-```bash
-claude plugin update budgit@budgit-hub
-```
-
-Inside a terminal session, the same is `/plugin` → **Marketplaces** → `budgit-hub` → **Update marketplace**. Chats that are already open keep the old version until you type `/reload-plugins` or start a new one.
-
-Turn it off for a while:
-
-```bash
-claude plugin disable budgit@budgit-hub
-```
-
-Remove it completely:
-
-```bash
-claude plugin uninstall budgit@budgit-hub
-```
-
-```bash
-claude plugin marketplace remove budgit-hub
-```
-
-Your projects and `~/.budgit/` stay where they were.
-
-</details>
+<p align="center"><b>Today:</b> macOS &nbsp;·&nbsp; <b>Next, no dates:</b> <code>budgit guard</code> · Linux · Windows · other models</p>
 
 ## Learn more
 
-| Wiki page | Read it when |
-| --- | --- |
-| [Getting started](../../wiki/Getting-started) | You want it installed and your first project running in ten minutes. |
-| [How Budgit works](../../wiki/How-Budgit-works) | You want the phases, the ledger, the budget levels and the guards in detail. |
-| [Brote animation bank](../../wiki/Brote-animation-bank) | You want to see every animation and what makes it play. |
-| [FAQ](../../wiki/FAQ) | Something surprised you. |
-| [Release notes](../../wiki/Release-notes) | You want to know what changed. |
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/wikimap-mobile-dark.svg">
+    <source media="(max-width: 600px)" srcset="assets/wikimap-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/wikimap-dark.svg">
+    <img src="assets/wikimap-light.svg" width="100%" alt="A map of the wiki as four shelves, each page with a one-line reason to read it. Start here: Getting started, Using Budgit well, FAQ. How it works: How Budgit works, Task management, Skills workflow, Folders and files. Your setup: Customise, Commands, Privacy and security, Release notes. Brote: Brote and Brote animation bank">
+  </picture>
+</p>
+
+<p align="center">
+  <b>Start here</b> &nbsp;<a href="../../wiki/Getting-started">Getting started</a> · <a href="../../wiki/Using-Budgit-well">Using Budgit well</a> · <a href="../../wiki/FAQ">FAQ</a><br>
+  <b>How it works</b> &nbsp;<a href="../../wiki/How-Budgit-works">How Budgit works</a> · <a href="../../wiki/Task-management">Task management</a> · <a href="../../wiki/Skills-workflow">Skills workflow</a> · <a href="../../wiki/Folders-and-files">Folders and files</a><br>
+  <b>Your setup</b> &nbsp;<a href="../../wiki/Customise">Customise</a> · <a href="../../wiki/Commands">Commands</a> · <a href="../../wiki/Privacy-and-security">Privacy and security</a> · <a href="../../wiki/Release-notes">Release notes</a><br>
+  <b>Brote</b> &nbsp;<a href="../../wiki/Brote">Brote</a> · <a href="../../wiki/Brote-animation-bank">Brote animation bank</a>
+</p>
 
 MIT licensed. See [LICENSE](LICENSE).
