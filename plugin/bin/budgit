@@ -805,6 +805,17 @@ def cmd_trace(args):
     return 0
 
 
+def cmd_checkpoint(args):
+    """R-123: write a mechanical checkpoint now (the PreCompact hook writes the same file before a compaction)."""
+    import checkpoint
+    project = sl.resolve_project(args.project)
+    data = sl.load_ledger(project)
+    path, err = checkpoint.run(project, sl.studio_dir(project), data["items"], None, "manual", "",
+                               store=checkpoint.store_dir(sl.home_state(), project))
+    print(path if path else "checkpoint failed: %s" % err)
+    return 0
+
+
 def cmd_float(args):
     """The floating Brote window (macOS): on [--yes] / off / stop / status / uninstall. All logic lives in scripts/floatctl.py."""
     import floatctl
@@ -2447,6 +2458,8 @@ def build_parser():
     s = sub.add_parser("brote", parents=[common], help="the floating Brote window on macOS: on, off, stop, status, uninstall")
     s.add_argument("rest", nargs=argparse.REMAINDER)
     s.set_defaults(func=cmd_float)
+    s = sub.add_parser("checkpoint", parents=[common], help="write a mechanical checkpoint (open items, git status, progress head) now")
+    s.set_defaults(func=cmd_checkpoint)
     s = sub.add_parser("float", parents=[common], help="the old name of `budgit brote`")
     s.add_argument("rest", nargs=argparse.REMAINDER)
     s.set_defaults(func=cmd_float)

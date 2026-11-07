@@ -8,7 +8,7 @@ description: Use when the user starts a NEW project or idea (app, videogame, scr
 Living process of Budgit (history in CHANGELOG.md). `<hub>` below = the folder `budgit hub` prints
 (research/, lessons/, projects/, ideas/; not set up yet → reference/setup.md). Reply in the user's language; code/docs in English.
 **Cloud sessions (claude.ai/code load no plugins):** a project vendored with `budgit vendor` carries this skill, the
-agents and the hooks in `.claude/`; there the agents are `budgit-verifier`, `budgit-scout-reader`, `budgit-researcher`,
+agents and the hooks in `.claude/`; there the agents are `budgit-builder`, `budgit-verifier`, `budgit-scout-reader`, `budgit-researcher`,
 `budgit-plan-critic`, `budgit-security-reviewer`, `budgit-persona-sim` (dash, not `budgit:X`) and the CLI is
 `.claude/budgit/bin/budgit`. The vendored guards accept both names; the plugin accepts `budgit:X` (`studio:X` too during the 0.12 compat window).
 This file is the must-keep core. Load the phase file and the lenses you need, when you need them:
@@ -126,7 +126,7 @@ reference/ledger.md). Record `CORRECTION #n` + root cause whenever the user corr
 ## Lanes (several sessions on one project)
 - **Independent work goes to its own session at once**: a build lane, a research lane, a design lane. The coordinating session decides, talks to the user and relays every lane question and update; it does no lane work itself. The user never has to open a lane.
 - **Every brief starts the same way:** bind first with `budgit activate --since-now <project dir>`, then `budgit ledger start R-n` for the item. An unbound session cannot claim anything. Say in the brief: never ask the user in the lane, send the need to the coordinator.
-- **Every brief has a `Skills:` line** from reference/routing.md; the coordinator's habits (evidence, stop orders, release table) are in reference/coordination.md.
+- **Every brief has a `Skills:` line** from reference/routing.md; the coordinator's habits (evidence, stop orders, release table) are in reference/coordination.md. A build ask is never coded by the coordinator: brief `budgit:builder` with reference/builder-brief.md.
 - **One writer per set of files.** Two lanes never edit the same files. Lanes commit only the paths they changed, by explicit path.
 - **A file the user must review is a file card first, then a question card in the same turn** that names the file; no link inside a question (reference/coordination.md).
 - **A finished lane is closed by the coordinator.** When its report has been checked and nothing waits on it, the coordinator archives that session without asking, says so in one line, and the user can reopen it later.

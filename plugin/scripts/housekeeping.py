@@ -462,34 +462,237 @@ def last():
 # ---------------------------------------------------------------- the daily run (macOS launch agent)
 
 def agents_dir():
-    return sl.env("LAUNCH_AGENTS_DIR") or os.path.join(os.path.expanduser("~"), "Library", "LaunchAgents")
+    return sl.env("LAUNCH_AGENTS_DIR") or os.path.join(user_home() or os.path.expanduser("~"), "Library", "LaunchAgents")
 
 
 def plist_path():
     return os.path.join(agents_dir(), LABEL + ".plist")
 
 
-def _launchctl(*args):
+JOB = {"label": LABEL, "args": ["housekeeping", "--apply", "--quiet"], "log": "housekeeping.log"}   # R-712: a job Budgit owns
+LAUNCHER = "budgit-job"
+NO_PLUGIN_LINE = "budgit: the plugin moved (update?); the next Claude Code session repairs this job"
+PYTHON_FALLBACKS = ("/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3")
+
+
+class JobError(Exception):
+    pass
+
+
+def _launchctl(*args, timeout=30):
     if (sl.env("HOUSEKEEPING_LAUNCHCTL") or "").lower() == "off":
         return 0
     try:
-        return subprocess.run(["launchctl"] + list(args), capture_output=True, text=True, timeout=30).returncode
+        return subprocess.run(["launchctl"] + list(args), capture_output=True, text=True, timeout=timeout).returncode
     except (OSError, subprocess.SubprocessError):
         return 127
 
 
-def plist_text(budgit_path, at="09:30"):
+LAUNCHCTL_TIMEOUT = 2          # seconds per call; the SessionStart hook is killed at 10 s, so bootout + bootstrap + one retry stay at 6 s
+RELOAD_MARK = "reload-pending"
+
+
+def _reload(label, path):
+    """Unload and load one launch agent. One retry of the load; raises JobError when the job is still not loaded."""
+    uid = os.getuid()
+    _launchctl("bootout", "gui/%d/%s" % (uid, label), timeout=LAUNCHCTL_TIMEOUT)
+    for _attempt in range(2):
+        if _launchctl("bootstrap", "gui/%d" % uid, path, timeout=LAUNCHCTL_TIMEOUT) == 0:
+            return
+    raise JobError("launchctl could not load " + label)
+
+
+def user_home():
+    """The real user's folder from the passwd database, never $HOME (a project can set that). None where there is no pwd (Windows)."""
+    try:
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_dir
+    except (ImportError, KeyError, OSError):
+        return None
+
+
+def same_file(a, b):
+    try:
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        return False
+
+
+def under_any(path, roots):
+    """True when `path`, or one of its parents, IS one of `roots`. Compared by file identity (device and inode), never by text,
+    so case folding and firmlinks (/System/Volumes/Data/...) cannot hide a folder."""
+    current = os.path.abspath(path)
+    while True:
+        if any(same_file(current, root) for root in roots):
+            return True
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
+
+
+def state_home_is_default(home):
+    """True when `home` IS the default state home of the passwd-database user (what resolve_data_dir gives for that home), never one
+    derived from $HOME or BUDGIT_HOME: a project can set both, and a real plist runs whatever launcher sits in that home."""
+    uh = user_home()
+    if not uh:
+        return False
+    want = sl.resolve_data_dir(uh)
+    return same_file(home, want) or os.path.realpath(home) == os.path.realpath(want)
+
+
+def test_mode():
+    """The test hooks: a LaunchAgents folder of the test's own, and launchctl switched off. Only then may a job leave ~/Library.
+    An allow list: the folder must sit under the system temp folder (by file identity) and must not be the user's real one."""
+    import tempfile
+    agents = sl.env("LAUNCH_AGENTS_DIR")
+    if not agents or (sl.env("HOUSEKEEPING_LAUNCHCTL") or "").lower() != "off":
+        return False
+    if not under_any(agents, [os.path.realpath(tempfile.gettempdir()), "/private/tmp"]):
+        return False
+    home = user_home()
+    if home and same_file(agents, os.path.join(home, "Library", "LaunchAgents")):
+        return False
+    return True
+
+
+def launcher_path(home=None):
+    return os.path.join(home or sl.home_state(), "bin", LAUNCHER)
+
+
+def launcher_text(root, python):
+    """R-712: the fixed shell file every Budgit-owned launch agent runs. Only this text follows an update, never the plist."""
+    import shlex
+    for value in (root, python):
+        if "\n" in value or "\x00" in value or "\r" in value:
+            raise JobError("a path with a line break")
+    budgit = os.path.join(root, "bin", "budgit")
+    return "\n".join([
+        "#!/bin/sh",
+        "# Budgit scheduled-job launcher. Written by Budgit; an update rewrites this text, never the launch agent.",
+        "py=%s" % shlex.quote(python),
+        '[ -x "$py" ] || py=""',
+        'if [ -z "$py" ]; then',
+        "  for c in %s; do" % " ".join(PYTHON_FALLBACKS),
+        '    if [ -x "$c" ]; then py=$c; break; fi',
+        "  done",
+        "fi",
+        'if [ -z "$py" ]; then echo "budgit: no python3 found for this job" >&2; exit 75; fi',
+        "b=%s" % shlex.quote(budgit),
+        'if [ ! -f "$b" ]; then echo %s >&2; exit 75; fi' % shlex.quote(NO_PLUGIN_LINE),
+        'exec "$py" "$b" "$@"',
+        ""])
+
+
+def plist_text(launcher, at="09:30", home=None):
     import plistlib
     hour, minute = (int(x) for x in at.split(":"))
-    log = os.path.join(sl.home_state(), "housekeeping.log")
+    home = home or sl.home_state()
+    log = os.path.join(home, JOB["log"])
     return plistlib.dumps({
         "Label": LABEL,
-        "ProgramArguments": [sys.executable, budgit_path, "housekeeping", "--apply", "--quiet"],
+        "ProgramArguments": ["/bin/sh", launcher] + list(JOB["args"]),
         "StartCalendarInterval": {"Hour": hour, "Minute": minute},
         "Nice": 10, "LowPriorityIO": True,
         "StandardOutPath": log, "StandardErrorPath": log,
-        "EnvironmentVariables": {"BUDGIT_HOME": sl.home_state()} if sl.env("HOME") else {},
+        "EnvironmentVariables": {"BUDGIT_HOME": home} if sl.env("HOME") else {},
     }).decode("utf-8")
+
+
+def desired_plist(job, current, launcher, home):
+    """The plist a job of ours should have, kept from `current` (its time, nice level, environment) except what is frozen by an update."""
+    log = os.path.join(home, job["log"])
+    want = {"Label": job["label"], "ProgramArguments": ["/bin/sh", launcher] + list(job["args"]),
+            "StandardOutPath": log, "StandardErrorPath": log}
+    # R-712: only what the design keeps, type-checked; a stale Program or an injected key (DYLD_*, WorkingDirectory...) does not survive,
+    # and a bad value falls back to the default (an empty calendar would run the job every minute)
+    want["StartCalendarInterval"] = _kept_calendar(current.get("StartCalendarInterval"), {"Hour": 9, "Minute": 30})
+    want["Nice"] = _kept_nice(current.get("Nice"), 10)
+    want["LowPriorityIO"] = _kept_bool(current.get("LowPriorityIO"), True)
+    env = current.get("EnvironmentVariables")
+    if isinstance(env, dict):
+        want["EnvironmentVariables"] = {"BUDGIT_HOME": env["BUDGIT_HOME"]} if isinstance(env.get("BUDGIT_HOME"), str) else {}
+    return want
+
+
+def _plist_home(current):
+    env = current.get("EnvironmentVariables")
+    explicit = env.get("BUDGIT_HOME") if isinstance(env, dict) else None
+    return explicit if isinstance(explicit, str) and explicit else sl.resolve_data_dir(os.path.expanduser("~"))
+
+
+def real_agents_dir():
+    """True when the agents folder in use IS (same file) <passwd home>/Library/LaunchAgents. With no LAUNCH_AGENTS_DIR set, the default is that folder by construction."""
+    uh = user_home()
+    if not uh:
+        return False
+    if not sl.env("LAUNCH_AGENTS_DIR"):
+        return True
+    return same_file(agents_dir(), os.path.join(uh, "Library", "LaunchAgents"))
+
+
+def _kept_calendar(value, default):
+    if isinstance(value, dict) and value and all(isinstance(k, str) and type(v) is int for k, v in value.items()):
+        return value
+    return default
+
+
+def _kept_nice(value, default):
+    return value if type(value) is int and 0 <= value <= 20 else default
+
+
+def _kept_bool(value, default):
+    return value if type(value) is bool else default
+
+
+def _refuse_links(home, launcher):
+    if os.path.islink(home) or os.path.islink(os.path.dirname(launcher)) or os.path.islink(launcher):
+        raise JobError("a symlink where the launcher goes")
+
+
+def repair_job(job, root, python):
+    """R-712: bring one existing launch agent of ours onto the fixed launcher. -> "none" (not switched on), "skipped" (another
+    home's job), "same", or "changed". Never creates a plist; launchctl only for a plist in ~/Library/LaunchAgents (or the test hooks)."""
+    import plistlib
+    path = os.path.join(agents_dir(), job["label"] + ".plist")
+    if not os.path.exists(path):
+        return "none"
+    if not test_mode() and not real_agents_dir():
+        raise JobError("a LaunchAgents folder that is not the user's")
+    with open(path, "rb") as f:
+        current = plistlib.load(f)
+    plist_home = _plist_home(current)
+    if os.path.realpath(plist_home) != os.path.realpath(sl.home_state()):
+        return "skipped"                                           # a project cannot move the job to a home it controls
+    home = sl.home_state()
+    if not test_mode():
+        uh = user_home()
+        if not uh or same_file(home, uh) or not under_any(home, [uh]) or not state_home_is_default(home):
+            raise JobError("a home outside your user folder")
+    launcher = launcher_path(home)
+    _refuse_links(home, launcher)
+    text = launcher_text(root, python)
+    changed = False
+    try:
+        old = sl.read_text(launcher)
+    except OSError:
+        old = None
+    if old != text:
+        os.makedirs(os.path.dirname(launcher), exist_ok=True)
+        _refuse_links(home, launcher)
+        sl.atomic_write(launcher, text, 0o700)
+        changed = True
+    want = desired_plist(job, current, launcher, home)
+    marker = os.path.join(home, RELOAD_MARK + "-" + job["label"])
+    pending = os.path.lexists(marker)                              # an earlier reload was cut short: load the job again
+    if want != current or pending:
+        sl.atomic_write(marker, "reload\n", 0o600)                 # stays until the job is loaded, so a killed hook retries
+        if want != current:
+            sl.atomic_write(path, plistlib.dumps(want).decode("utf-8"))
+        _reload(job["label"], path)
+        os.remove(marker)
+        changed = True
+    return "changed" if changed else "same"
 
 
 def schedule(op, budgit_path, at="09:30"):
@@ -504,9 +707,17 @@ def schedule(op, budgit_path, at="09:30"):
         try:
             import plistlib
             with open(path, "rb") as f:
-                program = plistlib.load(f)["ProgramArguments"][1]
+                program = plistlib.load(f)["ProgramArguments"]
         except Exception:
-            program = ""
+            program = []
+        if len(program) > 1 and program[0] == "/bin/sh" and os.path.basename(program[1]) == LAUNCHER:
+            import installstep as upgrade
+            rec = upgrade.record_read(sl.home_state()) or {}
+            target = os.path.join(rec.get("root") or "", "bin", "budgit")
+            if not (os.path.exists(program[1]) and rec.get("root") and os.path.exists(target)):
+                return 1, "hk.sched_stale_launcher", {"path": target if rec.get("root") else program[1]}
+            return 0, "hk.sched_on", {"path": path}
+        program = program[1] if len(program) > 1 else ""
         if not (program and os.path.exists(program)):
             return 1, "hk.sched_stale", {"path": program or path}
         return 0, "hk.sched_on", {"path": path}
@@ -521,10 +732,42 @@ def schedule(op, budgit_path, at="09:30"):
         return 0, "hk.sched_removed", {}
     if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at or ""):
         return 64, "hk.sched_time", {"at": at}
+    import updatelib
+    import installstep as upgrade
+    home = sl.home_state()
+    root = os.path.dirname(os.path.dirname(os.path.realpath(budgit_path)))
+    real = not test_mode()
+    uh = user_home()
+    if real and not uh:
+        return 1, "hk.sched_failed", {"why": "no user folder from the system"}
+    if real and sl.env("HOME"):
+        return 1, "hk.sched_failed", {"why": "the state home is set by BUDGIT_HOME; a job runs only from the default home in your user folder"}   # a project can set that variable
+    if real and os.environ.get("CLAUDE_CONFIG_DIR"):
+        return 1, "hk.sched_failed", {"why": "CLAUDE_CONFIG_DIR is set; a job is switched on only from the default Claude Code folder"}   # a project can set it
+    if real and not real_agents_dir():
+        return 1, "hk.sched_failed", {"why": "a LaunchAgents folder that is not the user's"}
+    if real and not (under_any(home, [uh]) and not same_file(home, uh) and state_home_is_default(home)):
+        return 1, "hk.sched_failed", {"why": "a home outside your user folder"}
+    trusted = updatelib.registered_root(root, os.path.join(uh, ".claude") if real else None) is not None   # outside test mode: the user's registry, never $HOME's
+    if sl.vendored() or not trusted:
+        return 1, "hk.sched_failed", {"why": "this copy is not the install Claude Code registered"}   # R4: no job from a vendored or loose copy, in test mode too
+    launcher = launcher_path(home)
+    try:
+        if os.path.islink(home):
+            raise JobError("a symlink where the home goes")
+        os.makedirs(home, exist_ok=True)
+        rec = upgrade.record_update(root, updatelib.running_version(root), upgrade.interpreter(), trusted)
+        if not rec:
+            raise JobError("the install record could not be written")
+        _refuse_links(home, launcher)
+        os.makedirs(os.path.dirname(launcher), exist_ok=True)
+        _refuse_links(home, launcher)
+        sl.atomic_write(launcher, launcher_text(rec["root"], rec["python"]), 0o700)
+    except (JobError, OSError) as exc:
+        return 1, "hk.sched_failed", {"why": str(exc)}
     os.makedirs(agents_dir(), exist_ok=True)
-    os.makedirs(sl.home_state(), exist_ok=True)
-    sl.atomic_write(path, plist_text(os.path.realpath(budgit_path), at))
-    _launchctl("bootout", "gui/%d/%s" % (uid, LABEL))
-    if _launchctl("bootstrap", "gui/%d" % uid, path) != 0:
+    sl.atomic_write(path, plist_text(launcher, at, home))
+    _launchctl("bootout", "gui/%d/%s" % (uid, LABEL), timeout=LAUNCHCTL_TIMEOUT)
+    if _launchctl("bootstrap", "gui/%d" % uid, path, timeout=LAUNCHCTL_TIMEOUT) != 0:
         return 1, "hk.sched_failed", {"why": path}
     return 0, "hk.sched_set", {"at": at, "path": path}

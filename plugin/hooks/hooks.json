@@ -116,6 +116,17 @@
         ]
       }
     ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "env -u PYTHONDONTWRITEBYTECODE python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" pre-compact",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
     "PostCompact": [
       {
         "hooks": [

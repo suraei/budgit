@@ -156,7 +156,7 @@ def filled_ids(session_id):
         return set()
 
 
-ROLES = ("judgement = verifier, plan-critic, design/security review; work = researcher, implementers, "
+ROLES = ("judgement = verifier, plan-critic, design/security review; work = builder, researcher, implementers, "
          "persona-sim; mechanical = lookups, log reading, formatting, summaries")
 
 

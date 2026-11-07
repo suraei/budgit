@@ -181,13 +181,15 @@ def ensure_subdir(project, *parts):
     return cur
 
 
-def atomic_write(path, text):
+def atomic_write(path, text, mode=None):
     """Write via a fresh exclusive temp file (never follows a planted symlink), then rename over
-    the target (a symlink at the target is replaced, not written through)."""
+    the target (a symlink at the target is replaced, not written through). `mode` is set on the temp file before the rename."""
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".",
                                prefix=os.path.basename(path) + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
+            if mode is not None:
+                os.fchmod(f.fileno(), mode)
             f.write(text)
         os.replace(tmp, path)
     except BaseException:
@@ -3837,7 +3839,7 @@ def _py_inline_ok(tokens, cwd, user_home):
 import unicodedata as _unicodedata  # noqa: E402
 
 VERIFIER = "budgit:verifier"
-AGENT_NAMES = ("persona-sim", "plan-critic", "researcher", "scout-reader", "security-reviewer", "verifier")
+AGENT_NAMES = ("builder", "persona-sim", "plan-critic", "researcher", "scout-reader", "security-reviewer", "verifier")
 AGENT_NAMESPACES = ("budgit", "studio")      # R-120: the plugin id changed; both stay valid during the compat window
 
 

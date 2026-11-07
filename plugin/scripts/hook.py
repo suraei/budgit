@@ -505,6 +505,13 @@ def on_session_start(inp, project, held=True):
     pointer = brain.session_pointer(project)
     conflict = sl.data_dir_conflict(project)      # R-120: a stale session recreated .studio next to .budgit
     _context("SessionStart", sl.session_summary(project, inp.get("session_id"), extra=(pointer, conflict)))
+    if inp.get("source") == "compact":           # R-123: the resumed session is pointed at the checkpoint written before the cut
+        try:
+            line = checkpoint_line(project, inp.get("session_id"))
+            if line:
+                _context("SessionStart", line)
+        except Exception:
+            sl.log_error("session-start: checkpoint line")
     try:                                         # R-286 task 4: one line when a decision waits; a failure prints nothing
         import triggers
         due = triggers.session_line(project, source=inp.get("source"))
@@ -536,6 +543,45 @@ def on_post_compact(inp, project):
                                              inp.get("compact_summary", "")))
 
 
+def on_pre_compact(inp, project):
+    """R-123: a mechanical checkpoint just before the context is cut. It never blocks or fails the compaction: any
+    error goes to hooks.log and the hook still exits 0. Lock-free: it only reads the ledger and writes its own file."""
+    import checkpoint
+    sdir = sl.studio_dir(project)
+    items = []
+    try:                                         # a ledger that is a symlink or resolves outside the state folder is not read
+        lp = sl._ledger_path(project)
+        if os.path.lexists(lp) and not checkpoint.plain_file_in(lp, sdir):
+            raise OSError("ledger.json is not a plain file inside the state folder")
+        items = sl.load_ledger(project)["items"]
+    except Exception as exc:
+        _hook_note("pre-compact: ledger not readable (%s); the checkpoint lists no items" % exc.__class__.__name__)
+    path, err = checkpoint.run(project, sdir, items, inp.get("transcript_path"),
+                               inp.get("trigger") or "", inp.get("session_id") or "",
+                               store=checkpoint.store_dir(sl.home_state(), project))
+    if err:
+        _hook_note("pre-compact: checkpoint failed — %s" % err)
+
+
+def _hook_note(text):
+    try:
+        os.makedirs(sl.home_state(), exist_ok=True)
+        sl.append_text(os.path.join(sl.home_state(), "hooks.log"), "%s %s\n" % (sl.now(), text))
+    except Exception:
+        pass
+
+
+def checkpoint_line(project, session=None):
+    """The SessionStart line after a compaction: where the newest checkpoint is (this session's first, and only a file
+    this module wrote, under the per-user state folder). "" when there is none."""
+    import checkpoint
+    path = checkpoint.newest(checkpoint.store_dir(sl.home_state(), project), session)
+    if not path:
+        return ""
+    return ("budgit: the context was just compacted. A mechanical checkpoint (open ledger items, last tool calls, git "
+            "status, progress.md head) was written before the cut: read %s, then continue from the ledger." % path)
+
+
 def path_export_line(bindir):
     """The line appended to CLAUDE_ENV_FILE: nothing in the folder name may quote, expand or escape."""
     return 'export PATH="%s:$PATH"\n' % re.sub(r'["$`\\\r\n]', "", bindir)
@@ -564,7 +610,7 @@ def cloud_note():
             sl.log_error("session-start: CLAUDE_ENV_FILE")
     where = "on PATH as `budgit`" if on_path else "not on PATH: run it as `python3 %s ...`" % cli
     return ("Budgit (cloud session, vendored runtime): the CLI is %s — %s. In this session the Budgit agents are named "
-            "budgit-verifier, budgit-scout-reader, budgit-researcher, budgit-plan-critic, budgit-security-reviewer and "
+            "budgit-builder, budgit-verifier, budgit-scout-reader, budgit-researcher, budgit-plan-critic, budgit-security-reviewer and "
             "budgit-persona-sim (not `budgit:X`). Bind this session with `budgit activate` to turn the ledger on; "
             "only pushed work survives this VM." % (cli, where))
 
@@ -609,7 +655,7 @@ def when_busy(event, inp, project):
 HANDLERS = {"user-prompt-submit": on_prompt, "pre-tool-use": on_pre_tool_use,
             "post-tool-use": on_post_tool_use, "stop": on_stop, "subagent-stop": on_subagent_stop,
             "session-start": on_session_start, "post-compact": on_post_compact, "session-end": on_session_end,
-            "post-tool-use-failure": on_post_tool_use_failure}
+            "pre-compact": on_pre_compact, "post-tool-use-failure": on_post_tool_use_failure}
 
 
 def main():
@@ -656,6 +702,13 @@ def main():
             if not project:
                 project = general.bind(inp)      # a chat in a folder with no notebook gets the general one (an old session binds here)
         if event == "session-start":
+            try:                                   # R-712: once per installed version, repairs the jobs Budgit owns; silent unless it fails
+                import installstep
+                line = installstep.run(sl.studio_root(), __import__("updatelib").running_version(sl.studio_root()), installstep.interpreter())
+                if line:
+                    emit({"systemMessage": line})
+            except Exception:
+                sl.log_error("session-start: install step")
             note = cloud_note()
             if note:
                 _context("SessionStart", note)
@@ -735,6 +788,10 @@ def main():
                 emit({"decision": "block", "reason": reason})
             elif note:
                 emit({"systemMessage": note})
+        if event == "pre-compact":              # R-123: lock-free, and a failure is logged, never raised
+            if project:
+                on_pre_compact(inp, project)
+            return 0
         if not project or event not in HANDLERS:
             return 0
         with sl.try_locked(project, LOCK_WAIT_S) as got:

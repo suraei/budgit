@@ -9,7 +9,7 @@
   <a href="#install">Install</a> · <a href="#what-you-get">What you get</a> · <a href="#brote">Brote</a> · <a href="#how-a-project-moves">How a project moves</a> · <a href="../../wiki">Wiki</a>
 </p>
 
-<p align="center"><sub>version 0.13.5 · Claude Code 2.1.292 or newer · Python 3 · tested on macOS · speaks English and Spanish</sub></p>
+<p align="center"><sub>version 0.13.6 · Claude Code 2.1.292 or newer · Python 3 · tested on macOS · speaks English and Spanish</sub></p>
 
 You ask Claude Code for three things on Monday. By Thursday two of them are lost up the chat, your weekly limit is nearly spent, and the feature Claude called "done" has never run.
 
@@ -224,10 +224,11 @@ Claude runs these for you as you talk. The `budgit` command lives inside Claude 
 | `budgit setup --force …` | Change your setup. |
 
 <details>
-<summary><h3><img src="assets/icon-agents.svg" width="20" height="20" align="absmiddle" alt=""> Six helper agents</h3></summary>
+<summary><h3><img src="assets/icon-agents.svg" width="20" height="20" align="absmiddle" alt=""> Seven helper agents</h3></summary>
 
 | Agent | Job |
 | --- | --- |
+| `budgit:builder` | Builds a briefed item in its own worktree. |
 | `budgit:verifier` | PASS or FAIL. |
 | `budgit:plan-critic` | Reviews a plan before anything is built. |
 | `budgit:researcher` | Keeps every finding with its source. |
@@ -244,6 +245,25 @@ Claude runs these for you as you talk. The `budgit` command lives inside Claude 
 - **The ChatGPT lane** ships off. Turn it on to get `budgit codex draft` (long drafts with your ChatGPT account), `budgit codex review` (a second opinion on your changes) and `budgit image`. Install `codex`, sign in, then run `budgit setup --force --codex on`.
 
 </details>
+
+## Folders Budgit creates
+
+Budgit writes in three places: a hub folder, one hidden folder in your home, and one hidden folder inside each project. It creates nothing anywhere else.
+
+| Folder | What it holds | In git? | Safe to delete? |
+| --- | --- | --- | --- |
+| Hub: `<projects root>/budgit-hub` (for example `~/Projects/budgit-hub`), made by `budgit setup` | Your shared notes across projects: `.budgit/research/INDEX.md`, `lessons/INDEX.md`, `lessons/inbox/`, `projects/`, `ideas/`, `docs/decisions/`. Setup only adds what is missing and never overwrites a file. | Up to you. Setup writes no git rules there. | Keep it. Your research, lessons and ideas live there. |
+| Home state: `~/.budgit/` | `config.json` (your setup answers), `portfolio.json` (the list of your projects), `sessions/` and `hooks.log` (what the hooks track), and a few small working files (`triggers.json`, `approved_prepare.json`, `ckpt/`, `ctxwarn/`, `notask/`, `session-writes/`). | No. It is in your home, not in a repo. | Keep it. Deleting `config.json` means running `budgit setup` again. |
+| Save points: `~/.budgit/checkpoints/<project key>/` | A short save point written just before Claude compacts a long chat: open ledger items, the last tool calls, `git status` and the top of `progress.md`. The next session is pointed to it. Budgit keeps the newest 20 per project and removes older ones. | No. It is in your home, never in the repo. | Keep it. It is cheap, and the newest one is how a compacted chat finds where it was. |
+| Quarantine: `~/.budgit/raw/<project>-<id>/` | The raw results of `budgit scout`. Only `budgit:scout-reader` reads them, because web text can carry instructions. The folder is readable only by you and ignores itself. | No. | Keep it. |
+| Job launcher: `~/.budgit/bin/budgit-job` | The small launcher the daily cleanup job runs. Budgit rewrites it by itself after each update, so the job keeps working. | No. It is in your home, not in a repo. | Keep it. |
+| Install record: `~/.budgit/install.json` | Which Budgit version this computer last set up, so each update's one-time step runs once. | No. It is in your home, not in a repo. | Keep it. |
+| Project data: `<project>/.budgit/` | The ledger (`ledger.json`, `ledger.md`), `progress.md`, `project.json`, plus `plans/`, `research/`, `reports/`, `verify/` and `handover/` as the work needs them. | Mostly ignored: `budgit activate` adds the ledger, progress, `project.json`, `reports/` and `verify/` to `.gitignore`, along with the state and lock files. Set `"track_ledger": true` in `project.json` to commit the ledger. | Keep it. It is the memory of the project: deleting it loses the ledger, notes and reports. |
+| Old name: `<project>/.studio/` | The same data under the name Budgit had before 0.12. Budgit still reads it when it exists. | As above. | Keep it. Ask Claude to run `budgit migrate` to rename it to `.budgit`. |
+
+Budgit does not leave worktree folders behind. When it checks `main` in a clean copy it makes a temporary worktree outside your project and removes it afterwards.
+
+Details for each project folder are in the [FAQ](../../wiki/FAQ#what-are-the-folders-budgit-creates).
 
 ## Privacy
 

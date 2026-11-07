@@ -35,7 +35,13 @@ enum K {
     static let walkSpeed = 40.0, climbSpeed = 60.0, ladderSpeed = 70.0, flySpeed = 220.0
     static let fallPause = 0.5                              // he notices there is nothing under him before he drops
     static let hug = 20.0                                   // how far into the window's side he holds on while climbing
-    static let tripEvery = 90.0, tripAway = 60.0            // one trip at most every 90 s, back to Claude after 60 s
+    static let tripEvery = 60.0, tripAway = 60.0, firstTrip = 20.0   // one outing at most every 60 s (the first 20 s after launch), a window trip lasts 60 s
+    static let homeRadius = 1.5 * spriteW                   // he wanders this far each side of the spot the user put him on
+    static let focusMinW = 300.0, focusMinH = 200.0         // a window this big in a focus app counts as the chat or the terminal
+    static let inputBand = 170.0                            // the strip along the bottom of a chat window where the input box sits
+    static let noGoEvery = 3.0                              // the focus window is looked for at most this often
+    static let edgeClimbMin = 220.0, edgeClimbMax = 380.0, clingSecs = 2.5, hoverSecs = 3.0, slideSpeed = 110.0
+    static let skyFar = 250.0, walkHomeMax = 450.0          // a flight up goes at least this far from home; a walk home is at most this long
     static let statusTimeout = 5.0, statusEvery = 30.0
     static let hitMargin = 1                                // art px
     static let bookW = 60.0, bookH = 84.0                   // 20 x 28 art px, the same height as him
@@ -382,8 +388,9 @@ func coverMove(state: String, feet: Double, coverTop: Double) -> CoverMove {
     }
 }
 
-/// One stretch of a trip. Climb and ladder go straight up at `x`; hop and fly are arcs.
-enum Leg: Equatable { case walk(x: Double), climb(y: Double, left: Bool), ladder(y: Double, left: Bool), hop(to: Pt), fly(to: Pt) }
+/// One stretch of a trip. Climb and ladder go straight up at `x`; hop and fly are arcs. `cling` holds on to the wall for a while,
+/// `descend` slides down it, `hover` stays in the air flapping; `left` is the same flag as on `climb` (the picture is mirrored).
+enum Leg: Equatable { case walk(x: Double), climb(y: Double, left: Bool), ladder(y: Double, left: Bool), hop(to: Pt), fly(to: Pt), cling(secs: Double, left: Bool), descend(y: Double, left: Bool), hover(secs: Double) }
 
 /// The way from where he stands to a window top. `lo...hi` = where his sprite's x may go on what he stands on now.
 /// Higher by up to 40 pt: a hop. Up to 126 pt with the window's side within reach and reaching down to him: he climbs it.
@@ -413,7 +420,7 @@ struct Route {
     var done: Bool { i >= legs.count }
     var leg: Leg? { done ? nil : legs[i] }
     static func clip(_ l: Leg) -> String? {
-        switch l { case .climb: return "sf_climb"; case .ladder: return "sf_ladder"; case .fly: return "sf_fly"; default: return nil }
+        switch l { case .climb, .cling, .descend: return "sf_climb"; case .ladder: return "sf_ladder"; case .fly, .hover: return "sf_fly"; default: return nil }
     }
     /// The stretch of a body clip that repeats while the move lasts (ticks), after its start.
     static func loop(_ clip: String) -> (Int, Int)? {
@@ -434,6 +441,13 @@ struct Route {
         case .climb(let y, _), .ladder(let y, _):
             let s = (Route.clip(l) == "sf_climb" ? K.climbSpeed : K.ladderSpeed) * dt
             if y - p.y <= s { p.y = y; next() } else { p.y += s }
+        case .descend(let y, _):
+            let s = K.slideSpeed * dt
+            if p.y - y <= s { p.y = y; next() } else { p.y -= s }
+        case .cling(let secs, _):
+            if t >= secs { next() }
+        case .hover(let secs):
+            if t >= secs { next() } else { p.y = start.y + sin(t * 3.2) * 3 }
         case .hop(let to), .fly(let to):
             let fly: Bool; if case .fly = l { fly = true } else { fly = false }
             let k = min(1, t / Route.arcTime(start, to, fly: fly))
@@ -452,7 +466,7 @@ struct Route {
         case .fly(let to): legs[n] = .fly(to: Pt(to.x, y))
         case .climb(_, let left): legs[n] = .climb(y: y, left: left)
         case .ladder(_, let left): legs[n] = .ladder(y: y, left: left)
-        case .walk: return
+        case .walk, .cling, .descend, .hover: return
         }
     }
     /// Whether his picture is mirrored: walking, hopping and flying art faces right, so it mirrors going left;
@@ -461,23 +475,261 @@ struct Route {
         guard let l = leg else { return false }
         switch l {
         case .walk(let x): return x < p.x
-        case .climb(_, let left), .ladder(_, let left): return left
+        case .climb(_, let left), .ladder(_, let left), .cling(_, let left), .descend(_, let left): return left
         case .hop(let to), .fly(let to): return to.x < p.x
+        case .hover: return false
         }
     }
 }
 
-/// Trips only when he is in a good mood, idle and nobody works; one every 90 s at most; back home when work starts or after 60 s.
+/// Outings only when he is in a good mood and idle (no gesture, clip or call on him); Claude working does not stop them (it is the usual state);
+/// one every K.tripEvery at most; a window trip lasts K.tripAway.
 struct Explorer {
     var lastTrip = -1e9, awaySince: Double?
-    func mayLeave(state: String, idle: Bool, working: Bool, now: Double) -> Bool {
-        awaySince == nil && Stroll.lively(state) && idle && !working && now - lastTrip >= K.tripEvery
+    func mayLeave(state: String, idle: Bool, now: Double) -> Bool {
+        awaySince == nil && Stroll.lively(state) && idle && now - lastTrip >= K.tripEvery
     }
-    func shouldReturn(working: Bool, now: Double) -> Bool { awaySince.map { working || now - $0 >= K.tripAway } ?? false }
+    func shouldReturn(now: Double) -> Bool { awaySince.map { now - $0 >= K.tripAway } ?? false }
+}
+/// Is he free to go on an outing? No gesture, fidget, hover, hold or call on him. The director's work clip (he sits at the laptop while Claude works)
+/// does not hold him back: an outing's own clips win over it, and Claude is working most of the time.
+/// `workClip`: the clip on screen is only the plain work clip (see Director.workClipOnly); a call, mood sequence, answer, outro or error story is not.
+func mayGoOut(act: Bool, fidgeting: Bool, hover: Bool, held: Bool, directing: Bool, workClip: Bool) -> Bool {
+    !act && !fidgeting && !hover && !held && (!directing || workClip)
 }
 /// Where a trip goes: the widest top of another window that is not Claude's (he lives there already).
-func pickTrip(_ plats: [Plat], host: Int?, claude: Int?) -> Plat? {
-    plats.filter { $0.win != host && $0.win != claude && $0.x1 - $0.x0 >= K.spriteW }.max { ($0.x1 - $0.x0) < ($1.x1 - $1.x0) }
+func pickTrip(_ plats: [Plat], host: Int?, claude: Int?, zone: [Rc] = []) -> Plat? {
+    plats.filter { $0.win != host && $0.win != claude && $0.x1 - $0.x0 >= K.spriteW && tripX($0, zone: zone, rng: { 0 }) != nil }.max { ($0.x1 - $0.x0) < ($1.x1 - $1.x0) }
+}
+
+// MARK: - home, the no-go zone and excursions
+
+/// Apps whose frontmost window he keeps off the middle of: Claude (chat and Claude Code in the desktop app) and the usual terminals and editors.
+/// Found by bundle id (running apps and their window bounds need no permission).
+let focusBundles: Set<String> = [
+    K.claudeBundle, "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable", "net.kovidgoyal.kitty",
+    "org.alacritty", "com.github.wez.wezterm", "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92", "dev.zed.Zed", "com.apple.dt.Xcode",
+]
+func isFocusBundle(_ id: String?) -> Bool { id.map { focusBundles.contains($0) } ?? false }
+
+/// The frontmost window of a focus app (the list is front to back): layer 0, visible, big enough to hold a chat. In AppKit coordinates; nil when there is none.
+func focusWindow(_ list: [WinInfo], pids: Set<Int>, primaryHeight: Double) -> Rc? {
+    list.first { pids.contains($0.pid) && $0.layer == 0 && $0.alpha > K.surfMinAlpha && $0.bounds.w >= K.focusMinW && $0.bounds.h >= K.focusMinH }
+        .map { flipY($0.bounds, primaryHeight: primaryHeight) }
+}
+
+/// Where he must not stand or wander: the middle of the window (its outer quarter on each side left out) and the strip along its bottom where the input box sits.
+func noGoZone(window w: Rc) -> [Rc] {
+    [Rc(w.x + w.w * 0.25, w.y + w.h * 0.25, w.w * 0.5, w.h * 0.5), Rc(w.x + w.w * 0.15, w.y, w.w * 0.7, min(w.h * 0.3, K.inputBand))]
+}
+
+/// Where he must go when he finds himself in the zone: nil when he is outside it, or when a drag/hold or an open call has him.
+/// Nothing else holds it off (not asleep, not busy, not the laptop clip), so it is the same in every state.
+func zoneGuardTarget(zone: [Rc], at p: Pt, held: Bool, calling: Bool, screen: Rc) -> Pt? {
+    guard !held, !calling, !zone.isEmpty, overlapsZone(zone, at: p) else { return nil }
+    return fleeSpot(screen: screen, from: p, zone: zone)
+}
+
+/// Would his picture, with its feet at `p`, cover any of the zone's rectangles?
+func overlapsZone(_ zone: [Rc], at p: Pt) -> Bool {
+    zone.contains { p.x < $0.maxX && p.x + K.spriteW > $0.minX && p.y < $0.maxY && p.y + K.spriteH > $0.minY }
+}
+
+/// The zone as it applies to him now. It is off only when the user dropped him inside a zone that was already there (`onPurpose`)
+/// and his home still lies in it. A zone that comes over a home the user set elsewhere stays on: he is moved out of it.
+func activeZone(_ zone: [Rc], home: Pt?, onPurpose: Bool) -> [Rc] {
+    guard onPurpose, let h = home, overlapsZone(zone, at: h) else { return zone }
+    return []
+}
+
+/// The zone covers his home and the user did not put him there on purpose: home cannot be reached until the window moves away.
+func homeBlocked(_ zone: [Rc], home: Pt?, onPurpose: Bool) -> Bool {
+    guard !onPurpose, let h = home else { return false }
+    return overlapsZone(zone, at: h)
+}
+
+/// Where he lives right now. His saved home when that spot is free (or the user put him there on purpose); while the zone covers it, the nearest free floor spot outside the zone,
+/// worked out again from the saved home each time. The saved home itself never changes, so he goes back to it once it is free. Every way home uses this one point:
+/// the flight out of the zone, the walk home, the way back from an outing, the stray check and the walk back when the zone leaves. nil: the floor has no free spot.
+func effectiveHome(_ zone: [Rc], saved: Pt, onPurpose: Bool, screen: Rc) -> Pt? {
+    guard homeBlocked(zone, home: saved, onPurpose: onPurpose) else { return saved }
+    return fleeSpot(screen: screen, from: saved, zone: zone)
+}
+
+/// What the zone controller asks the app to do on one tick.
+enum ZoneAct: Equatable { case none, flee(to: Pt), goHome }
+
+/// The zone controller as one pure step (state in, action out). The app (`Brote`) and `--selftest` both run exactly this code, so the tests drive the real decisions.
+/// It holds the two flags: `onPurpose` (the user dropped him inside a zone that was already there; lives for the session only, never saved) and
+/// `displaced` (the zone flew him off home, so he goes back once it leaves). The state of his mood (working, asleep) does not enter any decision.
+struct ZoneCtl: Equatable {
+    var onPurpose = false, displaced = false
+
+    /// The user grabs him: whatever he does next, the old flags are void.
+    mutating func press() { onPurpose = false; displaced = false }
+    /// The user lets go and he lands with `home` as his new home, judged against the zone as it is now (the caller refreshes it first).
+    mutating func drop(zone: [Rc], home: Pt?) {
+        onPurpose = home.map { overlapsZone(zone, at: $0) } ?? false
+        displaced = false
+    }
+    /// The zone as it applies to him now (see `activeZone`).
+    func zone(_ raw: [Rc], home: Pt?) -> [Rc] { activeZone(raw, home: home, onPurpose: onPurpose) }
+    /// Where he lives now (see `effectiveHome`); `home` is the saved one.
+    func livesAt(zone raw: [Rc], home: Pt?, homeScreen: Rc) -> Pt? {
+        home.flatMap { effectiveHome(raw, saved: $0, onPurpose: onPurpose, screen: homeScreen) }
+    }
+    /// One 10 Hz tick at rest. In the zone (as it applies through the flag): fly to where he lives now (the nearest free floor spot when there is no home).
+    /// Displaced and the zone gone from home: go home. Displaced, home still covered, but the covering window moved so the free spot moved far: go to the new spot.
+    mutating func tick(zone raw: [Rc], home: Pt?, at p: Pt, held: Bool, calling: Bool, screen: Rc, homeScreen: Rc) -> ZoneAct {
+        if onPurpose, let h = home, !overlapsZone(raw, at: h) { onPurpose = false }      // the zone moved away from the spot the user chose: the exception ends
+        let eff = livesAt(zone: raw, home: home, homeScreen: homeScreen)
+        let active = zone(raw, home: home)
+        if !held, !calling, overlapsZone(active, at: p),
+           let spot = eff ?? zoneGuardTarget(zone: active, at: p, held: false, calling: false, screen: screen) {
+            displaced = true
+            return .flee(to: spot)
+        }
+        if displaced, !held, !calling, let h = home, let e = eff {
+            if e == h { displaced = false; return .goHome }                    // the zone left his home: walk back
+            if farFromHome(pos: p, home: e) { return .goHome }                  // home still covered, the free spot moved with the window: go to the new one
+        }
+        return .none
+    }
+    /// The app tried the walk home. If it did not start only because home is not known at this moment, keep the flag so the next tick tries again.
+    mutating func wentHome(started: Bool, homeKnown: Bool) { if !started && !homeKnown { displaced = true } }
+}
+
+/// Is the focus window due to be looked for? Every `K.noGoEvery` seconds, or at once when forced (a drop: the flag must not judge a stale zone).
+func noGoDue(now: Double, at: Double, force: Bool) -> Bool { force || now >= at }
+
+/// The stretches of `lo...hi` (his left edge) where, at height `y`, his picture covers none of the zone.
+func freeSpans(lo: Double, hi: Double, y: Double, zone: [Rc]) -> [(lo: Double, hi: Double)] {
+    var spans: [(lo: Double, hi: Double)] = [(lo, hi)]
+    for z in zone where y < z.maxY && y + K.spriteH > z.minY {
+        let cutLo = z.minX - K.spriteW, cutHi = z.maxX
+        spans = spans.flatMap { s -> [(lo: Double, hi: Double)] in
+            if cutHi <= s.lo || cutLo >= s.hi { return [s] }
+            var out: [(lo: Double, hi: Double)] = []
+            if s.lo < cutLo { out.append((s.lo, cutLo)) }
+            if cutHi < s.hi { out.append((cutHi, s.hi)) }
+            return out
+        }
+    }
+    return spans
+}
+
+/// Where he may wander from `x` on a ledge: within K.homeRadius of home when he stands at home's height, and outside the zone
+/// (the stretch he is in, else the nearest one; nothing free: where he is).
+func wanderRange(ledge: (lo: Double, hi: Double), x: Double, y: Double, home: Pt?, zone: [Rc]) -> (lo: Double, hi: Double) {
+    var lo = ledge.lo, hi = ledge.hi
+    if let h = home, abs(y - h.y) < 2 {
+        let a = max(lo, h.x - K.homeRadius), b = min(hi, h.x + K.homeRadius)
+        if a <= b { lo = a; hi = b }
+    }
+    guard !zone.isEmpty else { return (lo, hi) }
+    let spans = freeSpans(lo: lo, hi: hi, y: y, zone: zone)
+    if let s = spans.first(where: { x >= $0.lo && x <= $0.hi }) { return s }
+    func gap(_ s: (lo: Double, hi: Double)) -> Double { max(s.lo - x, 0, x - s.hi) }
+    return spans.min { gap($0) < gap($1) } ?? (x, x)
+}
+
+/// Another level than home, or farther than the radius and his own width: he walks or flies back.
+func farFromHome(pos: Pt, home: Pt) -> Bool { abs(pos.y - home.y) >= 2 || abs(pos.x - home.x) > K.homeRadius + K.spriteW }
+
+/// The nearest free spot on the floor of his screen when he is in the zone: for each stretch of the floor the zone leaves free, the point nearest to him; the closest of those.
+func fleeSpot(screen: Rc, from p: Pt, zone: [Rc]) -> Pt? {
+    let lo = screen.minX, hi = screen.maxX - K.spriteW, y = screen.minY
+    guard hi >= lo else { return nil }
+    return freeSpans(lo: lo, hi: hi, y: y, zone: zone).map { s in      // 1 pt inside each stretch, so rounding never leaves him touching the zone
+        s.hi - s.lo >= 2 ? Pt(clamp(p.x, s.lo + 1, s.hi - 1), y) : Pt((s.lo + s.hi) / 2, y)
+    }.filter { !overlapsZone(zone, at: $0) }.min { $0.dist(p) < $1.dist(p) }
+}
+
+/// Does the straight walk along the floor from `x0` to `x1` at height `y` stay out of the zone?
+func pathClear(_ zone: [Rc], from x0: Double, to x1: Double, y: Double) -> Bool {
+    freeSpans(lo: min(x0, x1), hi: max(x0, x1), y: y, zone: zone).contains { $0.lo <= min(x0, x1) + 0.5 && $0.hi >= max(x0, x1) - 0.5 }
+}
+
+/// A spot on a window top for a trip, not over the zone (nil: the whole top is in it).
+func tripX(_ pl: Plat, zone: [Rc], rng: () -> Double) -> Double? {
+    let lo = pl.x0, hi = max(pl.x0, pl.x1 - K.spriteW)
+    let spans = freeSpans(lo: lo, hi: hi, y: pl.y, zone: zone)
+    let total = spans.reduce(0) { $0 + $1.hi - $1.lo }
+    guard !spans.isEmpty else { return nil }
+    if total <= 0 { return spans[0].lo }
+    var at = rng() * total
+    for s in spans { if at <= s.hi - s.lo { return s.lo + at }; at -= s.hi - s.lo }
+    return spans.last!.hi
+}
+
+/// What he can do on an outing: climb a screen edge, fly up to a corner or the side of the screen, or go to another window.
+enum Excursion: Equatable { case edgeClimb(left: Bool, height: Double), sky(to: Pt), window(Plat, x: Double) }
+
+func edgeX(left: Bool, screen: Rc) -> Double { left ? screen.minX : screen.maxX - K.spriteW }
+
+/// Places high on the screen he can fly to: the two corners under the menu bar and the middle of each side.
+func skySpots(screen: Rc) -> [Pt] {
+    let ceil = screen.maxY - K.spriteH, mid = screen.minY + (ceil - screen.minY) * 0.55
+    return [Pt(screen.minX + 8, ceil - 40), Pt(screen.maxX - K.spriteW - 8, ceil - 40), Pt(screen.minX, mid), Pt(screen.maxX - K.spriteW, mid)]
+}
+
+/// Is the wall free of the zone from the floor to `height` above it?
+func edgeClimbFree(left: Bool, height: Double, screen: Rc, zone: [Rc]) -> Bool {
+    let x = edgeX(left: left, screen: screen)
+    var y = screen.minY
+    while y < screen.minY + height { if overlapsZone(zone, at: Pt(x, y)) { return false }; y += 24 }
+    return !overlapsZone(zone, at: Pt(x, screen.minY + height))
+}
+
+/// The outing for now, by weights: edge climbs, flights up and (when there is another window) a trip. Nothing rests over the zone; nil when nothing is free.
+func pickExcursion(rng: () -> Double, screen: Rc, from: Pt, home: Pt, plats: [Plat], host: Int?, claude: Int?, zone: [Rc]) -> Excursion? {
+    var options: [(Excursion, Double)] = []
+    let room = screen.h - K.spriteH
+    if room >= K.edgeClimbMin {
+        let h = min(room, K.edgeClimbMin + rng() * (K.edgeClimbMax - K.edgeClimbMin))
+        for left in [true, false] where edgeClimbFree(left: left, height: h, screen: screen, zone: zone) { options.append((.edgeClimb(left: left, height: h), 2)) }
+    }
+    for s in skySpots(screen: screen) where !overlapsZone(zone, at: s) && s.dist(home) >= K.skyFar && s.dist(from) >= K.skyFar { options.append((.sky(to: s), 1.2)) }
+    if let pl = pickTrip(plats, host: host, claude: claude, zone: zone), let x = tripX(pl, zone: zone, rng: rng) { options.append((.window(pl, x: x), 2.5)) }
+    let total = options.reduce(0) { $0 + $1.1 }
+    guard total > 0 else { return nil }
+    var at = rng() * total
+    for (e, w) in options { if at < w { return e }; at -= w }
+    return options.last?.0
+}
+
+/// The way back to `home` after an outing: a walk along the floor when it is near and clear, else a flight.
+func homeLegs(from p: Pt, home: Pt, floorY: Double, zone: [Rc]) -> [Leg] {
+    if abs(p.y - floorY) < 1, abs(home.y - floorY) < 1, abs(home.x - p.x) <= K.walkHomeMax, pathClear(zone, from: p.x, to: home.x, y: floorY) {
+        return abs(home.x - p.x) > 1 ? [.walk(x: home.x)] : []
+    }
+    return [.fly(to: home)]
+}
+
+/// The stretches of an edge climb or a flight up (a window trip is planned by `planRoute`): out, the show, and back home.
+/// Edge climb: to the foot of the wall (a walk on the floor, else a flight), up, cling and look around, slide down. Flight: to the spot, hover, home.
+func excursionLegs(_ e: Excursion, from p: Pt, home: Pt, screen: Rc, zone: [Rc]) -> [Leg] {
+    switch e {
+    case .edgeClimb(let left, let h):
+        let x = edgeX(left: left, screen: screen), base = Pt(x, screen.minY)
+        let there: Leg = abs(p.y - screen.minY) < 1 && abs(p.x - x) <= K.walkHomeMax && pathClear(zone, from: p.x, to: x, y: screen.minY) ? .walk(x: x) : .fly(to: base)
+        return [there, .climb(y: screen.minY + h, left: !left), .cling(secs: K.clingSecs, left: !left), .descend(y: screen.minY, left: !left)]
+            + homeLegs(from: base, home: home, floorY: screen.minY, zone: zone)
+    case .sky(let to):
+        return [.fly(to: to), .hover(secs: K.hoverSecs), .fly(to: home)]
+    case .window: return []
+    }
+}
+
+/// The spot he calls home. `rel` is set when he was put on Claude's top: the distance from the left edge of its window, so home follows the window.
+struct Home: Equatable {
+    var x: Double, y: Double, rel: Double?
+    func spot(claude: Rc?) -> Pt { if let r = rel, let c = claude { return Pt(c.x + r, c.maxY) }; return Pt(x, y) }
+    static func load(_ s: Store) -> Home? {
+        guard let x = s.number("homeX"), let y = s.number("homeY") else { return nil }
+        return Home(x: x, y: y, rel: s.number("homeRel"))
+    }
+    func save(_ s: Store) { s.setNumber("homeX", x); s.setNumber("homeY", y); s.setNumber("homeRel", rel) }
 }
 
 func screenIndex(for p: Pt, in screens: [Rc]) -> Int {
@@ -506,14 +758,17 @@ final class Layout {
     var plats: [Plat] = []                                  // the open window tops, from the last look at the window list
     var screens: [Rc]                                       // visible frames, the main screen first
     let store: Store
+    private(set) var home: Home?                            // the spot the user last dropped him on (nil: not moved by hand yet)
 
     init(store: Store, screens: [Rc], claude: Rc?, claudeID: Int? = nil) {
         self.store = store; self.screens = screens; self.claude = claude; self.claudeID = claudeID
+        home = Home.load(store)
         anchor = store.number("offsetX").map { Anchor(relX: $0, perchY: store.number("perchY") ?? 0) }
         let main = screens.first ?? Rc(0, 0, 1440, 900)
         pos = Pt(main.maxX - K.spriteW - 16, main.minY)
         intended = pos
         if let a = anchor, let c = claude { host = SWin(id: claudeID ?? 0, r: c); pos = a.apply(to: c) }
+        else if let h = home { pos = Pt(h.x, h.y) }
         else if let lx = store.number("lastX"), let ly = store.number("lastY") { pos = Pt(lx, ly) }
         pos = clamped(pos)
         intended = pos
@@ -539,6 +794,30 @@ final class Layout {
         } else { anchor = nil; host = nil }
         store.setNumber("offsetX", nil); store.setNumber("perchY", nil)
         store.setNumber("lastX", pos.x); store.setNumber("lastY", pos.y)
+    }
+
+    /// Where home is now (it follows Claude's window when the user put him on its top).
+    func homeSpot() -> Pt? { home?.spot(claude: claude) }
+
+    /// The user dropped him and he came to rest here: this is home from now on (on Claude's top it is kept relative to the window).
+    func setHome(onClaude: Bool) {
+        let h = Home(x: pos.x, y: pos.y, rel: onClaude ? anchor?.relX : nil)
+        home = h; h.save(store)
+    }
+
+    /// The window home stands on moved and he rode with it (memory only).
+    func shiftHome(dx: Double, dy: Double) {
+        guard var h = home, h.rel == nil else { return }
+        h.x += dx; h.y += dy; home = h
+    }
+
+    /// He landed after a fall that was not the user's doing: a home on a window top that no longer holds the spot is now where he landed.
+    func rehomeIfLost(plats: [Plat]) {
+        guard let h = home, h.rel == nil, h.y > visible(for: Pt(h.x, h.y)).minY + 0.5 else { return }
+        let cx = h.x + K.spriteW / 2
+        if plats.contains(where: { abs($0.y - h.y) < 2 && cx >= $0.x0 - 1 && cx <= $0.x1 + 1 }) { return }
+        let n = Home(x: pos.x, y: pos.y, rel: nil)
+        home = n; n.save(store)
     }
 
     /// Picked up, thrown, falling or walking off: he stands on nothing (memory only; the next landing writes the store).
@@ -1824,6 +2103,7 @@ final class PetBridge {
     function __flags(){ return '|' + (__d && __d.holding() ? 1 : 0) + (__d && __d.bookClip() ? 1 : 0) + (__d && __d.reading ? 1 : 0) + (__d && __d.directing() ? 1 : 0) + (__d && __d.calling() ? 1 : 0); }
     function __read(){ if (__d) __d.startReading(); }
     function __dropBook(){ return !!(__d && __d.dropBook()); }
+    function __workOnly(){ return !!(__d && __d.workClipOnly()); }
     function __key(){ return JSON.stringify([__S(), __p.pal()]) + __flags(); }
     function __step(){ __p.tick(); if (__d) __d.tick(); return JSON.stringify([__S(), __p.pal()]) + __flags(); }
     function __ev(t){ if (__d) __d.feed(t); }
@@ -1883,6 +2163,8 @@ final class PetBridge {
     func act(_ name: String) { _ = call("__do", [name]) }
     var currentAct: String? { let a = call("__act")?.toString() ?? ""; return a.isEmpty ? nil : a }
     var fidgeting: Bool { call("__fid")?.toBool() ?? false }
+    /// The director shows only its plain work clip (Claude works; no call, mood sequence, answer, outro or error story on screen).
+    var workClipOnly: Bool { call("__workOnly")?.toBool() ?? false }
     var state: String { call("__state")?.toString() ?? "" }
     /// A text that is the same whenever the picture is the same (the picture is a pure function of the spec and the palette); far cheaper than building and parsing it.
     func frameKey() -> String? { call("__key")?.toString() }
@@ -1998,6 +2280,7 @@ final class PetGlue {
         if on { bridge.touch() }
         if on && bridge.currentAct == nil && !held && bridge.state != "dormido" && !bridge.reading { bridge.act("hello") }
     }
+    var outingFree: Bool { mayGoOut(act: bridge.currentAct != nil, fidgeting: bridge.fidgeting, hover: hover, held: held, directing: bridge.directing, workClip: bridge.directing && bridge.workClipOnly) }
     var busy: Bool { bridge.currentAct != nil || bridge.fidgeting || bridge.directing || hover || held }
     @discardableResult
     func click(now: Double, away: Int = -1) -> Click {
@@ -2664,17 +2947,324 @@ func runSelftest(assets: String) -> Never {
     }
     do { // trips ()
         var e = Explorer()
-        check(e.mayLeave(state: "contento", idle: true, working: false, now: 100) && e.mayLeave(state: "radiante", idle: true, working: false, now: 100), "contento or radiante, idle, nobody working: he may go")
-        check(!e.mayLeave(state: "justo", idle: true, working: false, now: 100) && !e.mayLeave(state: "cansado", idle: true, working: false, now: 100), "other moods stay")
-        check(!e.mayLeave(state: "contento", idle: false, working: false, now: 100) && !e.mayLeave(state: "contento", idle: true, working: true, now: 100), "busy or Claude working: he stays")
+        check(e.mayLeave(state: "contento", idle: true, now: 100) && e.mayLeave(state: "radiante", idle: true, now: 100), "contento or radiante and idle: he may go, whether or not Claude is working (the working state is not an input)")
+        check(!e.mayLeave(state: "justo", idle: true, now: 100) && !e.mayLeave(state: "cansado", idle: true, now: 100), "other moods stay")
+        check(!e.mayLeave(state: "contento", idle: false, now: 100), "a gesture, clip or call on him: he stays")
         e.lastTrip = 50
-        check(!e.mayLeave(state: "contento", idle: true, working: false, now: 100) && e.mayLeave(state: "contento", idle: true, working: false, now: 141), "one trip every 90 s at most")
+        check(!e.mayLeave(state: "contento", idle: true, now: 100) && e.mayLeave(state: "contento", idle: true, now: 50 + K.tripEvery), "one trip per K.tripEvery at most")
         e.awaySince = 200
-        check(!e.mayLeave(state: "contento", idle: true, working: false, now: 1000), "away already: no second trip")
-        check(e.shouldReturn(working: true, now: 210) && !e.shouldReturn(working: false, now: 210) && e.shouldReturn(working: false, now: 261), "back home when Claude works or after 60 s")
+        check(!e.mayLeave(state: "contento", idle: true, now: 1000), "away already: no second trip")
+        check(!e.shouldReturn(now: 210) && e.shouldReturn(now: 261), "a window trip lasts 60 s, Claude working does not cut it short")
         let ps = [Plat(win: 7, x0: 0, x1: 900, y: 700), Plat(win: 2, x0: 0, x1: 300, y: 500), Plat(win: 3, x0: 0, x1: 500, y: 400), Plat(win: 4, x0: 0, x1: 80, y: 300)]
         check(pickTrip(ps, host: 7, claude: 7)?.win == 3 && pickTrip(ps, host: 3, claude: 7)?.win == 2, "a trip goes to the widest other top that is not Claude's")
         check(pickTrip([ps[0], ps[3]], host: 7, claude: 7) == nil, "nowhere wide enough: no trip")
+    }
+    do { // home spot, no-go zone and excursions
+        let screen = Rc(0, 0, 1440, 875), win = Rc(100, 50, 1200, 800)
+        let zone = noGoZone(window: win)
+        check(zone == [Rc(400, 250, 600, 400), Rc(280, 50, 840, 170)], "the no-go zone: the middle of the window and the strip of its input box (\(zone))")
+        check(overlapsZone(zone, at: Pt(600, 0)) && overlapsZone(zone, at: Pt(1100, 0)), "on the floor under the chat's input strip he is over the zone")
+        check(!overlapsZone(zone, at: Pt(100, 0)) && !overlapsZone(zone, at: Pt(1130, 0)) && !overlapsZone(zone, at: Pt(600, 850)), "the corners of the floor and the top edge of the window are clear")
+        check(isFocusBundle(K.claudeBundle) && isFocusBundle("com.apple.Terminal") && !isFocusBundle("com.apple.Safari") && !isFocusBundle(nil), "focus apps: Claude and the terminals, not a browser")
+        let wl = [WinInfo(pid: 9, layer: 0, bounds: Rc(0, 0, 1000, 700)), WinInfo(pid: 5, layer: 25, bounds: Rc(0, 0, 1000, 700)), WinInfo(pid: 5, layer: 0, bounds: Rc(0, 0, 100, 50)),
+                  WinInfo(pid: 5, layer: 0, bounds: Rc(10, 10, 900, 600)), WinInfo(pid: 5, layer: 0, bounds: Rc(0, 0, 1000, 700))]
+        check(focusWindow(wl, pids: [5], primaryHeight: 875) == Rc(10, 875 - 610, 900, 600), "the frontmost big layer-0 window of a focus app, flipped")
+        check(focusWindow(wl, pids: [], primaryHeight: 875) == nil && focusWindow([], pids: [5], primaryHeight: 875) == nil, "no window list or no focus app: no window")
+        // wandering: the ledge, the home radius, the zone
+        let ledge = (lo: 0.0, hi: 1338.0)
+        let free = wanderRange(ledge: ledge, x: 100, y: 0, home: nil, zone: [])
+        check(free.lo == 0 && free.hi == 1338, "no home and no zone: the whole ledge as before")
+        let a = wanderRange(ledge: ledge, x: 100, y: 0, home: nil, zone: zone), b = wanderRange(ledge: ledge, x: 1200, y: 0, home: nil, zone: zone)
+        check(a.lo == 0 && a.hi == 178 && b.lo == 1120 && b.hi == 1338, "the floor splits around the input strip: each end is its own stretch (\(a) \(b))")
+        let c = wanderRange(ledge: ledge, x: 600, y: 0, home: nil, zone: zone)
+        check(c.lo == 0 && c.hi == 178, "inside the zone: the nearest free stretch (\(c))")
+        let h1 = wanderRange(ledge: ledge, x: 100, y: 0, home: Pt(60, 0), zone: zone)
+        check(h1.lo == 0 && h1.hi == 178, "home in a corner: its radius and the free stretch (\(h1))")
+        let h2 = wanderRange(ledge: ledge, x: 600, y: 0, home: Pt(600, 0), zone: [])
+        check(near(h2.lo, 600 - 1.5 * 102) && near(h2.hi, 600 + 1.5 * 102), "wandering stays within 1.5 widths of home (\(h2))")
+        let h3 = wanderRange(ledge: (lo: 0, hi: 100), x: 50, y: 0, home: Pt(900, 0), zone: [])
+        check(h3.lo == 0 && h3.hi == 100, "a home the ledge does not reach does not shrink it")
+        let h4 = wanderRange(ledge: (lo: 200, hi: 600), x: 300, y: 500, home: Pt(60, 0), zone: [])
+        check(h4.lo == 200 && h4.hi == 600, "on another level than home the radius does not apply")
+        check(activeZone(zone, home: Pt(600, 0), onPurpose: true).isEmpty && activeZone(zone, home: Pt(60, 0), onPurpose: true) == zone && activeZone(zone, home: nil, onPurpose: true) == zone, "a home the user dropped inside the zone on purpose switches the zone off: he stays where the user put him")
+        check(activeZone(zone, home: Pt(600, 0), onPurpose: false) == zone && homeBlocked(zone, home: Pt(600, 0), onPurpose: false) && !homeBlocked(zone, home: Pt(600, 0), onPurpose: true) && !homeBlocked(zone, home: Pt(60, 0), onPurpose: false), "a zone that came over a home the user set elsewhere stays on, and home is blocked until it moves")
+        let h5 = wanderRange(ledge: ledge, x: 600, y: 0, home: Pt(600, 0), zone: activeZone(zone, home: Pt(600, 0), onPurpose: true))
+        check(near(h5.lo, 447) && near(h5.hi, 753), "home in the zone: he wanders around it all the same (\(h5))")
+        check(wanderRange(ledge: ledge, x: 5, y: 0, home: nil, zone: [Rc(-5000, -5000, 10000, 10000)]).hi == 5, "nothing free at all: he stays put")
+        // two screens: a window on the second one does not touch the first
+        let zone2 = noGoZone(window: Rc(1500, -100, 1200, 800))
+        let s1 = wanderRange(ledge: ledge, x: 700, y: 0, home: nil, zone: zone2), s2 = wanderRange(ledge: (lo: 1440, hi: 3258), x: 1500, y: -100, home: nil, zone: zone2)
+        check(s1.lo == 0 && s1.hi == 1338 && s2.lo == 1440 && s2.hi == 1578, "two screens: the zone of a window on screen 2 leaves screen 1 alone (\(s1) \(s2))")
+        do { // 20000 ticks of strolling with the limits recomputed each tick: never outside the radius, never over the zone, even starting inside it
+            var st = Stroll(); var x = 600.0; var lo = 1e9, hi = -1e9, inside = 0, k = 0
+            var seed: UInt64 = 7
+            func rnd() -> Double { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Double(seed >> 11) / Double(1 << 53) }
+            for _ in 0..<20000 {
+                let r = wanderRange(ledge: ledge, x: x, y: 0, home: Pt(60, 0), zone: zone)
+                if let t = st.target, t < r.lo || t > r.hi { st.target = clamp(t, r.lo, r.hi) }
+                if st.target == nil, x < r.lo - 0.5 || x > r.hi + 0.5 { st.target = clamp(x, r.lo, r.hi) }
+                st.tick(state: "contento", busy: false, x: &x, lo: r.lo, hi: r.hi, rng: rnd)
+                k += 1
+                if k > 200 { lo = min(lo, x); hi = max(hi, x); if overlapsZone(zone, at: Pt(x, 0)) { inside += 1 } }
+            }
+            check(lo >= 0 && hi <= 178 && inside == 0 && hi - lo > 100, "he walks out of the zone and wanders only near home, never over the chat (\(lo)...\(hi), \(inside) ticks over the zone)")
+        }
+        check(farFromHome(pos: Pt(600, 0), home: Pt(100, 0)) && farFromHome(pos: Pt(100, 300), home: Pt(100, 0)) && !farFromHome(pos: Pt(250, 0), home: Pt(100, 0)), "far from home: another level or beyond the radius and his width")
+        // the home spot is saved by the layout and comes back after a restart
+        do {
+            let st = MemStore()
+            let l = Layout(store: st, screens: [main], claude: nil)
+            l.land(at: Pt(200, 0), on: nil, wins: [])
+            l.setHome(onClaude: false)
+            check(st.number("homeX") == 200 && st.number("homeY") == 0 && st.number("homeRel") == nil, "dropping him saves his home")
+            l.land(at: Pt(900, 0), on: nil, wins: [])                         // an excursion's landing is not a new home
+            check(l.homeSpot() == Pt(200, 0), "a landing on an excursion keeps the home")
+            check(Layout(store: st, screens: [main], claude: nil).pos == Pt(200, 0) && Layout(store: st, screens: [main], claude: nil).homeSpot() == Pt(200, 0), "after a restart he starts at home")
+            let st2 = MemStore()
+            let l2 = Layout(store: st2, screens: [main], claude: claude, claudeID: 7)
+            l2.land(at: Pt(300, 700), on: cplat, wins: [cw])
+            l2.setHome(onClaude: true)
+            check(st2.number("homeRel") == 100 && l2.homeSpot() == Pt(300, 700), "home on Claude's top is kept relative to its window")
+            l2.claudeChanged(to: Rc(260, 140, 900, 600), id: 7)
+            check(l2.homeSpot() == Pt(360, 740), "home moves with Claude's window (\(String(describing: l2.homeSpot())))")
+            let l3 = Layout(store: MemStore(), screens: [main], claude: nil)
+            l3.land(at: Pt(500, 300), on: nil, wins: [])
+            l3.setHome(onClaude: false)
+            l3.land(at: Pt(500, 0), on: nil, wins: [])                       // the window under his home closed and he fell
+            l3.rehomeIfLost(plats: [])
+            check(l3.homeSpot() == Pt(500, 0), "a home on a window that is gone moves to where he landed")
+            l3.rehomeIfLost(plats: [])
+            check(l3.homeSpot() == Pt(500, 0), "a home on the floor stays")
+        }
+        // excursions: up the screen edge, up in the air, to another window; never into the zone
+        let plats = [Plat(win: 3, x0: 100, x1: 700, y: 500)]
+        var kinds = Set<String>(), edgeSides = Set<Bool>()
+        for i in 0..<200 {
+            let u = Double(i) / 200
+            guard let e = pickExcursion(rng: { u }, screen: screen, from: Pt(600, 0), home: Pt(600, 0), plats: plats, host: nil, claude: 7, zone: []) else { continue }
+            switch e { case .edgeClimb(let l, _): kinds.insert("edge"); edgeSides.insert(l); case .sky: kinds.insert("sky"); case .window: kinds.insert("window") }
+        }
+        check(kinds == ["edge", "sky", "window"] && edgeSides == [true, false], "the picker can choose an edge climb on either side, a flight up, and a window (\(kinds))")
+        var noWin = Set<String>()
+        for i in 0..<200 {
+            let u = Double(i) / 200
+            if let e = pickExcursion(rng: { u }, screen: screen, from: Pt(600, 0), home: Pt(600, 0), plats: [], host: nil, claude: nil, zone: []) { switch e { case .edgeClimb: noWin.insert("edge"); case .sky: noWin.insert("sky"); case .window: noWin.insert("window") } }
+        }
+        check(noWin == ["edge", "sky"], "with no other window he still goes up: edge climbs and flights (\(noWin))")
+        var upShare = 0, all = 0
+        for i in 0..<100 { all += 1; if let e = pickExcursion(rng: { Double(i) / 100 }, screen: screen, from: Pt(600, 0), home: Pt(600, 0), plats: plats, host: nil, claude: 7, zone: []), case .window = e {} else { upShare += 1 } }
+        check(upShare * 100 / all >= 50, "a fair share of excursions go up or along the edges (\(upShare) of \(all))")
+        var bad = 0, picks = 0
+        for i in 0..<200 {
+            let u = Double(i) / 200
+            for from in [Pt(600, 0), Pt(1000, 500)] {
+                guard let e = pickExcursion(rng: { u }, screen: screen, from: from, home: from, plats: plats + [Plat(win: 4, x0: 450, x1: 600, y: 300)], host: nil, claude: 7, zone: zone) else { continue }
+                picks += 1
+                if case .window(let pl, let x) = e { if overlapsZone(zone, at: Pt(x, pl.y)) { bad += 1 }; continue }
+                var rt = Route(excursionLegs(e, from: from, home: from, screen: screen, zone: zone)), p = from, n = 0
+                while !rt.done && n < 20000 {
+                    if let l = rt.leg { switch l { case .climb, .descend, .cling, .hover: if overlapsZone(zone, at: p) { bad += 1 }; default: break } }
+                    rt.step(&p, dt: 0.1); n += 1
+                }
+                if !rt.done || p != from { bad += 1 }
+            }
+        }
+        check(picks > 100 && bad == 0, "no excursion climbs, hovers or rests over the zone, and each one ends at home (\(bad) bad of \(picks))")
+        check(pickExcursion(rng: { 0.3 }, screen: screen, from: Pt(600, 0), home: Pt(600, 0), plats: [], host: nil, claude: nil, zone: [Rc(-5000, -5000, 10000, 10000)]) == nil, "nowhere free: no excursion")
+        let climb = excursionLegs(.edgeClimb(left: true, height: 300), from: Pt(600, 0), home: Pt(600, 0), screen: screen, zone: [])
+        var cr = Route(climb), cp = Pt(600, 0), top = 0.0, cclips = Set<String>(), cn = 0
+        while !cr.done && cn < 20000 { if let l = cr.leg, let c = Route.clip(l) { cclips.insert(c) }; cr.step(&cp, dt: 0.1); top = max(top, cp.y); cn += 1 }
+        check(top == 300 && cclips.contains("sf_climb") && cp == Pt(600, 0), "an edge climb goes 300 pt up the wall, clings, slides down and goes home (\(top) \(cclips) \(cp))")
+        func wallLeg(_ left: Bool) -> Leg? { excursionLegs(.edgeClimb(left: left, height: 300), from: Pt(600, 0), home: Pt(600, 0), screen: screen, zone: []).first { if case .climb = $0 { return true }; return false } }
+        check(wallLeg(true) == .climb(y: 300, left: false) && wallLeg(false) == .climb(y: 300, left: true)
+              && !Route([wallLeg(true)!]).mirrored(at: Pt(0, 0)) && Route([wallLeg(false)!]).mirrored(at: Pt(1338, 0)), "on the left edge the wall is on his left (art as drawn), on the right edge he mirrors")
+        let fly = excursionLegs(.sky(to: Pt(1330, 835)), from: Pt(600, 0), home: Pt(600, 0), screen: screen, zone: [])
+        var fr2 = Route(fly), fp = Pt(600, 0), fclips = Set<String>(), fn = 0, fmax = 0.0
+        while !fr2.done && fn < 20000 { if let l = fr2.leg, let c = Route.clip(l) { fclips.insert(c) }; fr2.step(&fp, dt: 0.1); fmax = max(fmax, fp.y); fn += 1 }
+        check(fclips == ["sf_fly"] && fp == Pt(600, 0) && fmax >= 800, "a flight up goes to the corner, hovers with the fly clip and comes home (\(fclips) \(fp) \(fmax))")
+        let tx = tripX(Plat(win: 4, x0: 450, x1: 600, y: 300), zone: zone, rng: { 0.5 }), ty = tripX(Plat(win: 3, x0: 100, x1: 700, y: 500), zone: [], rng: { 0.5 })
+        check(tx == nil && ty != nil && ty! >= 100 && ty! <= 700 - 102, "a window top inside the zone is no trip target")
+        check(pickTrip([Plat(win: 4, x0: 450, x1: 600, y: 300), Plat(win: 5, x0: 0, x1: 300, y: 300)], host: nil, claude: 7, zone: zone)?.win == 5, "a trip skips the top that lies in the zone")
+        check(fleeSpot(screen: screen, from: Pt(600, 0), zone: zone).map { !overlapsZone(zone, at: $0) } == true, "stuck in the zone with nowhere to walk: he flies to the nearest free floor spot")
+        // working state (Claude working, his laptop clip on) is the usual state: the outing lines are checked there, and idle and asleep
+        check(mayGoOut(act: false, fidgeting: false, hover: false, held: false, directing: true, workClip: true) && Explorer().mayLeave(state: "contento", idle: true, now: 100),
+              "WORKING, laptop clip on: an outing can start (the first one 20 s after launch)")
+        check(mayGoOut(act: false, fidgeting: false, hover: false, held: false, directing: false, workClip: false) && Explorer().mayLeave(state: "radiante", idle: true, now: 100),
+              "IDLE (no clip): an outing can start")
+        check(!Explorer().mayLeave(state: "dormido", idle: true, now: 100) && !mayGoOut(act: false, fidgeting: false, hover: false, held: false, directing: true, workClip: false),
+              "ASLEEP: no outing; a mood sequence, answer, outro, error story or call on screen (not the plain work clip), also while Claude works: no outing")
+        check(!mayGoOut(act: false, fidgeting: false, hover: false, held: true, directing: true, workClip: true) && !mayGoOut(act: true, fidgeting: false, hover: false, held: false, directing: true, workClip: true)
+              && !mayGoOut(act: false, fidgeting: false, hover: true, held: false, directing: true, workClip: true), "WORKING but dragged, in a gesture or hovered: no outing")
+        let zx = noGoZone(window: Rc(100, 50, 1200, 800)), inZ = Pt(700, 500)
+        check(overlapsZone(zx, at: inZ), "test spot lies in the zone")
+        // the invariant: in the zone and not held / not in a call, he is moved, in every state (asleep, idle, working with the laptop clip), room to walk or not
+        let freeSpot = zoneGuardTarget(zone: zx, at: inZ, held: false, calling: false, screen: screen)
+        check(freeSpot.map { !overlapsZone(zx, at: $0) } == true, "in the zone (a window came over him), not held, no call: he is moved to a free spot, in any state (asleep, idle, laptop clip)")
+        check(zoneGuardTarget(zone: zx, at: inZ, held: true, calling: false, screen: screen) == nil, "held (drag): the guard waits")
+        check(zoneGuardTarget(zone: zx, at: inZ, held: false, calling: true, screen: screen) == nil, "an open call (permission or question): the guard waits")
+        check(zoneGuardTarget(zone: zx, at: Pt(20, 0), held: false, calling: false, screen: screen) == nil && zoneGuardTarget(zone: [], at: inZ, held: false, calling: false, screen: screen) == nil, "outside the zone, or no zone: he stays")
+        // working at the laptop (busy: the stroll is paused, 10 Hz ticks): the guard still fires within 3 s of the window coming over him (the zone refresh is every 3 s)
+        var wst = Stroll(), wx = inZ.x, firedAt = -1
+        for t in 0..<450 {
+            wst.tick(state: "contento", busy: true, x: &wx, lo: 100, hi: 1200, rng: { 0.5 })
+            // the real path: the zone as the guard sees it, through activeZone with his home (here covered by the same window, set before it came, not on purpose)
+            let realZone = activeZone(zx, home: inZ, onPurpose: false)
+            if firedAt < 0, zoneGuardTarget(zone: realZone, at: Pt(wx, inZ.y), held: false, calling: false, screen: screen) != nil { firedAt = t }
+        }
+        check(wx == inZ.x && firedAt == 0, "working at the laptop in the zone (home covered too): the stroll stays paused for 45 s, and the guard moves him on the first tick (\(firedAt))")
+        // The zone controller: ZoneCtl and effectiveHome are the very code the app runs (state in, action out), so these lines drive the real decisions.
+        // His mood (working with the laptop clip, asleep, idle) is no input of any of them: the tick takes none.
+        let homeCovered = inZ, farHome = Pt(20, 0)
+        func zStep(_ c: inout ZoneCtl, _ z: [Rc], home: Pt?, at p: Pt, held: Bool = false, calling: Bool = false) -> ZoneAct {
+            c.tick(zone: z, home: home, at: p, held: held, calling: calling, screen: screen, homeScreen: screen)
+        }
+        func zFleeSpot(_ a: ZoneAct) -> Pt? { if case .flee(let s) = a { return s }; return nil }
+        var zc8 = ZoneCtl()
+        let zA8 = zStep(&zc8, zx, home: homeCovered, at: homeCovered)
+        let zSpot8 = zFleeSpot(zA8) ?? inZ, zEff8 = effectiveHome(zx, saved: homeCovered, onPurpose: false, screen: screen)
+        check(zFleeSpot(zA8).map { !overlapsZone(zx, at: $0) } == true && zSpot8 == zEff8 && zEff8 != homeCovered && zc8.displaced,
+              "n8 working (n9 asleep and idle are the same call: the tick takes no mood): the window came over him and his home: he is flown to where he lives now, the nearest free floor spot outside the zone, the same point every way home uses")
+        check(zStep(&zc8, zx, home: homeCovered, at: homeCovered, held: true) == .none && zStep(&zc8, zx, home: homeCovered, at: homeCovered, calling: true) == .none, "held (drag) or an open call: the controller does nothing")
+        var zc5 = ZoneCtl()
+        zc5.drop(zone: zx, home: homeCovered)
+        var zStays = zc5.onPurpose && effectiveHome(zx, saved: homeCovered, onPurpose: true, screen: screen) == homeCovered
+        for _ in 0..<50 { if zStep(&zc5, zx, home: homeCovered, at: homeCovered) != .none { zStays = false } }
+        check(zStays, "n5: the user dropped him on the chat on purpose: the drop sets the flag, he stays for 50 ticks and his home stays his home")
+        var zcNo = ZoneCtl(), zcFar = ZoneCtl(), zcStale = ZoneCtl()
+        zcNo.drop(zone: [], home: homeCovered); zcFar.drop(zone: zx, home: farHome); zcStale.drop(zone: [], home: homeCovered)
+        check(!zcNo.onPurpose && !zcFar.onPurpose, "the flag is set only for a home inside a zone that was there at the drop")
+        check(!zcStale.onPurpose && noGoDue(now: 5, at: 7, force: true) && !noGoDue(now: 5, at: 7, force: false) && noGoDue(now: 8, at: 7, force: false),
+              "the drop looks for the window at once (noGoDue force): a zone seen 3 s late would leave the flag off, a refreshed one sets it")
+        zc5.press()
+        check(!zc5.onPurpose && !zc5.displaced && zFleeSpot(zStep(&zc5, zx, home: homeCovered, at: homeCovered)) != nil, "the user drags him again: the flag is cleared (a press), and a home in the zone no longer holds him")
+        let zGone = noGoZone(window: Rc(1100, 50, 1200, 800))
+        var zcl = ZoneCtl()
+        zcl.drop(zone: zx, home: homeCovered)
+        let zLeft = zStep(&zcl, zGone, home: homeCovered, at: homeCovered), zBack = zStep(&zcl, zx, home: homeCovered, at: homeCovered)
+        check(zLeft == .none && zFleeSpot(zBack) != nil, "the window leaves the spot the user chose: the flag is cleared; when it comes back over that spot he is moved")
+        var zcw = zc8
+        let zStill = zStep(&zcw, zx, home: homeCovered, at: zSpot8), zWalk = zStep(&zcw, zGone, home: homeCovered, at: zSpot8)
+        check(zStill == .none && zWalk == .goHome && !zcw.displaced && zStep(&zcw, zGone, home: homeCovered, at: zSpot8) == .none,
+              "the window moved away from home: while it covers home he stays at his free spot; once it leaves he walks back home, once (no loop)")
+        var zcm = zc8
+        let zWinB = noGoZone(window: Rc(300, 50, 1200, 800)), zEffB = effectiveHome(zWinB, saved: homeCovered, onPurpose: false, screen: screen)
+        let zMoved = zStep(&zcm, zWinB, home: homeCovered, at: Pt(1330, 0))
+        check(zMoved == .goHome && zcm.displaced && zEffB != nil && !overlapsZone(zWinB, at: zEffB!) && zEffB != zEff8,
+              "the covering window moved and the free spot moved far with it: he is sent to the new free spot (home stays covered, so the flag stays)")
+        var zcr = zc8
+        let zR1 = zStep(&zcr, zGone, home: homeCovered, at: zSpot8)
+        zcr.wentHome(started: false, homeKnown: false)
+        let zR2 = zStep(&zcr, zGone, home: homeCovered, at: zSpot8)
+        zcr.wentHome(started: true, homeKnown: true)
+        var zcr2 = zc8
+        _ = zStep(&zcr2, zGone, home: homeCovered, at: zSpot8)
+        zcr2.wentHome(started: false, homeKnown: true)
+        check(zR1 == .goHome && zR2 == .goHome && zStep(&zcr, zGone, home: homeCovered, at: zSpot8) == .none && !zcr2.displaced,
+              "a walk home that did not start because home was not known is tried again on the next tick; one that has nothing to do (already home) is not")
+        var zcf = ZoneCtl()
+        check(!zcf.onPurpose && effectiveHome(zx, saved: homeCovered, onPurpose: zcf.onPurpose, screen: screen) != homeCovered && zFleeSpot(zStep(&zcf, zx, home: homeCovered, at: homeCovered)) != nil,
+              "after a restart the on-purpose flag is gone (it lives only for the session): a home in the zone counts as covered and he is moved out, erring toward keeping him off the chat")
+        // m4: he is in the zone far from his covered home: the flight goes to where he lives now (eff), not to the free spot nearest to him
+        let zM4Home = Pt(420, 0), zM4Him = Pt(960, 0)
+        var zM4 = ZoneCtl()
+        let zM4Eff = effectiveHome(zx, saved: zM4Home, onPurpose: false, screen: screen), zM4Near = fleeSpot(screen: screen, from: zM4Him, zone: zx)
+        check(overlapsZone(zx, at: zM4Home) && overlapsZone(zx, at: zM4Him) && zM4Eff != nil && zM4Near != nil && zM4Eff != zM4Near
+              && zFleeSpot(zStep(&zM4, zx, home: zM4Home, at: zM4Him)) == zM4Eff,
+              "m4: he is in the zone far from his covered home: he flies to where he lives now (the point every way home uses), not to the free spot nearest to him")
+        // effectiveHome: the one point every way home uses
+        let zE1 = effectiveHome(zx, saved: homeCovered, onPurpose: false, screen: screen), zE2 = effectiveHome(zWinB, saved: homeCovered, onPurpose: false, screen: screen)
+        let zE3 = effectiveHome(noGoZone(window: Rc(1100, 50, 1200, 800)), saved: homeCovered, onPurpose: false, screen: screen)
+        check(zE1 == fleeSpot(screen: screen, from: homeCovered, zone: zx) && zE2 != nil && zE2 != zE1 && zE3 == homeCovered
+              && effectiveHome(zx, saved: homeCovered, onPurpose: true, screen: screen) == homeCovered && effectiveHome(zx, saved: farHome, onPurpose: false, screen: screen) == farHome
+              && effectiveHome([Rc(-5000, -5000, 10000, 10000)], saved: homeCovered, onPurpose: false, screen: screen) == nil,
+              "effectiveHome: the saved home when it is free or the user put him there; the nearest free floor spot, worked out again for each window, while it is covered (and back to the saved home when free); nil when nothing is free")
+        // the corner: the window comes over the bottom-right corner of a 1440 x 875 screen
+        let zs = Rc(0, 0, 1440, 875), hz = noGoZone(window: Rc(700, 0, 740, 700)), hHome = Pt(1240, 0)
+        check(overlapsZone(hz, at: hHome), "the bottom-right corner is under the window's input strip")
+        check(fleeSpot(screen: zs, from: hHome, zone: hz) == Pt(1330, 0) && fleeSpot(screen: screen, from: Pt(600, 0), zone: zone) == Pt(177, 0),
+              "flee spot: the nearest free floor spot outside the zone, not a fixed corner (the corner: 90 pt to the right, not 1240 pt to the far corner)")
+        check(fleeSpot(screen: zs, from: hHome, zone: [Rc(-5000, -5000, 10000, 10000)]) == nil, "no free floor spot at all: none")
+        // outings while home is covered end at where he lives now, outside the zone (the round-5 failure: they flew him back into the covered home)
+        func zLegPoints(_ legs: [Leg], from p: Pt) -> [Pt] {
+            var cur = p, out: [Pt] = []
+            for l in legs {
+                switch l {
+                case .walk(let x): cur = Pt(x, cur.y)
+                case .fly(let t), .hop(let t): cur = t
+                case .climb(let y, _), .ladder(let y, _), .descend(let y, _): cur = Pt(cur.x, y)
+                case .cling, .hover: break
+                }
+                out.append(cur)
+            }
+            return out
+        }
+        let zEffH = effectiveHome(hz, saved: hHome, onPurpose: false, screen: zs) ?? hHome
+        let zOutings: [Excursion] = [.edgeClimb(left: true, height: 300), .edgeClimb(left: false, height: 300), .edgeClimb(left: false, height: 380), .sky(to: Pt(8, 751)), .sky(to: Pt(1330, 751)), .sky(to: Pt(0, 400))]
+        var zOutOK = zEffH == Pt(1330, 0), zOldEndsInZone = true
+        for e in zOutings {
+            let pts = zLegPoints(excursionLegs(e, from: zEffH, home: zEffH, screen: zs, zone: hz), from: zEffH)
+            if pts.isEmpty || pts.contains(where: { overlapsZone(hz, at: $0) }) { zOutOK = false }
+            let old = zLegPoints(excursionLegs(e, from: zEffH, home: hHome, screen: zs, zone: hz), from: zEffH)
+            if let last = old.last, !overlapsZone(hz, at: last) { zOldEndsInZone = false }      // the control: with the covered home as the return point, an outing ends in the zone
+        }
+        check(zOutOK && zOldEndsInZone, "home covered: no outing (edge climbs, flights up) that returns to where he lives now ends in the zone; with the covered home as return point every one of them did")
+        // ten minutes, Claude working (laptop clip: outings allowed), the window over the bottom-right corner
+        func zSim(seed: UInt64, windows: [(t: Double, win: Rc?)], dropAt: Double? = nil, legacyBack: Bool = false) -> (inZone: Int, flees: Int, walks: Int, outings: Int, outInZone: Int, end: Pt) {
+            var s = seed
+            func rnd() -> Double { s = s &* 6364136223846793005 &+ 1442695040888963407; return Double(s >> 11) / Double(1 << 53) }
+            var c = ZoneCtl(), pos = hHome, raw: [Rc] = [], next = K.firstTrip
+            var inZone = 0, flees = 0, walks = 0, outings = 0, outInZone = 0
+            for tick in 0..<6000 {
+                let t = Double(tick) / 10
+                for w in windows where w.t == t { raw = w.win.map { noGoZone(window: $0) } ?? [] }
+                if let d = dropAt, t == d { c.press(); pos = hHome; c.drop(zone: raw, home: hHome) }      // the user picks him up and drops him on the corner
+                let act = c.tick(zone: raw, home: hHome, at: pos, held: false, calling: false, screen: zs, homeScreen: zs)
+                switch act {
+                case .flee(let sp): flees += 1; pos = sp
+                case .goHome: walks += 1; pos = c.livesAt(zone: raw, home: hHome, homeScreen: zs) ?? pos; c.wentHome(started: true, homeKnown: true)      // goHome goes to where he lives now
+                case .none: break
+                }
+                if act == .none, t >= next, mayGoOut(act: false, fidgeting: false, hover: false, held: false, directing: true, workClip: true) {
+                    next = t + K.tripEvery
+                    let zone = c.zone(raw, home: hHome)
+                    let backPt = legacyBack ? hHome : (c.livesAt(zone: raw, home: hHome, homeScreen: zs) ?? pos)
+                    guard let ex = pickExcursion(rng: rnd, screen: zs, from: pos, home: backPt, plats: [], host: nil, claude: nil, zone: zone) else { continue }
+                    outings += 1
+                    let pts = zLegPoints(excursionLegs(ex, from: pos, home: backPt, screen: zs, zone: zone), from: pos)
+                    if pts.contains(where: { overlapsZone(zone, at: $0) }) { outInZone += 1 }
+                    pos = pts.last ?? pos
+                }
+                if !c.onPurpose && overlapsZone(raw, at: pos) { inZone += 1 }
+            }
+            return (inZone, flees, walks, outings, outInZone, pos)
+        }
+        let zWinA = Rc(700, 0, 740, 700), zWinB2 = Rc(500, 0, 1100, 700)
+        var zSimOK = true, zSimMsg = ""
+        for seed in (1...6) as ClosedRange<UInt64> {
+            let r = zSim(seed: seed, windows: [(5, zWinA)])      // the window stays 10 minutes
+            if !(r.inZone == 0 && r.outInZone == 0 && r.flees == 1 && r.walks == 0 && r.outings >= 9) { zSimOK = false; zSimMsg += " seed \(seed): \(r)" }
+        }
+        check(zSimOK, "10 minutes, Claude working, the window stays over the corner, outings every minute: zero landings in the zone, one flight (when the window came), no flee/return loop, no walk home\(zSimMsg)")
+        var zLeaveOK = true
+        for seed in (1...6) as ClosedRange<UInt64> {
+            let r = zSim(seed: seed, windows: [(5, zWinA), (300, nil)])      // the window leaves after 5 minutes
+            if !(r.inZone == 0 && r.flees == 1 && r.walks == 1 && r.end == hHome) { zLeaveOK = false }
+        }
+        check(zLeaveOK, "10 minutes, the window leaves after 5: he walks back home once, then stays; no landing in the zone, no loop")
+        var zMoveOK = true
+        for seed in (1...6) as ClosedRange<UInt64> {
+            let r = zSim(seed: seed, windows: [(5, zWinA), (150, zWinB2), (300, nil), (450, zWinA)])      // over the corner, over more of the floor, gone, back
+            if !(r.inZone == 0 && r.outInZone == 0 && r.flees == 3 && r.walks == 1) { zMoveOK = false }
+        }
+        check(zMoveOK, "10 minutes, the window moves over his free spot, leaves and comes back: one flight per change of window, one walk home, zero landings in the zone, no loop")
+        var zPurposeOK = true
+        for seed in (1...6) as ClosedRange<UInt64> {
+            let r = zSim(seed: seed, windows: [(5, zWinA)], dropAt: 6)      // the user drops him on the corner under the window on purpose
+            if !(r.flees == 1 && r.walks == 0 && r.end == hHome && r.outInZone == 0) { zPurposeOK = false }
+        }
+        check(zPurposeOK, "10 minutes, the user put him on the corner under the window: he stays there (only the flight before the drop), outings return home, no loop")
+        check(zSim(seed: 1, windows: [(5, zWinA)], legacyBack: true).flees > 1, "the replay of the round-5 failure is caught: with the covered home as every outing's return point he flees again after each outing")
+        check(K.tripEvery <= 60 && K.firstTrip < K.tripEvery, "trips come often enough to be seen, the first one soon after launch")
     }
     do { // pickClaude
         let list = [WinInfo(pid: 5, layer: 0, bounds: Rc(0, 0, 500, 400)), WinInfo(pid: 5, layer: 0, bounds: Rc(10, 10, 900, 600)),
@@ -4688,7 +5278,10 @@ final class Brote: NSObject {
     var claudePIDs = Set<Int>()
     var route: Route?, routeTarget: Plat?, routeArrive: String?, routeClip: String?, routeMirror = false
     var routeTimer: Timer?, lastRouteStep = 0.0
-    var explorer = Explorer(lastTrip: uptime())               // no trip in the first 90 s after launch
+    var explorer = Explorer(lastTrip: uptime() - (K.tripEvery - K.firstTrip))      // the first outing comes K.firstTrip s after launch
+    var noGo: [Rc] = [], noGoAt = 0.0, strayAt = 0.0          // the zone of the focus window (looked for every K.noGoEvery s), and the last look for a stray
+    var zc = ZoneCtl()                                         // the zone controller's flags (on purpose, displaced); every decision is the pure ZoneCtl code
+    var homePending = false, homeHostID: Int?                // the user let go of him: the next landing is home; the window home stands on
     var falling = false, riding = false, rideUntil = 0.0
     var chaseAgain = 0.0, hoverSince: Double?, longHovered = false, lastPerch = "", lastWalkDx: Int?
     var bookHidden = false, scootTo: Double?, bookLookAgain = 0.0, fetchTo: Double?, claudeGone = false
@@ -4828,10 +5421,13 @@ final class Brote: NSObject {
     // MARK: the 10 fps tick
     func tick() {
         let reps = max(1, Int(scenario?.speed ?? 1))                // a scenario's speed: the tick-counted idle clocks run that many ticks
+        guardZone()
         if route != nil {
         } else if dragger.isRest {
-            let r = bookLedge()
+            let r = wanderLimits(bookLedge())
             var x = layout.pos.x
+            if let t = stroll.target, t < r.lo || t > r.hi { stroll.target = clamp(t, r.lo, r.hi) }                // a walk never ends outside where he may be
+            if stroll.target == nil, x < r.lo - 0.5 || x > r.hi + 0.5 { stroll.target = clamp(x, r.lo, r.hi) }     // out of bounds (the chat came up, or the window moved): back in
             let visit = layout.host == nil && bookOnFloor ? bookBlockNow.map { x <= ($0.lo + $0.hi) / 2 ? $0.lo - 4 : $0.hi + 4 } : nil   // beside the book, 13 pt of gap
             for _ in 0..<reps { stroll.tick(state: glue.bridge.state, busy: glue.busy || pressedDown || glue.bridge.calm, x: &x, lo: r.lo, hi: r.hi, rng: { Double.random(in: 0..<1) }, visit: visit) }
             if x != layout.pos.x { layout.pos.x = x; positionWindows() }
@@ -4861,7 +5457,9 @@ final class Brote: NSObject {
     func walkClip() {
         guard let w = glue.bridge.walkDx() else { lastWalkDx = nil; return }
         if let last = lastWalkDx, w != last, route == nil, dragger.isRest, !falling, scootTo == nil {
-            let r = bookLedge()
+            var r = bookLedge()
+            let lim = wanderLimits(r)
+            if layout.pos.x >= lim.lo - 0.5 && layout.pos.x <= lim.hi + 0.5 { r = lim }                      // a walking clip keeps to the same bounds, unless he is outside them (no jump)
             layout.pos.x = clamp(layout.pos.x + Double(w - last) * K.scale * (cachedFlip ? -1 : 1), r.lo, r.hi); positionWindows()
         }
         lastWalkDx = w
@@ -4872,6 +5470,12 @@ final class Brote: NSObject {
     /// The book lies on the floor of its screen (not held, not flying, not left floating mid-screen).
     var bookOnFloor: Bool { guard let p = place.pos, bookDrag.isRest else { return false }; return abs(p.y - bookBounds(visibleFrame(for: p)).floorY) < 1 }
     func bookLedge() -> (lo: Double, hi: Double) { let r = layout.ledge(); return ledgeAroundBook(lo: r.lo, hi: r.hi, x: layout.pos.x, block: bookBlockNow) }
+    /// Where he may wander on `r`: near the spot the user put him on, and off the middle of the focus window.
+    func wanderLimits(_ r: (lo: Double, hi: Double)) -> (lo: Double, hi: Double) {
+        let saved = layout.homeSpot()
+        let home = saved.flatMap { effectiveHome(noGo, saved: $0, onPurpose: zc.onPurpose, screen: layout.visible(for: $0)) } ?? saved      // where he lives now, not the covered spot
+        return wanderRange(ledge: r, x: layout.pos.x, y: layout.pos.y, home: home, zone: zc.zone(noGo, home: saved))
+    }
     /// One 10 Hz step of the book rules: he moves aside when the book comes near (dragged at him, dropped on him, or he landed on it),
     /// and the real book hides while he holds it (never two books).
     func bookRules() {
@@ -4898,7 +5502,7 @@ final class Brote: NSObject {
     func startFetch() {
         guard layout.host == nil, dragger.isRest, route == nil, !falling, pendingFall == nil, !glue.held, Stroll.pace(glue.bridge.state) != nil,
               bookOnFloor, let b = bookBlockNow else { return }
-        let x = layout.pos.x, r = bookLedge(), spot = x <= (b.lo + b.hi) / 2 ? b.lo - 4 : b.hi + 4    // his side of the book, as the stroll's visit
+        let x = layout.pos.x, r = wanderLimits(bookLedge()), spot = x <= (b.lo + b.hi) / 2 ? b.lo - 4 : b.hi + 4    // his side of the book, as the stroll's visit
         guard spot >= r.lo, spot <= r.hi, abs(spot - x) >= K.strollMin, glue.bridge.fetch(sit: false) else { return }
         fetchTo = spot; stroll.target = spot
         scenario?.write("fetch", ["to": spot])
@@ -5322,6 +5926,7 @@ final class Brote: NSObject {
         pendingFall?.cancel(); pendingFall = nil
         if falling || riding { glue.bridge.stopClip(); falling = false; riding = false }
         explorer.awaySince = nil                          // moved by hand: wherever he is put is home for now
+        homePending = false; zc.press()
         dragger.press(at: mousePt(), origin: layout.pos, now: uptime())
         pressedDown = true
         panel.ignoresMouseEvents = false
@@ -5349,6 +5954,7 @@ final class Brote: NSObject {
             if unsupported() { fall(clip: nil, cause: "click") }       // a click stopped him mid-climb or mid-hop
             return
         }
+        homePending = true                                   // wherever he comes to rest after this is home
         if isThrow(speed: v.speed) {
             startThrow(v)
             probe.log("THROW", [("speed", String(Int(v.speed))), ("tops", String(layout.plats.count))], cap: 200)
@@ -5477,6 +6083,13 @@ final class Brote: NSObject {
             stopFlight()
             let top = supportUnder(cx: spriteCentre(layout.pos).x, feet: layout.pos.y, plats: dragger.plats).flatMap { abs($0.y - layout.pos.y) < 1 ? $0 : nil }
             layout.land(at: layout.pos, on: top, wins: wins)
+            if homePending {
+                homePending = false
+                layout.setHome(onClaude: top != nil && layout.claudeID != nil && top?.win == layout.claudeID)
+                homeHostID = top?.win
+                if scenario == nil { refreshNoGo(windowList(), now: uptime(), force: true) }    // look for the window now, so the flag never judges a zone up to 3 s old
+                zc.drop(zone: noGo, home: layout.homeSpot())      // dropped inside the zone as it is now: on purpose
+            } else { layout.rehomeIfLost(plats: layout.plats) }
             positionWindows()
             if falling { falling = false; glue.bridge.stopClip() }
             if !t.dizzy { glue.bridge.act("land") }
@@ -5490,6 +6103,7 @@ final class Brote: NSObject {
     func look() {
         let primary = Double(NSScreen.screens.first?.frame.height ?? 0)
         let list = readWindows()
+        refreshNoGo(list, now: uptime())
         let c = scenario.map { s in s.claude.flatMap { id in wins.first { $0.id == id }.map { (id: $0.id, r: $0.r) } } } ?? pickClaudeWin(list, pids: claudePIDs, primaryHeight: primary)
         if c?.r != layout.claude || c?.id != layout.claudeID {
             let before = layout.pos, old = layout.claude
@@ -5522,6 +6136,14 @@ final class Brote: NSObject {
             traceLook(s, support: support)
         }
     }
+    /// The zone of the frontmost focus-app window, looked for at most every few seconds. Any failure leaves it empty (home only).
+    func refreshNoGo(_ list: [WinInfo], now: Double, force: Bool = false) {
+        guard scenario == nil, noGoDue(now: now, at: noGoAt, force: force) else { return }
+        noGoAt = now + K.noGoEvery
+        let pids = Set(NSWorkspace.shared.runningApplications.filter { isFocusBundle($0.bundleIdentifier) }.map { Int($0.processIdentifier) })
+        let primary = Double(NSScreen.screens.first?.frame.height ?? 0)
+        noGo = focusWindow(list, pids: pids, primaryHeight: primary).map { noGoZone(window: $0) } ?? []
+    }
     func traceLook(_ s: Scenario, support: String) {
         s.write("look", ["pos": [layout.pos.x, layout.pos.y], "host": layout.host.map { $0.id as Any } ?? NSNull(), "support": support,
                          "hostAt": layout.host.map { [$0.r.x, $0.r.y + $0.r.h] as Any } ?? NSNull(),
@@ -5544,7 +6166,10 @@ final class Brote: NSObject {
     func checkSupport() {
         guard dragger.isRest, route == nil, pendingFall == nil, !pressedDown, let h = layout.host, h.r.w > 0 else { return }
         let now = uptime(), before = layout.pos
-        if let w = wins.first(where: { $0.id == h.id }), w.r != h.r { layout.hostChanged(to: w.r); positionWindows() }
+        if let w = wins.first(where: { $0.id == h.id }), w.r != h.r {
+            layout.hostChanged(to: w.r); positionWindows()
+            if h.id == homeHostID { layout.shiftHome(dx: layout.pos.x - before.x, dy: layout.pos.y - before.y) }      // home rides with its window
+        }
         if layout.pos != before {
             rideUntil = now + 0.4
             if !riding { riding = true; stroll.target = nil; glue.bridge.play("sf_ride", loop: Route.loop("sf_ride")) }
@@ -5565,21 +6190,99 @@ final class Brote: NSObject {
         }
     }
 
-    /// A trip to another window top when he is happy and idle, and home to Claude's top when it works or after a while.
+    /// An outing when he is happy and idle (an edge climb, a flight up, or a trip to another window), and home when Claude works or after a while.
     func explore() {
         guard dragger.isRest, route == nil, pendingFall == nil, !pressedDown else { return }
         let now = scenario?.idleNow() ?? uptime()
+        returnIfStray(now)
+        if route != nil { return }
         if explorer.awaySince == nil && now - explorer.lastTrip < K.tripEvery { return }      // the cheap check first, ten times a second
-        let working = glue.bridge.working
-        if explorer.shouldReturn(working: working, now: now) {
+        if explorer.shouldReturn(now: now) {
             explorer.awaySince = nil
-            guard let cid = layout.claudeID, layout.host?.id != cid, let c = wins.first(where: { $0.id == cid }),
-                  let pl = layout.plats.filter({ $0.win == cid }).max(by: { $0.x1 - $0.x0 < $1.x1 - $1.x0 }) else { return }
-            go(to: pl, win: c.r, wantX: c.r.x + (store.number("offsetX") ?? (c.r.w - K.spriteW) / 2), arrive: nil, why: working ? "home-work" : "home")
-        } else if explorer.mayLeave(state: glue.bridge.state, idle: !glue.busy, working: working, now: now),
-                  let pl = pickTrip(layout.plats, host: layout.host?.id, claude: layout.claudeID), let w = wins.first(where: { $0.id == pl.win }) {
-            explorer.lastTrip = now; explorer.awaySince = now
-            go(to: pl, win: w.r, wantX: Double.random(in: pl.x0...max(pl.x0, pl.x1 - K.spriteW)), arrive: ["sf_sit", "sf_peek", "sf_edge"].randomElement(), why: "trip")
+            goHome(why: "home")
+        } else if explorer.mayLeave(state: glue.bridge.state, idle: glue.outingFree, now: now) {
+            let home = layout.homeSpot()
+            let zone = zc.zone(noGo, home: home)
+            let screen = layout.visible(for: layout.pos)
+            let target = homeTarget()      // where he lives now: the saved home, or the nearest free floor spot while the zone covers it
+            let back = target?.pt ?? layout.pos
+            guard let ex = pickExcursion(rng: { Double.random(in: 0..<1) }, screen: screen, from: layout.pos, home: back, plats: layout.plats, host: layout.host?.id, claude: layout.claudeID, zone: zone) else { return }
+            explorer.lastTrip = now
+            switch ex {
+            case .window(let pl, let x):
+                guard let w = wins.first(where: { $0.id == pl.win }) else { return }
+                explorer.awaySince = now
+                go(to: pl, win: w.r, wantX: x, arrive: ["sf_sit", "sf_peek", "sf_edge"].randomElement(), why: "trip")
+            case .edgeClimb, .sky:
+                startRoute(excursionLegs(ex, from: layout.pos, home: back, screen: screen, zone: zone), to: target?.plat, arrive: nil, why: "outing-\(ex)")
+            }
+        }
+    }
+
+    /// Where home is now, as a spot he can be sent to: on a window top (with that window) or on the floor of its screen. Before the user has moved him: Claude's top.
+    func homeTarget() -> (pt: Pt, plat: Plat?, win: Rc?)? {
+        if let saved = layout.homeSpot() {
+            guard let e = effectiveHome(noGo, saved: saved, onPurpose: zc.onPurpose, screen: layout.visible(for: saved)) else { return nil }
+            if e != saved { return (e, nil, nil) }      // the zone covers the saved home: the nearest free floor spot instead (the saved home is kept)
+        }
+        return savedHomeTarget()
+    }
+    /// The saved home as a spot he can be sent to, whatever the zone does. Before the user has moved him: Claude's top.
+    func savedHomeTarget() -> (pt: Pt, plat: Plat?, win: Rc?)? {
+        if let h = layout.home {
+            if let rel = h.rel {
+                guard let cid = layout.claudeID, let c = wins.first(where: { $0.id == cid }), let pl = layout.plats.filter({ $0.win == cid }).max(by: { $0.x1 - $0.x0 < $1.x1 - $1.x0 }) else { return nil }
+                return (Pt(clamp(c.r.x + rel, pl.x0 - K.spriteW / 2 + 1, pl.x1 - K.spriteW / 2 - 1), pl.y), pl, c.r)
+            }
+            let floor = layout.visible(for: Pt(h.x, h.y)).minY
+            if h.y <= floor + 0.5 { return (Pt(h.x, floor), nil, nil) }
+            let cx = h.x + K.spriteW / 2
+            guard let pl = layout.plats.first(where: { abs($0.y - h.y) < 2 && cx >= $0.x0 - 1 && cx <= $0.x1 + 1 }), let w = wins.first(where: { $0.id == pl.win }) else { return nil }
+            return (Pt(h.x, pl.y), pl, w.r)
+        }
+        guard let cid = layout.claudeID, let c = wins.first(where: { $0.id == cid }),
+              let pl = layout.plats.filter({ $0.win == cid }).max(by: { $0.x1 - $0.x0 < $1.x1 - $1.x0 }) else { return nil }
+        return (Pt(c.r.x + (store.number("offsetX") ?? (c.r.w - K.spriteW) / 2), pl.y), pl, c.r)
+    }
+
+    /// Back to the spot he lives at. False when there is nowhere to go or he is there already.
+    @discardableResult
+    func goHome(why: String) -> Bool {
+        guard let t = homeTarget() else { return false }
+        if let pl = t.plat, let win = t.win {
+            if layout.host?.id == pl.win { return false }
+            go(to: pl, win: win, wantX: t.pt.x, arrive: nil, why: why)
+            return true
+        }
+        let screen = layout.visible(for: t.pt)
+        let legs = homeLegs(from: layout.pos, home: t.pt, floorY: screen.minY, zone: zc.zone(noGo, home: layout.homeSpot()))
+        guard !legs.isEmpty else { return false }
+        startRoute(legs, to: nil, arrive: nil, why: why)
+        return true
+    }
+
+    /// Every few seconds at rest: far from home (a fall, a covered window, a moved window), or stuck in the zone with nowhere to walk: go home, or to a free corner.
+    func returnIfStray(_ now: Double) {
+        guard explorer.awaySince == nil, now >= strayAt, !glue.busy, !glue.held, Stroll.pace(glue.bridge.state) != nil else { return }
+        strayAt = now + 6
+        if layout.homeSpot() != nil, let t = homeTarget(), farFromHome(pos: layout.pos, home: t.pt) { goHome(why: "stray") }      // far from where he lives now
+    }
+
+    /// The invariant, checked on every 10 fps tick whatever he is doing (asleep, idle, working at the laptop): he never rests in the zone.
+    /// Only a drag or hold, an open call, or a route already moving him hold it off. Otherwise he is flown to a free spot at once, even with room to walk.
+    func guardZone() {
+        guard route == nil, pendingFall == nil, dragger.isRest, !pressedDown else { return }
+        let home = layout.homeSpot()
+        switch zc.tick(zone: noGo, home: home, at: layout.pos, held: glue.held, calling: glue.bridge.calling, screen: layout.visible(for: layout.pos), homeScreen: layout.visible(for: home ?? layout.pos)) {
+        case .none: return
+        case .goHome:      // the zone left his home after it had flown him off: walk back (whatever his state; asleep he stays asleep there)
+            let started = goHome(why: "zone-left")
+            zc.wentHome(started: started, homeKnown: savedHomeTarget() != nil)
+        case .flee(let spot):
+            explorer.awaySince = nil
+            if Stroll.pace(glue.bridge.state) == nil { glue.bridge.stopClip() }      // asleep: wake the picture for the flight
+            let t = homeTarget()
+            startRoute([.fly(to: spot)], to: t?.pt == spot ? t?.plat : nil, arrive: nil, why: "zone")      // he flies to where he lives now
         }
     }
 
@@ -5589,7 +6292,7 @@ final class Brote: NSObject {
     }
 
     /// A route played at 60 fps: walking, climbing, a ladder, a hop or a flight, each with its clip.
-    func startRoute(_ legs: [Leg], to target: Plat, arrive: String?, why: String) {
+    func startRoute(_ legs: [Leg], to target: Plat?, arrive: String?, why: String) {
         guard !legs.isEmpty else { return }
         stopRoute()
         layout.leave(); riding = false; stroll.target = nil; stroll.walking = false
@@ -5597,8 +6300,8 @@ final class Brote: NSObject {
         lastRouteStep = uptime()
         let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [unowned self] _ in self.routeStep() }
         RunLoop.main.add(t, forMode: .common); routeTimer = t
-        probe.log("ROUTE", [("why", why), ("to", String(target.win)), ("legs", legs.map { "\($0)" }.joined(separator: " "))], cap: 200)
-        scenario?.write("route", ["why": why, "to": target.win, "legs": legs.map { "\($0)" }])
+        probe.log("ROUTE", [("why", why), ("to", target.map { String($0.win) } ?? "air"), ("legs", legs.map { "\($0)" }.joined(separator: " "))], cap: 200)
+        scenario?.write("route", ["why": why, "to": target.map { $0.win as Any } ?? NSNull(), "legs": legs.map { "\($0)" }])
     }
     func stopRoute() {
         routeTimer?.invalidate(); routeTimer = nil
@@ -5633,6 +6336,12 @@ final class Brote: NSObject {
         stopRoute()
         readWindows()                                                       // the last look can be 0.1 s old
         guard let top = landingTop(cx: spriteCentre(p).x, feet: p.y, plats: layout.plats, target: target) else {
+            if routeTarget == nil, p.y <= layout.visible(for: p).minY + 0.5 {      // an outing that ends on the floor
+                layout.land(at: p, on: nil, wins: wins)
+                scenario?.write("land", ["on": "floor", "pos": [layout.pos.x, layout.pos.y], "dizzy": false])
+                if let a = arrive { glue.bridge.play(a) } else { glue.bridge.act("land") }
+                return
+            }
             fall(clip: nil, cause: "route-top-gone"); return                  // the window moved or closed on the way
         }
         let p = Pt(p.x, top.y)

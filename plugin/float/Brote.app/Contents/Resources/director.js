@@ -544,6 +544,11 @@ var DIRECTOR = (function () {
     frameSpec() { return this.spec() }               // the name the shim calls (one place in the shim holds `spec()`)
     /* what the app needs besides the picture */
     directing() { return !!this.clip }
+    /** True when the clip on screen is the plain work clip (laptop, intro, wait, sleep, desk close): Claude works and no call, mood sequence, answer, outro, error story or forced clip is showing. The same order as desired(). */
+    workClipOnly() {
+      const w = this.work()
+      return !!(this.clip && w && !this.forced && this.state !== 'dormido' && !this.seq && !this.markers.length && !this.answered && !this.outro && !(this.stuck && this.latest === this.stuck.sid))
+    }
     calling() { return !!(this.clip && this.markers.length && /^(att|c_needs|c_perm|c_update)/.test(this.clip.id)) }
     mode() { return this.clip ? this.clip.id : null }
   }

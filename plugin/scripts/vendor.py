@@ -29,7 +29,7 @@ SKILL = "budgit-kickoff"
 _PLUGIN_ARG = re.compile(r'/scripts/hook\.py"\s+(\S+)\s*$')
 _TEXT_EXTS = {".md", ".txt", ".json"}
 CLOUD_NOTE = ("> Claude Code cloud (claude.ai/code): this is the vendored copy. The Budgit agents are named "
-              "`budgit-verifier`, `budgit-scout-reader`, `budgit-researcher`, `budgit-plan-critic`, "
+              "`budgit-builder`, `budgit-verifier`, `budgit-scout-reader`, `budgit-researcher`, `budgit-plan-critic`, "
               "`budgit-security-reviewer`, `budgit-persona-sim` (dash, not `budgit:X`); the CLI is "
               "`.claude/budgit/bin/budgit`.\n")
 

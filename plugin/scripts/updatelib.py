@@ -187,6 +187,25 @@ def installed_version(config_dir=None, root=None):
         return None
 
 
+def registered_root(root, config_dir=None):
+    """R-712: the version Claude Code registered for the plugin folder `root`, or None when that folder is not a trusted install
+    (not an installPath of the registry nor a directory-marketplace live folder, a marketplaces/ copy, not owned by the user, or
+    writable by group or others). The one predicate `floatctl.installed_version` makes, reused so a scheduled job is never pointed
+    at a folder Claude Code did not install."""
+    try:
+        import floatctl
+        ctx = object.__new__(floatctl.Ctx)
+        ctx.root = os.path.realpath(root)
+        ctx.flt = os.path.join(ctx.root, "float")
+        ctx.cfg = os.path.realpath(_config_dir(config_dir))
+        version = floatctl.installed_version(ctx)
+        if not valid_version(version):
+            version = running_version(ctx.root)
+        return version if valid_version(version) else None
+    except Exception:
+        return None
+
+
 def older(version, than):
     """True when both are valid versions and `version` is lower than `than`."""
     return valid_version(version) and valid_version(than) and _key(version) < _key(than)

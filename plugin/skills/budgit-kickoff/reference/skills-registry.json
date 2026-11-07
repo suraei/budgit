@@ -4888,6 +4888,78 @@
    }
   },
   {
+   "id": "studio:builder",
+   "kind": "skill",
+   "status": "installed",
+   "enabled": true,
+   "read": "full",
+   "role": [
+    "author"
+   ],
+   "source": {
+    "repo": null,
+    "path": null,
+    "pin": null,
+    "version": null,
+    "tree_sha256": null,
+    "licence": null
+   },
+   "install": {
+    "scope": "own",
+    "path": null,
+    "installed": null,
+    "local_patches": []
+   },
+   "security": {
+    "verdict": "n/a (first-party agent)",
+    "report": null,
+    "reviewed": null,
+    "conditions": [],
+    "unchecked": []
+   },
+   "requires": {},
+   "flags": {},
+   "cost": {
+    "read_lines": null,
+    "refs_lines": null,
+    "agents": 1,
+    "server": false,
+    "class": 2
+   },
+   "fits": {
+    "build/briefed-item": {
+     "fit": 3,
+     "check": 0,
+     "receipt": 1,
+     "ev": "builds one briefed item in its own worktree; hands back commits, tests and a progress file",
+     "agents": 1
+    }
+   },
+   "not_for": [],
+   "conflicts": [],
+   "conflicts_rules": [],
+   "strengths": [],
+   "weaknesses": [],
+   "fallback": [
+    "reference/routing.md"
+   ],
+   "codex": "no",
+   "load": "full",
+   "description": "",
+   "description_chars": 0,
+   "upstream": {
+    "latest_seen": null,
+    "checked": "2026-11-06",
+    "state": "not checked",
+    "update": "none-applied"
+   },
+   "history": [],
+   "uses": {
+    "total": 0,
+    "last": null
+   }
+  },
+  {
    "id": "studio:persona-sim",
    "kind": "skill",
    "status": "installed",
