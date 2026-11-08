@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.13.8-7d68c4?style=flat-square" alt="Version 0.13.8">
+  <img src="https://img.shields.io/badge/version-0.13.9-7d68c4?style=flat-square" alt="Version 0.13.9">
   <img src="https://img.shields.io/badge/Claude_Code-2.1.292%2B-D97757?style=flat-square&logo=claude&logoColor=white" alt="Claude Code 2.1.292 or newer">
   <img src="https://img.shields.io/badge/Python-3-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3">
   <img src="https://img.shields.io/badge/macOS-tested-000000?style=flat-square&logo=apple&logoColor=white" alt="Tested on macOS">
@@ -287,9 +287,13 @@ Claude runs these as you talk. To run one yourself, ask Claude.
     <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/update-mobile-dark.svg">
     <source media="(max-width: 600px)" srcset="assets/update-mobile-light.svg">
     <source media="(prefers-color-scheme: dark)" srcset="assets/update-dark.svg">
-    <img src="assets/update-light.svg" width="100%" alt="An animated update loop: once a day a quiet check; the line under the prompt shows an arrow and the new version; you update and reload; the first session after runs its one-time step. Budgit never installs by itself">
+    <img src="assets/update-light.svg" width="100%" alt="An animated update loop: once a day a quiet check; the line under the prompt shows an arrow and the new version; you update; the first session after runs its one-time step. Budgit never installs by itself">
   </picture>
 </p>
+
+To update, one prompt is enough, in any Claude chat: ask Claude to update Budgit. It runs `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, and reports the version. Your next chat uses it.
+
+Keep-alive and away mode («me voy») are on by default; switch them off with `budgit setup --answer keepalive=no` and `budgit setup --answer away=no`. After an update, Budgit asks once about the lead and team structure, the daily cleanup and a morning stand-up at 08:00; the last two stay off without your yes. The team rules are on by default (`budgit rules off <topic>`).
 
 To switch the daily check off: `"update_check": "off"` in `~/.budgit/config.json`. [Getting started](../../wiki/Getting-started) has the rest.
 

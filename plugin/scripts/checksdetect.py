@@ -98,7 +98,7 @@ def propose(project):
     if have and name:
         return None
     checks = list(have) or detect(project)
-    if not checks and name:
+    if not checks:                      # R-794: nothing detected means nothing to propose, named or not
         return None
     name = name or os.path.basename(os.path.realpath(project))
     prop = {"name": name, "checks": checks, "digest": _digest(project, name, checks)}

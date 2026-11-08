@@ -140,7 +140,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|Read|Grep|Glob|WebSearch|WebFetch|mcp__.*",
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|Read|Grep|Glob|WebSearch|WebFetch|AskUserQuestion|mcp__.*",
         "hooks": [
           {
             "type": "command",
@@ -156,6 +156,17 @@
             "type": "command",
             "command": "f=\"$HOME/Library/Application Support/BroteWindow/events.log\"; [ -f \"$f\" ] || exit 0; s=/bin/dash; [ -x \"$s\" ] || s=sh; exec \"$s\" \"${CLAUDE_PLUGIN_ROOT}/hooks/brote-event.sh\" pre",
             "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "env -u PYTHONDONTWRITEBYTECODE python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.py\" permission-request",
+            "timeout": 10
           }
         ]
       }

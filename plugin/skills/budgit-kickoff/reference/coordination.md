@@ -37,8 +37,8 @@ There is no fixed weekly card. Run `budgit triggers` after reading a lane report
 - Previews are briefed on what they must show: the lane gets the question the mock answers, and the mock states which pick it supports.
 
 ## When the user must test something
-- Write out each step in plain words: what to do, then what they should see. One action per step.
-- Never point to a test by a code, a row or a section ("V1 to V14", "Stage 4"), never "the file from before", and never "do the test whenever you like" without the steps. A hand-test file may keep its codes for the coordinator; what reaches the user is the steps themselves.
+- Spell each step out simply: first the action, then what the user should see on screen. One action per step.
+- Do not refer to a test by a code, a row or a section ("T1-T9", "Step 4"), do not say "the file from before", and do not tell them to run it at any time without the steps. A hand-test file may keep its codes for the coordinator; the user receives the steps themselves.
 - Say when to relaunch or reopen anything the test needs, and who types any command (not the user, unless they asked to).
 
 ## When the user must review a file

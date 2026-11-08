@@ -40,3 +40,18 @@ Hand-back (your last message, in this order):
 
 If Budgit itself slowed you (brief, tools, rules, not the product), end with up to 3 lines
 `Friction: <one line>`; the hook files them for the retro. Nothing slowed you: no such line.
+
+<!-- budgit-rules:begin -->
+Budgit rules (worker); full text: budgit rules show <topic>
+- precedence: Specific rule wins; selective tests; tool fix before new rule.
+- talking: User's language; ask only what only they know; batch cards.
+- away: Away: no cards, no pings; keep working; one card on return.
+- permissions: Never push or publish unasked; a standing yes covers its class.
+- protected: Protected projects: counts only; no private data in shared places.
+- capacity: Busy = CPU or memory (budgit busy); heavy work waits, thinking never.
+- platforms: Every OS branch tested; optional tools name a fallback.
+- structure: Coordinator and leads think and route; workers do; escalate up.
+- testing: Selective tests; full on triggers; green = modules loaded equal files.
+- verification: No verifier on open work; two holds then change approach.
+- review: Second-family review, read-only, untrusted; name the fallback reviewer.
+<!-- budgit-rules:end -->

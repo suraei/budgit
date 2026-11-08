@@ -1112,6 +1112,9 @@ class _TreeScan:
         if k is None:
             return
         prog, args, adyn = _base(words[k]), words[k + 1:], dyn[k + 1:]
+        # finding 3: a GIT_* assignment or any `env` prefix can change how git reads pathspecs (GIT_LITERAL_PATHSPECS, GIT_DIR...),
+        # so an exclusion counts only on a command with neither
+        self.env_prefix = any(_base(w) == "env" or w.upper().startswith("GIT_") for w in words[:k])
         if prog in ("read", "mapfile", "readarray", "getopts"):
             for a in args:                              # names they fill from input the guard cannot see (D58)
                 if _NAME.fullmatch(a):
@@ -1314,6 +1317,8 @@ class _TreeScan:
                     continue
                 break
             name, val = m.group(1), m.group(2)
+            if name.upper().startswith("GIT_"):
+                self.git_env = True                 # `export GIT_LITERAL_PATHSPECS=1; git grep …` changes git for the rest of the line
             self.loops.pop(name, None)
             if self.reassigned(name) or cond or name in self.unsure:
                 self.vars.pop(name, None)
@@ -1680,12 +1685,14 @@ class _TreeScan:
                             _excluding(excl, _name_glob, lambda v, p: os.path.basename(p))))
 
     def git(self, args, adyn):
-        i, n, base = 0, len(args), self.base
+        i, n, base, magic_opt = 0, len(args), self.base, False
         while i < n and args[i].startswith("-"):
             if args[i] in ("-C", "-c") and i + 1 < n:
                 if args[i] == "-C":
                     base = os.path.join(base, os.path.expanduser(args[i + 1])) if base and not adyn[i + 1] else None
                 i += 1
+            elif args[i].startswith("--") and "pathspecs" in args[i]:
+                magic_opt = True                        # --literal/--glob/--noglob/--icase-pathspecs change every form
             i += 1
         if i >= n or _fold(args[i]) != "grep":
             return
@@ -1696,16 +1703,35 @@ class _TreeScan:
         pos, excl, pattern_given = [], [], False
         for kind, name, val in _options(args[i + 1:], adyn[i + 1:], "ABCefm", ("--max-depth", "--threads")):
             if kind == "p":
-                if name.startswith((":!", ":^", ":(exclude)")):
-                    excl.append(name.split(")", 1)[1] if name.startswith(":(") else name[2:])
+                if _git_is_exclusion(name):
+                    spec = None if val or magic_opt or getattr(self, "env_prefix", False) or getattr(self, "git_env", False) else _git_exclusion(name)
+                    if spec:                            # R-708: only an exclusion git is known to honour counts
+                        excl.append(spec)
+                elif name.startswith(":") and not val:
+                    pos.append(("$pathspec", True))     # positive magic (:(glob), :(top), :/): where it reads is unknown
                 else:
                     pos.append((name, val))
             elif name in ("e", "f"):
                 pattern_given = True
         if not pattern_given and pos:
             pos = pos[1:]
-        self.direct.append(([(w, d, base) for w, d in pos] or [(".", False, base)],
-                            _excluding(excl, lambda p, s: _seg(p.rstrip("/"), s) or _seg(p, s), lambda v, p: v.rel(p))))
+        # git matches a pathspec against the path relative to ITS cwd, not to the folder the search is rooted at
+        gbase = os.path.realpath(base) if base else None
+
+        def reaches(v):
+            if v.inside or len(excl) > MAX_TREE_PATTERNS:
+                return True
+
+            def gone(p, is_dir):
+                if not gbase:
+                    return False
+                rel = os.path.relpath(p, gbase)
+                return rel != ".." and not rel.startswith("../") \
+                    and any(_git_pathspec_matches(s, rel, is_dir) for s in excl)
+            if any(gone(d, True) for d in v.dirs):
+                return False
+            return any(not gone(f, False) for f in v.files)
+        self.direct.append(([(w, d, base) for w, d in pos] or [(".", False, base)], reaches))
 
     def diff(self, args, adyn):
         rec, excl, pos = False, [], []
@@ -2021,6 +2047,80 @@ def _glob_rx(pat):
             out.append(re.escape(c))
         i += 1
     return re.compile("".join(out) + r"\Z", re.I | re.S)
+
+
+def _git_magic(word):
+    """Split a `:`-pathspec into (magic words, pattern); None when it is malformed. Short magic is `:!x`/`:^x`
+    (exclude); `:/` and any other short letter is `top` or unknown, and a `:` after them is left to git, so the
+    caller sees the odd characters in the pattern and refuses to model it."""
+    if word.startswith((":!", ":^")):
+        return ["exclude"], word[2:]
+    if word.startswith(":("):
+        head, close, pat = word[2:].partition(")")
+        return (head.split(","), pat) if close else None
+    return None
+
+
+def _git_exclusion(word):
+    """R-708: (mode, pattern) when `word` is an exclusion pathspec whose real git semantics the guard models exactly,
+    else None (the exclusion then counts as absent). mode: "plain" (no magic: wildmatch where `*` crosses `/`),
+    "glob" (`:(glob)`: gitignore-like `**`, `*` stops at `/`) or "literal". Unknown magic (attr:, icase, top, ...),
+    short-magic combinations, `..`, `//`, a leading `/`, and wildcards with `[`, `\\` or a trailing `/` are not modelled."""
+    parsed = _git_magic(word)
+    if not parsed:
+        return None
+    magics, pat = parsed
+    if "exclude" not in magics or len(set(magics)) != len(magics) or not set(magics) <= {"exclude", "glob", "literal"}:
+        return None
+    if "glob" in magics and "literal" in magics:
+        return None
+    mode = "glob" if "glob" in magics else "literal" if "literal" in magics else "plain"
+    if pat[:1] in ("!", "^", "/", ":") or any(c in pat for c in "\n\r"):
+        return None
+    while pat.startswith("./"):
+        pat = pat[2:]
+    comps = pat.rstrip("/").split("/")
+    if not pat.rstrip("/") or "//" in pat or any(c in (".", "..") for c in comps):
+        return None
+    wild = mode != "literal" and any(c in pat for c in "*?[\\")
+    if wild and (any(c in pat for c in "[\\") or pat.endswith("/")):
+        return None
+    return mode, pat
+
+
+def _git_is_exclusion(word):
+    """Does the word say "exclude" (so it must never be read as a folder to search), modelled or not?"""
+    if word.startswith(":") and not word.startswith(":("):
+        k = 1
+        while k < len(word) and word[k] in "!^/":
+            k += 1
+        return any(c in word[1:k] for c in "!^")
+    parsed = _git_magic(word)
+    return bool(parsed) and "exclude" in parsed[0]
+
+
+def _git_pathspec_matches(spec, path, is_dir):
+    """Does the modelled exclusion `spec` really drop `path` (relative to git's cwd)? A pattern without wildcards
+    drops that file or folder and everything below it; a wildcard pattern drops only files whose whole path matches."""
+    mode, pat = spec
+    flat = pat.rstrip("/")
+    if mode == "literal" or not any(c in pat for c in "*?"):
+        return path == flat or path.startswith(flat + "/")
+    if is_dir:
+        return False
+    if mode == "plain":
+        return bool(_seg(pat, path))
+    pcs, scs = flat.split("/"), path.split("/")
+    states = {0}
+    for k, p in enumerate(pcs):
+        if p == "**":
+            last = k == len(pcs) - 1
+            states = {t for s in states for t in range(s + (1 if last else 0), len(scs) + 1)}
+        else:
+            states = {s + 1 for s in states if s < len(scs) and _seg(p, scs[s])}
+        if not states:
+            return False
+    return len(scs) in states
 
 
 def _excluding(patterns, match, shown):

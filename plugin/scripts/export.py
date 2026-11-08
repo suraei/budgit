@@ -231,9 +231,16 @@ def build(stage_dir, version, config, repo="OWNER/REPO", author=None):
     root = vendor.plugin_root()
     table = _scrub_table(config)
     plugin = os.path.join(stage_dir, "plugin")
-    for sub in ("agents", "bin", "commands", "hooks", "scripts"):
+    for sub in ("agents", "bin", "commands", "hooks", "scripts", "rules"):
         skip = tuple(o[len(sub) + 1:] for o in OMIT_FROM_EXPORT if o.startswith(sub + os.sep))
         _copy_tree(os.path.join(root, sub), os.path.join(plugin, sub), table, skip)
+    import rules as _rules                       # R-788: the worker digest is baked between markers; a second export is identical
+    block = _rules.worker_block()
+    agents_out = os.path.join(plugin, "agents")
+    for name in sorted(os.listdir(agents_out)):
+        if name.endswith(".md"):
+            target = os.path.join(agents_out, name)
+            vendor._write(target, _rules.bake(vendor._read(target), block))
     _copy_prebuilt_float(root, plugin)
     skill = vendor._skill_source()
     if skill is None:

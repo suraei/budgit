@@ -1,0 +1,21 @@
+{
+  "topics": [
+    {"id": "precedence", "file": "core.md", "n": 0, "roles": ["core"], "digest": "Specific rule wins; selective tests; tool fix before new rule."},
+    {"id": "talking", "file": "core.md", "n": 1, "roles": ["core"], "digest": "User's language; ask only what only they know; batch cards."},
+    {"id": "away", "file": "core.md", "n": 2, "roles": ["core"], "digest": "Away: no cards, no pings; keep working; one card on return."},
+    {"id": "permissions", "file": "core.md", "n": 3, "roles": ["core"], "digest": "Never push or publish unasked; a standing yes covers its class."},
+    {"id": "protected", "file": "core.md", "n": 4, "roles": ["core"], "digest": "Protected projects: counts only; no private data in shared places."},
+    {"id": "capacity", "file": "core.md", "n": 7, "roles": ["core"], "digest": "Busy = CPU or memory (budgit busy); heavy work waits, thinking never."},
+    {"id": "platforms", "file": "core.md", "n": 14, "roles": ["core"], "digest": "Every OS branch tested; optional tools name a fallback."},
+    {"id": "structure", "file": "coordinator.md", "n": 5, "roles": ["coordinator", "lead", "worker"], "digest": "Coordinator and leads think and route; workers do; escalate up."},
+    {"id": "jobs", "file": "coordinator.md", "n": 16, "roles": ["coordinator", "lead"], "digest": "Opt-in keep-alive, stand-up and cleanup; jobs never message, push or publish."},
+    {"id": "decisions", "file": "lead.md", "n": 6, "roles": ["lead"], "digest": "Record decisions at once; triage each note; bugs lead; never FIFO."},
+    {"id": "urgent", "file": "lead.md", "n": 8, "roles": ["lead"], "digest": "Urgent tool: checked-first gate on a copy, exact format, ship in minutes."},
+    {"id": "release", "file": "lead.md", "n": 11, "roles": ["lead"], "digest": "Ship each green set; only reviewed tips; gates; docs per publish."},
+    {"id": "retro", "file": "lead.md", "n": 12, "roles": ["coordinator", "lead"], "digest": "Incident: evidence, root cause, tool first, external check; done-check fields."},
+    {"id": "visual", "file": "lead.md", "n": 15, "roles": ["lead"], "digest": "Self-check design and scale before showing it."},
+    {"id": "testing", "file": "worker.md", "n": 9, "roles": ["lead", "worker"], "digest": "Selective tests; full on triggers; green = modules loaded equal files."},
+    {"id": "verification", "file": "worker.md", "n": 10, "roles": ["lead", "worker"], "digest": "No verifier on open work; two holds then change approach."},
+    {"id": "review", "file": "worker.md", "n": 13, "roles": ["lead", "worker"], "digest": "Second-family review, read-only, untrusted; name the fallback reviewer."}
+  ]
+}

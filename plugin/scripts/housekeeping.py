@@ -469,7 +469,17 @@ def plist_path():
     return os.path.join(agents_dir(), LABEL + ".plist")
 
 
-JOB = {"label": LABEL, "args": ["housekeeping", "--apply", "--quiet"], "log": "housekeeping.log"}   # R-712: a job Budgit owns
+# R-712 / R-788: the jobs Budgit owns. Each has its own label, args, log and default schedule: "calendar" (a dict, or a list of dicts) or
+# "interval" (seconds, at least MIN_INTERVAL). Keep-alive and stand-up are opt-in (jobs.turn_on needs a recorded yes).
+MIN_INTERVAL = 600
+JOBS = {
+    "cleanup": {"name": "cleanup", "label": LABEL, "args": ["housekeeping", "--apply", "--quiet"], "log": "housekeeping.log",
+                "calendar": {"Hour": 9, "Minute": 30}},
+    "keepalive": {"name": "keepalive", "label": "com.budgit.keepalive", "args": ["job", "run", "keepalive"], "log": "keepalive.log",
+                  "interval": 7200},
+    "standup": {"name": "standup", "label": "com.budgit.standup", "args": ["job", "run", "standup"], "log": "standup.log",
+                "calendar": {"Hour": 8, "Minute": 0}},
+}
 LAUNCHER = "budgit-job"
 NO_PLUGIN_LINE = "budgit: the plugin moved (update?); the next Claude Code session repairs this job"
 PYTHON_FALLBACKS = ("/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3")
@@ -584,19 +594,26 @@ def launcher_text(root, python):
         ""])
 
 
-def plist_text(launcher, at="09:30", home=None):
+def plist_text(job, launcher, at=None, home=None, every=None):
+    """The plist of a new job. `at` (HH:MM) sets a calendar job's time, `every` (seconds) an interval job's period; None = the job's default."""
     import plistlib
-    hour, minute = (int(x) for x in at.split(":"))
     home = home or sl.home_state()
-    log = os.path.join(home, JOB["log"])
-    return plistlib.dumps({
-        "Label": LABEL,
-        "ProgramArguments": ["/bin/sh", launcher] + list(JOB["args"]),
-        "StartCalendarInterval": {"Hour": hour, "Minute": minute},
+    log = os.path.join(home, job["log"])
+    plist = {
+        "Label": job["label"],
+        "ProgramArguments": ["/bin/sh", launcher] + list(job["args"]),
         "Nice": 10, "LowPriorityIO": True,
         "StandardOutPath": log, "StandardErrorPath": log,
         "EnvironmentVariables": {"BUDGIT_HOME": home} if sl.env("HOME") else {},
-    }).decode("utf-8")
+    }
+    if "interval" in job:
+        plist["StartInterval"] = int(every) if every else job["interval"]
+    elif at:
+        hour, minute = (int(x) for x in at.split(":"))
+        plist["StartCalendarInterval"] = {"Hour": hour, "Minute": minute}
+    else:
+        plist["StartCalendarInterval"] = dict(job["calendar"])
+    return plistlib.dumps(plist).decode("utf-8")
 
 
 def desired_plist(job, current, launcher, home):
@@ -605,8 +622,11 @@ def desired_plist(job, current, launcher, home):
     want = {"Label": job["label"], "ProgramArguments": ["/bin/sh", launcher] + list(job["args"]),
             "StandardOutPath": log, "StandardErrorPath": log}
     # R-712: only what the design keeps, type-checked; a stale Program or an injected key (DYLD_*, WorkingDirectory...) does not survive,
-    # and a bad value falls back to the default (an empty calendar would run the job every minute)
-    want["StartCalendarInterval"] = _kept_calendar(current.get("StartCalendarInterval"), {"Hour": 9, "Minute": 30})
+    # and a bad value falls back to the job's own default (an empty calendar would run the job every minute)
+    if "interval" in job:
+        want["StartInterval"] = _kept_interval(current.get("StartInterval"), job["interval"])
+    else:
+        want["StartCalendarInterval"] = _kept_calendar(current.get("StartCalendarInterval"), job["calendar"])
     want["Nice"] = _kept_nice(current.get("Nice"), 10)
     want["LowPriorityIO"] = _kept_bool(current.get("LowPriorityIO"), True)
     env = current.get("EnvironmentVariables")
@@ -631,10 +651,21 @@ def real_agents_dir():
     return same_file(agents_dir(), os.path.join(uh, "Library", "LaunchAgents"))
 
 
+def _calendar_ok(value):
+    return isinstance(value, dict) and bool(value) and all(isinstance(k, str) and type(v) is int for k, v in value.items())
+
+
 def _kept_calendar(value, default):
-    if isinstance(value, dict) and value and all(isinstance(k, str) and type(v) is int for k, v in value.items()):
+    """A calendar dict, or a non-empty list of calendar dicts, is kept as it is; anything else falls back to the default."""
+    if _calendar_ok(value):
+        return value
+    if isinstance(value, list) and value and all(_calendar_ok(v) for v in value):
         return value
     return default
+
+
+def _kept_interval(value, default):
+    return value if type(value) is int and value >= MIN_INTERVAL else default
 
 
 def _kept_nice(value, default):
@@ -695,11 +726,14 @@ def repair_job(job, root, python):
     return "changed" if changed else "same"
 
 
-def schedule(op, budgit_path, at="09:30"):
-    """-> (exit code, message key, fields). op: on, off, status. Writes only the one plist and talks only to launchctl."""
+def schedule(op, budgit_path, at=None, name="cleanup", every=None):
+    """-> (exit code, message key, fields). op: on, off, status. Writes only the one plist of job `name` and talks only to launchctl.
+    `at` (HH:MM) is for calendar jobs, `every` (seconds) for interval jobs; None = the job's default."""
     if sys.platform != "darwin" and not sl.env("LAUNCH_AGENTS_DIR"):
         return 64, "hk.sched_platform", {}
-    path = plist_path()
+    job = JOBS[name]
+    LABEL = job["label"]                                            # this job's label (shadows the module's cleanup label here)
+    path = os.path.join(agents_dir(), LABEL + ".plist")
     uid = os.getuid()
     if op == "status":
         if not os.path.exists(path):
@@ -730,7 +764,10 @@ def schedule(op, budgit_path, at="09:30"):
         except OSError:
             return 1, "hk.sched_failed", {"why": path}
         return 0, "hk.sched_removed", {}
-    if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at or ""):
+    if "interval" in job:
+        if every is not None and not (type(every) is int and every >= MIN_INTERVAL):
+            return 64, "hk.sched_time", {"at": str(every)}
+    elif at is not None and not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
         return 64, "hk.sched_time", {"at": at}
     import updatelib
     import installstep as upgrade
@@ -766,8 +803,9 @@ def schedule(op, budgit_path, at="09:30"):
     except (JobError, OSError) as exc:
         return 1, "hk.sched_failed", {"why": str(exc)}
     os.makedirs(agents_dir(), exist_ok=True)
-    sl.atomic_write(path, plist_text(launcher, at, home))
+    sl.atomic_write(path, plist_text(job, launcher, at, home, every))
     _launchctl("bootout", "gui/%d/%s" % (uid, LABEL), timeout=LAUNCHCTL_TIMEOUT)
     if _launchctl("bootstrap", "gui/%d" % uid, path, timeout=LAUNCHCTL_TIMEOUT) != 0:
         return 1, "hk.sched_failed", {"why": path}
-    return 0, "hk.sched_set", {"at": at, "path": path}
+    shown = at or "%02d:%02d" % (job["calendar"]["Hour"], job["calendar"]["Minute"]) if "calendar" in job else "every %d s" % (every or job["interval"])
+    return 0, "hk.sched_set", {"at": shown, "path": path}

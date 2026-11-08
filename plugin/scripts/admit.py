@@ -68,6 +68,49 @@ def busy_sessions():
     return sum(1 for s in found["sessions"] if s["status"] == "busy" and s.get("verified"))
 
 
+BUSY_CPU_PCT = 85          # the owner's rule (R-532): median CPU over a minute above 85 % of the cores
+BUSY_FREE_MB = 1024        # ... or free + inactive memory under 1 GB
+BUSY_EXIT = 10
+
+
+def cpu_sample():
+    """Summed %CPU of all processes as a share of all cores, in percent (ps on macOS and Linux). None when it cannot be read.
+    Windows (a PowerShell counter) is not built: None there, so the CPU half is skipped. UNTESTED on Windows."""
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "%cpu="], capture_output=True, text=True, timeout=10).stdout
+        return sum(float(x) for x in out.split()) / cores()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def cpu_median(sampler=cpu_sample, sleep=None, window=60, step=5):
+    """Median of the sampler over `window` seconds, one sample every `step`; unreadable samples are skipped. None when none was read.
+    The sampler and the sleep are injected so tests run without waiting."""
+    import statistics
+    import time
+    sleep = sleep or time.sleep
+    count = max(1, int(window // step))
+    got = []
+    for i in range(count):
+        value = sampler()
+        if value is not None:
+            got.append(value)
+        if i < count - 1:
+            sleep(step)
+    return statistics.median(got) if got else None
+
+
+def is_busy(sampler=cpu_sample, sleep=None, window=60, free=None):
+    """-> (busy, reason). Memory first (cheap, no waiting); then the CPU median. A reading that cannot be taken is skipped."""
+    free_now = free() if free else free_mb()
+    if free_now is not None and free_now < BUSY_FREE_MB:
+        return True, "free memory %d MB is under %d MB" % (free_now, BUSY_FREE_MB)
+    median = cpu_median(sampler, sleep, window)
+    if median is not None and median > BUSY_CPU_PCT:
+        return True, "median CPU %.0f %% is above %d %%" % (median, BUSY_CPU_PCT)
+    return False, "free"
+
+
 def measure():
     return {"load1": load1(), "cores": cores(), "free_mb": free_mb(), "busy": busy_sessions()}
 

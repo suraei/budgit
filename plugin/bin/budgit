@@ -165,6 +165,29 @@ def cmd_tm(args):
     return 0
 
 
+def cmd_rules(args):
+    """R-788: the team rules. list | show <topic> | off <topic> | on <topic> | edit <topic>. State in the Budgit home."""
+    import postupdate
+    import rules
+    state = postupdate.load()["rules"]
+    if args.action == "list":
+        for t in rules.topics():
+            print("%-13s %-3s %s  [%s]" % (t["id"], "off" if t["id"] in state["off"] else "on", t["digest"], ", ".join(t["roles"])))
+        return 0
+    if not args.topic:
+        print("budgit rules %s <topic>: topics are %s" % (args.action, ", ".join(rules.topic_ids())))
+        return 1
+    if args.action == "show":
+        print(rules.text(args.topic))
+    elif args.action in ("on", "off"):
+        rules._find(args.topic)
+        postupdate.set_topic(args.topic, args.action == "off")
+        print("rules topic %s is %s" % (args.topic, args.action))
+    else:
+        print("edit this file; it replaces the shipped topic and survives updates: " + rules.edit(args.topic))
+    return 0
+
+
 def cmd_housekeeping(args):
     """R-400: the daily tidy-up: flow count, then merged clean idle worktrees and branches (see housekeeping.py)."""
     import housekeeping
@@ -597,7 +620,79 @@ def _brote_json(args):
         pass
 
 
+def _every_seconds(text):
+    """'2h', '90m' or plain seconds -> int seconds; None when not given."""
+    if not text:
+        return None
+    text = str(text).strip().lower()
+    mult = {"h": 3600, "m": 60, "s": 1}.get(text[-1], None)
+    try:
+        return int(float(text[:-1] if mult else text) * (mult or 1))
+    except ValueError:
+        raise sl.StudioError("--every takes 2h, 90m or seconds (got %r)" % text)
+
+
+def cmd_setup_answer(args):
+    """R-788: `budgit setup --answer key=yes|no|later` records the answer; it never goes through sl.setup. A yes for a job then runs
+    `job on`. `jobs=no|later` is the card's "None" / "Later": it applies to every job key still unset or later."""
+    import jobs
+    import postupdate
+    code = 0
+    for item in args.answer:
+        key, sep, value = item.partition("=")
+        if not sep or value not in postupdate.VALUES:
+            raise sl.StudioError("--answer takes KEY=yes|no|later, keys %s, away or jobs (got %r)" % ("/".join(postupdate.KEYS), item))
+        if key == "away":                            # R-583: no job; away=no switches «me voy» off, anything else leaves it on
+            postupdate.answer("away", value)
+            print("budgit setup: away = %s" % value)
+            continue
+        if key == "jobs":
+            if value == "yes":
+                raise sl.StudioError("jobs=yes is not allowed: tick each job by its own key")
+            keys = [k for k in postupdate.KEYS if k != "structure" and postupdate.state(k) in ("unset", "later")]
+        else:
+            keys = [key]
+        for k in keys:
+            postupdate.answer(k, value)
+            print("budgit setup: %s = %s" % (k, value))
+            if value == "yes" and k != "structure":
+                done, text = jobs.turn_on(k, os.path.realpath(__file__), args.at, _every_seconds(args.every))
+                print(text)
+                code = code or done
+    return code
+
+
+def cmd_busy(args):
+    """R-788: busy when the median CPU over the window is above 85 % of the cores, or free + inactive memory is under 1 GB. Exit 0 free, 10 busy."""
+    import admit
+    busy, why = admit.is_busy(window=args.window)
+    print("busy: " + why if busy else "not busy")
+    return admit.BUSY_EXIT if busy else 0
+
+
+def cmd_job(args):
+    """R-788: the opt-in jobs. on | off | status | precheck | run, name cleanup | keepalive | standup."""
+    import jobs
+    here = os.path.realpath(__file__)
+    if args.op == "on":
+        code, text = jobs.turn_on(args.name, here, args.at, _every_seconds(args.every))
+    elif args.op == "off":
+        code, text = jobs.turn_off(args.name, here)
+    elif args.op == "status":
+        code, text = jobs.status(args.name, here)
+    elif args.op == "precheck":
+        ok, text = jobs.precheck(args.name)
+        text = "run: " + text if ok else "skip: " + text
+        code = 0
+    else:
+        return jobs.run(args.name)
+    print(text)
+    return code
+
+
 def cmd_setup(args):
+    if args.answer:
+        return cmd_setup_answer(args)
     accounts = {}
     for item in args.account or ():
         login, sep, email = item.partition("=")
@@ -906,6 +1001,10 @@ def cmd_update(args):
                      latest=latest, current=current))
         if not updatelib.is_newer(latest, current):
             return 0
+    if updatelib.chat_is_stale():
+        # The registry already holds a newer version than this chat runs: an update went through. Say when it takes effect.
+        print(i18n.t("update.done", lang, version=updatelib.installed_version()))
+        return 0
     print(i18n.t("cmd.update_commands", lang, commands="\n".join("  " + c for c in updatelib.commands())))
     return 0
 
@@ -943,6 +1042,28 @@ def cmd_migrate_install(args):
             sys.stderr.write(i18n.t("cmd.migrate_failed", lang, step=" ".join(argv), undo="claude plugin enable " + plan["old"]) + "\n")
             return 1
     print(i18n.t("cmd.migrate_done", lang))
+    _apply_roles_once()
+    return 0
+
+
+def _apply_roles_once():
+    """R-399: the update path applies `reorganize` once per version and prints what changed."""
+    import roles
+    try:
+        done = roles.apply_once()
+    except (sl.StudioError, OSError):
+        return
+    if done:
+        print(done)
+
+
+def cmd_reorganize(args):
+    """R-399: classify the projects (one PM each, the TM on top) into a role map in Budgit's home; nothing else changes."""
+    import roles
+    if args.undo:
+        print(roles.undo())
+    else:
+        print(roles.reorganize(dry_run=args.dry_run))
     return 0
 
 
@@ -951,7 +1072,14 @@ def cmd_release_check(args):
     Lists what is built (with its evidence), unbuilt and deferred; non-zero while any item is unbuilt.
     R-362: also non-zero when an item drifted from git (ledgergraph.drift); the graph check printed before it stays advice."""
     project = sl.resolve_project(args.project)
-    scope = sl.release_scope(sl.load_ledger(project), set(args.items) if args.items else None)
+    ledger_data = sl.load_ledger(project)
+    scope = sl.release_scope(ledger_data, set(args.items) if args.items else None)
+    try:                                         # R-399: the scope gate, whatever --items lists
+        gate_version = getattr(args, "version", None) or __import__("vendor").plugin_version()
+    except sl.StudioError:
+        gate_version = None
+    seen_ids = {it["id"] for it in scope["blocking"]}
+    scope["blocking"] += [it for it in sl.scope_gate(ledger_data, gate_version) if it["id"] not in seen_ids]
     line = lambda it: "  %s [%s] %s" % (it["id"], it["status"], sl.oneline(it.get("title") or it["text"], 80))
     shown = lambda items, f=line: [f(it) for it in items[:sl.MAX_LISTED]] + (["  … +%d" % (len(items) - sl.MAX_LISTED)] if len(items) > sl.MAX_LISTED else [])
     built = lambda it: "%s -> %s" % (line(it), sl.oneline(it.get("evidence") or "-", 70))
@@ -2003,6 +2131,42 @@ def cmd_capacity(args):
     return 0
 
 
+def cmd_away(args):
+    """R-641: the away flag and its queue, in the Budgit home. `on`/`off` are the manual switch (the user's typed «me voy» sets it from the
+    hook); `off` prints and clears this project's queue (the flag stays; the next real prompt clears it); `note` appends a question for the user's return."""
+    import away
+    try:
+        mine = sl.resolve_project(args.project)      # the queue is shown and cleared per project, never machine-wide
+    except sl.StudioError:
+        mine = away.project_key(None, os.getcwd())   # the same key the hook files its entries under
+    # Gate in the CLI, not a deny-list in the hook: only a real terminal turns the flag on (Claude's Bash tool has no TTY), and
+    # nothing here ever clears the flag (the user's next real prompt does). `off` and `--clear` touch only this project's queue.
+    if getattr(args, "clear", False):
+        away.clear_queue(project=mine)
+        print("away: this project's queue cleared (the flag is untouched)")
+        return 0
+    if args.action == "on":
+        if not sys.stdin.isatty():
+            print("budgit away on: refused, it needs a real terminal; the user turns it on by typing «me voy» or running it in a terminal",
+                  file=sys.stderr)
+            return 1
+        away.set_away(SESSION)
+        print("away: on")
+    elif args.action == "off":
+        sys.stdout.write(away.render(project=mine))
+        away.clear_queue(project=mine)
+        print("away: this project's queue cleared (the flag is untouched; the user's next message clears it)")
+    elif args.action == "note":
+        text = " ".join(args.text)
+        if not away.note(text, "note", SESSION, project=mine):
+            print("budgit away note: give the question as text", file=sys.stderr)
+            return 1
+        print("noted for the user's return; continue with other unblocked work")
+    else:
+        sys.stdout.write(away.render(project=mine))
+    return 0
+
+
 def cmd_triggers(args):
     """R-286 task 4: the decisions to bring to the user now (max 3 a day, urgent first). Read-only on every ledger; `shown`
     and `answered` write the cap and backoff state in the Budgit home."""
@@ -2393,7 +2557,20 @@ def build_parser():
     s.add_argument("--push-after-commit", choices=sl.PUSH_MODES,
                    help="after a commit: ask the user before pushing (default) | always push | never mention it")
     s.add_argument("--force", action="store_true", help="change an existing config: only the flags you pass change, every other key is kept")
+    s.add_argument("--answer", action="append", metavar="KEY=VALUE",
+                   help="record an answer, repeatable: structure|cleanup|keepalive|standup|jobs = yes|no|later (a yes sets a job up)")
+    s.add_argument("--at", help="with --answer standup=yes (or cleanup): the time of day, HH:MM")
+    s.add_argument("--every", help="with --answer keepalive=yes: the period, e.g. 2h, 90m (at least 10m)")
     s.set_defaults(func=cmd_setup)
+    s = sub.add_parser("busy", parents=[common], help="is the machine busy? median CPU over a minute above 85 %% or memory under 1 GB: exit 10, else 0")
+    s.add_argument("--window", type=int, default=60, help="seconds of CPU sampling (default 60)")
+    s.set_defaults(func=cmd_busy)
+    s = sub.add_parser("job", parents=[common], help="the opt-in background jobs: on (needs a recorded yes), off, status, precheck, run")
+    s.add_argument("op", choices=("on", "off", "status", "precheck", "run"))
+    s.add_argument("name", choices=("cleanup", "keepalive", "standup"))
+    s.add_argument("--at", help="with on: HH:MM for cleanup and stand-up")
+    s.add_argument("--every", help="with on: the period for keep-alive, e.g. 2h")
+    s.set_defaults(func=cmd_job)
     s = sub.add_parser("layout", parents=[common], help="documents saved outside the project's data folder: list, move (--move --yes), undo")
     s.add_argument("--move", action="store_true", help="move them into the data folder (dry run unless --yes)")
     s.add_argument("--yes", action="store_true", help="with --move: really move them")
@@ -2428,6 +2605,10 @@ def build_parser():
     s.add_argument("op", choices=("log",))
     s.add_argument("text", nargs="+", help="the line to append (or - to read it from stdin)")
     s.set_defaults(func=cmd_tm)
+    s = sub.add_parser("rules", parents=[common], help="the team rules: list, show, off, on, edit a topic")
+    s.add_argument("action", choices=("list", "show", "off", "on", "edit"))
+    s.add_argument("topic", nargs="?")
+    s.set_defaults(func=cmd_rules)
     s = sub.add_parser("housekeeping", parents=[common], help="the daily tidy-up: flow count, then merged clean idle worktrees and branches (dry run unless --apply)")
     s.add_argument("--apply", action="store_true", help="remove them (git worktree remove and git branch -d only); without it, only say what would go")
     s.add_argument("--only", action="append", metavar="DIR", help="only this project folder (repeatable)")
@@ -2478,6 +2659,7 @@ def build_parser():
     s = sub.add_parser("release-check", parents=[common], help="release gate: every item must be built or deferred by the user, and none may drift from git (a main commit saying fix/build/merge while the item stays open a day later; park it with `ledger phase later R-n --reason ...`)")
     s.add_argument("--items", nargs="+", metavar="R-n", help="the release request: look only at these items plus everything in progress")
     s.add_argument("--since", metavar="REF", help="also check the commits since this git ref for ones that name no item (advice only)")
+    s.add_argument("--version", help="the release being cut (default: plugin.json); items in this phase that carry the user's words must be built or deferred")
     s.set_defaults(func=cmd_release_check)
     s = sub.add_parser("chat-link", parents=[common], help="print the desktop-app link of the chat whose session id starts with PREFIX (read-only)")
     s.add_argument("prefix", help="the first characters of the session id (at least 8)")
@@ -2485,6 +2667,10 @@ def build_parser():
     s = sub.add_parser("migrate-install", parents=[common], help="move a live-folder install to the public marketplace (asks before running)")
     s.add_argument("--repo", help="the public repo OWNER/NAME (read from the exported manifest when it has one)")
     s.set_defaults(func=cmd_migrate_install)
+    s = sub.add_parser("reorganize", parents=[common], help="write the team role map (one PM per project, the TM on top) in Budgit's home; --dry-run shows it, --undo restores the previous map")
+    s.add_argument("--dry-run", action="store_true", help="print the summary and write nothing")
+    s.add_argument("--undo", action="store_true", help="put the previous role map back")
+    s.set_defaults(func=cmd_reorganize)
     s = sub.add_parser("colour", parents=[common], help="show or set the colour of the line under the prompt")
     s.add_argument("value", nargs="?", help="on, off or auto (colour unless you turned it off)")
     s.set_defaults(func=cmd_colour)
@@ -2525,6 +2711,11 @@ def build_parser():
     s = sub.add_parser("capacity", parents=[common], help="how many items may run at once, and how the limit is shared between projects")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_capacity)
+    s = sub.add_parser("away", parents=[common], help="the user is away: the flag and the queue of questions kept for their return (on|off|status|note)")
+    s.add_argument("action", nargs="?", default="status", choices=["on", "off", "status", "note"])
+    s.add_argument("text", nargs="*", help="note: the question to keep for the user's return")
+    s.add_argument("--clear", action="store_true", help="clear this project's queue without printing it (the flag is untouched)")
+    s.set_defaults(func=cmd_away)
     s = sub.add_parser("triggers", parents=[common], help="the decisions waiting for the user now (max 3 a day, urgent first)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_triggers, action=None)

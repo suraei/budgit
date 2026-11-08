@@ -224,8 +224,8 @@ def target(config_dir=None, root=None):
 
 
 def suffix(state):
-    """The tail of the status line for `state` (empty when None). A stale chat gets none (R-467): the mod reloads it by itself, a new
-    chat loads the new version, and the mod's own button is the fallback, so the line never nags the person to type /reload-plugins."""
+    """The tail of the status line for `state` (empty when None). A stale chat gets none (R-467): a new chat loads the new version,
+    so the line never nags the person to type /reload-plugins."""
     if not state or state["kind"] == "stale-chat":
         return ""
     return " ↑" + state["available"]

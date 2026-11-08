@@ -111,7 +111,7 @@ reference/ledger.md). Record `CORRECTION #n` + root cause whenever the user corr
   then ask with an interactive question card in the same turn; each question names the file by the same short name as its
   card. Never put a markdown link inside a question: the card shows it as raw text. A file that exists only in an inline
   widget or as a bare path in prose has not been shown. A mock shows only what the end user will see.
-- **Asking the user to test something:** write out each step in plain words: what to do and what they should see. Never name a test by a code, row or section ("V1 to V14", "Stage 4"), never "the file from before", never "test whenever you like" without the steps; hand-test files keep their codes inside.
+- **Asking the user to test something:** give every step in plain words, with what to do and what they should see. Never name a test by a code, row or section ("T1-T9", "Step 4"), and never send them to "the file from before" or tell them to try it at any time without the steps; hand-test files keep their codes inside.
 - **Every choice is a record:** a pick the user makes becomes a ledger item the same turn, in their words.
 - **Serious or broad work starts with a proposed method:** the approach and tools, and what they may miss, before the first step.
 - **Ask in rounds:** ≤4 independent decisions per AskUserQuestion, recommended option first.
@@ -124,7 +124,7 @@ reference/ledger.md). Record `CORRECTION #n` + root cause whenever the user corr
   frontmatter, an `INDEX.md` per knowledge folder. No vector DB unless Budgit's benchmark says so.
 
 ## Lanes (several sessions on one project)
-- **Independent work goes to its own session at once**: a build lane, a research lane, a design lane. The coordinating session decides, talks to the user and relays every lane question and update; it does no lane work itself. The user never has to open a lane.
+- **Start independent work in a separate session right away**: a build lane, a research lane, a design lane. The coordinating session decides, talks to the user and passes on each question and update from a lane; it does no lane work itself, and the user never needs to open a lane.
 - **Every brief starts the same way:** bind first with `budgit activate --since-now <project dir>`, then `budgit ledger start R-n` for the item. An unbound session cannot claim anything. Say in the brief: never ask the user in the lane, send the need to the coordinator.
 - **Every brief has a `Skills:` line** from reference/routing.md; the coordinator's habits (evidence, stop orders, release table) are in reference/coordination.md. A build ask is never coded by the coordinator: brief `budgit:builder` with reference/builder-brief.md.
 - **One writer per set of files.** Two lanes never edit the same files. Lanes commit only the paths they changed, by explicit path.

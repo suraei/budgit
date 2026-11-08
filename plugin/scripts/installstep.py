@@ -115,7 +115,7 @@ def _log(home, text):
 def owned_jobs():
     """Every plist label Budgit owns outside the plugin folder. Later jobs join this list."""
     import housekeeping
-    return [housekeeping.JOB]
+    return list(housekeeping.JOBS.values())
 
 
 def step_jobs_v1(root, python):

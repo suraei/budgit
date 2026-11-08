@@ -13,6 +13,7 @@ VERSION = 1
 NO_CAP = 10 ** 6
 GIT_TIMEOUT_S = 5
 PRIVATE = "private"
+LOCK_NAME = "portfolio"          # the Budgit home lock for read-modify-write of portfolio.json (tm / pm records)
 CHAT_STATE = {"busy": "working", "waiting": "waiting", "idle": "resting"}
 
 
@@ -276,32 +277,35 @@ def add(path, name=None):
     real = livework.canon(os.path.expanduser(path))
     if not os.path.isdir(real):
         raise sl.StudioError("not a folder: %s" % path)
-    data = registry()
-    entry = next((e for e in data["projects"] if e["path"] == real), None)
-    if entry is None:
-        entry = _entry(real)
-        data["projects"].append(entry)
-    if name is not None:
-        entry["name"] = name.strip() or None
-    save(data)
+    with sl.home_lock(LOCK_NAME):
+        data = registry()
+        entry = next((e for e in data["projects"] if e["path"] == real), None)
+        if entry is None:
+            entry = _entry(real)
+            data["projects"].append(entry)
+        if name is not None:
+            entry["name"] = name.strip() or None
+        save(data)
     return entry
 
 
 def set_pm(key, session_id):
     if not sl.valid_session(session_id):
         raise sl.StudioError("not a session id: %r" % session_id)
-    data = registry()
-    find(data, key)["pm"] = session_id
-    save(data)
+    with sl.home_lock(LOCK_NAME):
+        data = registry()
+        find(data, key)["pm"] = session_id
+        save(data)
 
 
 def set_channel(key, on, reason=None):
     if not on and not (reason or "").strip():
         raise sl.StudioError("`off` needs --reason: a project is never taken out silently")
-    data = registry()
-    entry = find(data, key)
-    entry["channel"], entry["reason"] = ("current", None) if on else ("off", reason.strip())
-    save(data)
+    with sl.home_lock(LOCK_NAME):
+        data = registry()
+        entry = find(data, key)
+        entry["channel"], entry["reason"] = ("current", None) if on else ("off", reason.strip())
+        save(data)
 
 
 PRIORITIES = ("high", "normal", "low")
@@ -316,9 +320,10 @@ def project_priority(path):
 def set_priority(key, value):
     if value not in PRIORITIES:
         raise sl.StudioError("unknown priority %r (use %s)" % (value, ", ".join(PRIORITIES)))
-    data = registry()
-    find(data, key)["priority"] = value
-    save(data)
+    with sl.home_lock(LOCK_NAME):
+        data = registry()
+        find(data, key)["priority"] = value
+        save(data)
 
 
 def protect(key):
@@ -357,9 +362,10 @@ def set_tm(session_id):
     """Record which chat is the Team Manager: its prompts go to the TM inbox, never into a project's inbox."""
     if not sl.valid_session(session_id):
         raise sl.StudioError("not a session id: %r" % session_id)
-    data = registry()
-    data["tm"] = session_id
-    save(data)
+    with sl.home_lock(LOCK_NAME):
+        data = registry()
+        data["tm"] = session_id
+        save(data)
 
 
 def is_tm(session_id):

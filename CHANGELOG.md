@@ -1,6 +1,17 @@
 # Changelog
 
-Update with `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, then `/reload-plugins` in Claude Code. The Release notes page of the wiki has the same notes.
+To update, ask Claude in any chat to update Budgit: it runs `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, and reports the version. Your next chat uses it. In a terminal session, `/reload-plugins` is an optional extra. The Release notes page of the wiki has the same notes.
+
+## 0.13.9
+
+- **The update says when it takes effect.** After an update, `budgit update` prints one line: "Budgit updated to X; your next chat uses it".
+- **Keep-alive and away mode («me voy») are on by default.** Switch them off with `budgit setup --answer keepalive=no` (or `budgit job off keepalive`) and `budgit setup --answer away=no`.
+- **After an update, Budgit asks once about the rest.** It asks whether to set up the lead and team structure, and whether to turn on the daily cleanup and a morning stand-up at 08:00; both stay off without your yes. Answer later with `budgit setup --answer cleanup=yes` (or `no`, `later`; keys are structure, cleanup, standup).
+- **No checks card on an empty project.** A project with nothing in it no longer gets a card proposing checks.
+- **The team rules are on by default.** Turn a topic off with `budgit rules off <topic>`, back on with `budgit rules on <topic>`; `budgit rules list` shows them.
+- **New `budgit job status`, `budgit job on` and `budgit job off`** for the cleanup, keep-alive and stand-up jobs. A job checks first whether it has anything to do, and skips the run if not.
+- **New `budgit busy`.** It says whether the machine is busy (CPU or memory) so heavy work can wait.
+- **Known gap.** The rules block does not yet show your own settings (language, standing permissions, protected projects); that arrives in the next version.
 
 ## 0.13.8
 

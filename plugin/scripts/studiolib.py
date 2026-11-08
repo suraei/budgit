@@ -704,6 +704,35 @@ def home_lock(name, strict=False):
         os.close(fd)
 
 
+@contextlib.contextmanager
+def home_try_lock(name, timeout=1.0):
+    """As home_lock, but never blocks past `timeout` seconds: yields True with the lock held, or False (nothing held) when it
+    stayed taken or cannot be opened. For hooks, which must never wait."""
+    try:
+        os.makedirs(home_state(), mode=0o700, exist_ok=True)
+        fd = os.open(os.path.join(home_state(), name + ".lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        yield False
+        return
+    got = False
+    try:
+        end = time.monotonic() + max(timeout, 0)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                got = True
+                break
+            except OSError:
+                if time.monotonic() >= end:
+                    break
+                time.sleep(0.02)
+        yield got
+    finally:
+        if got:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def path_key(path):
     """A project's key in the Budgit home state files: a hash of its real path, so a file that is read for counts never holds
     the path of a protected project."""
@@ -2666,6 +2695,25 @@ def release_scope(data, ids=None):
     return out
 
 
+def scope_gate(data, version):
+    """R-399: the release's own phase. Items in phase `version` that carry the user's words (a linked input I-n in `src`) and are
+    neither done/verified nor deferred block the release, whatever the release request lists. Deferred = the phase moved on
+    (`ledger phase R-n <later version>` or `later`), or the item field `deferred` names a version other than this one."""
+    if not version:
+        return []
+    out = []
+    for it in data["items"]:
+        if it.get("phase") != version or it["status"] not in ("open", "doing"):
+            continue
+        if not any(isinstance(s, str) and s.startswith("I-") for s in it.get("src") or ()):
+            continue
+        deferred = it.get("deferred")
+        if isinstance(deferred, str) and deferred.strip() and deferred.strip() != version:
+            continue
+        out.append(it)
+    return out
+
+
 def short(text, n=90):
     return oneline(text, n)
 
@@ -4593,6 +4641,10 @@ def _verify_command_clean(command, cwd):
     return True
 
 
+_GIT_EXEC_OPTS = re.compile(r"(?:^|\s)(?:-c|-[A-Za-z]*O)|--(?:output|open-files|ext-diff|textconv|upload-pack|receive-pack|exec|config-env|paginate)|"
+                            r"(?:^|\s)GIT_\w+=")      # `git diff --output=F` writes F, `-c core.pager=..` / `--upload-pack=..` run a program
+
+
 def verify_forgery_decision(tool, tool_input, agent_type, cwd):
     """.budgit/verify/R-n.md is what `ledger verify` trusts: only budgit:verifier writes it. The primary defence is
     the seal (budgit:verifier's own Write/Edit, see seal_verify_report in hook.py); this is the early nudge."""
@@ -4652,9 +4704,7 @@ def verify_forgery_decision(tool, tool_input, agent_type, cwd):
                 return ("deny", reason)
             continue
         git = _GIT_VERB.match(seg)
-        if git and ">" not in seg and git.group(1) in _GIT_READ_VERBS and not re.search(
-                r"(?:^|\s)(?:-c\b|-O)|--(?:output|open-files|ext-diff|textconv|upload-pack|receive-pack|exec|config-env|paginate)|"
-                r"(?:^|\s)GIT_\w+=", rseg):          # `git diff --output=F` writes F, `-c core.pager=..` / `--upload-pack=..` run a program
+        if git and ">" not in seg and git.group(1) in _GIT_READ_VERBS and not _GIT_EXEC_OPTS.search(rseg):  # `git diff --output=F` writes F, `-c core.pager=..` / `--upload-pack=..` run a program
             continue                         # reading/committing reports is bookkeeping, not authorship
         if not chdir and not obfuscated and _names_data_dir(seg) and _copy_out_only(rseg, seg):
             continue                         # copying OUT of .budgit/verify cannot forge a report (P6 r4 INFO)

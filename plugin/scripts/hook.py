@@ -44,7 +44,10 @@ def flush():
         for d in (_OUT, _OUT.get("hookSpecificOutput") or {}):   # never updatedInput: tool input stays as written
             for k in _TEXT_KEYS:
                 if isinstance(d.get(k), str):
-                    d[k] = sl.cloud_names(d[k])
+                    try:
+                        d[k] = sl.cloud_names(d[k])
+                    except Exception:            # a failed rename of text must never drop the decision it sits in
+                        pass
         sys.stdout.write(json.dumps(_OUT, ensure_ascii=True))
 
 
@@ -172,7 +175,32 @@ def on_tm(event, inp):
     return True
 
 
+def _away_now():
+    try:
+        import away
+        return away.is_away()
+    except Exception:
+        return False
+
+
+def _away_note(text, kind, session=None, project=None, cwd=None):
+    """R-641: queue a note for the user's return, under the same project key the CLI reads (`away.project_key`). A failed queue write
+    (disk full, a directory planted at the queue path) is logged and swallowed: it must never stop the deny that goes with it
+    from being printed (fail-open fix)."""
+    try:
+        import away
+        away.note(text, kind, session, project=away.project_key(project, cwd))
+    except Exception:
+        try:
+            sl.log_error("away note")
+        except Exception:
+            pass
+
+
 def _decision(event, decision, reason):
+    if decision == "ask" and event == "PreToolUse" and _away_now():      # R-641: nothing waits for the user while they are away
+        import away
+        decision, reason = "deny", away.REASON + " | " + reason[:200]
     emit({"hookSpecificOutput": {"hookEventName": event, "permissionDecision": decision,
                                  "permissionDecisionReason": reason}})
 
@@ -263,21 +291,28 @@ def on_pre_tool_use(inp, project, defer=None):
     (audit lines) runs at once, or is appended to `defer` for the caller to run under the lock."""
     tool = inp.get("tool_name")
     if tool == ARCHIVE_TOOL:            # R-301: a chat being renewed is archived only after the new chat's echo
-        import relay
-        reason = relay.archive_block(inp.get("session_id"), (inp.get("tool_input") or {}).get("session_id"))
+        try:
+            import relay
+            reason = relay.archive_block(inp.get("session_id"), (inp.get("tool_input") or {}).get("session_id"))
+        except Exception:                # fail closed: the archive is held when the check could not run
+            sl.log_error("archive guard")
+            reason = "budgit guard: the archive check could not run; stop and report it, do not retry."
         if reason:
             _decision("PreToolUse", "deny", reason)
         return
     if tool in ("Agent", "Task"):
-        fill_agent_model(inp)
-        import admit
-        advice = admit.advice()
-        if advice:
-            _context("PreToolUse", advice)
-        import codexlane
-        note = codexlane.review_first_note(project, (inp.get("tool_input") or {}).get("subagent_type"))
-        if note:
-            _context("PreToolUse", note)
+        try:                            # bookkeeping and advice only; a failure here is logged, never a reason to skip the rest
+            fill_agent_model(inp)
+            import admit
+            advice = admit.advice()
+            if advice:
+                _context("PreToolUse", advice)
+            import codexlane
+            note = codexlane.review_first_note(project, (inp.get("tool_input") or {}).get("subagent_type"))
+            if note:
+                _context("PreToolUse", note)
+        except Exception:
+            sl.log_error("agent start")
         return
     tool_input = inp.get("tool_input") or {}
     cwd = inp.get("cwd") or project or os.getcwd()
@@ -325,7 +360,12 @@ def on_pre_tool_use(inp, project, defer=None):
                                           session=inp.get("session_id"))))
         found.append(("contract-lock", closed("ask", sl.contract_lock_decision, tool, tool_input, project, cwd=cwd)))
     result = _combine([d for _, d in found])
-    try:                                             # R-493: which call asked, so only ITS PostToolUse can become a yes
+    if result and result[0] == "ask" and _away_now():   # R-641: every guard ask becomes a deny while the user is away; a deny stays a deny
+        import away
+        _away_note("guard ask for %s: %s" % (tool, result[1][:300]), "guard", inp.get("session_id"), project, cwd)
+        result = ("deny", away.REASON + " | " + result[1][:200])
+        found = [(n, d) for n, d in found if not (d and d[0] == "ask")] + [("away", result)]
+    try:                                           # R-493: which call asked, so only ITS PostToolUse can become a yes
         if result and result[0] == "ask" and rd_keys and any(n in ("real-data", "budgit-home") and d and d[0] == "ask" for n, d in found):
             sl.note_real_data_ask(inp.get("session_id"), tool, tool_input, rd_keys)
         else:
@@ -496,6 +536,62 @@ def _session_start_writes(inp, project, sid):
         sl.log_error("session-start: gitignore step")
 
 
+def _default_keepalive(postupdate):
+    """R-583: keep-alive is ON by default. The first session after an update sets it up unless keepalive=no is stored, and says
+    once that it is on, away mode is on, and how to switch each off. Stand-up and cleanup stay opt-in."""
+    try:
+        if not postupdate.default_keepalive_due():
+            return
+        import jobs
+        postupdate.answer("keepalive", "yes")           # the default counts as the recorded yes
+        budgit = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "bin", "budgit")
+        code, _text = jobs.turn_on("keepalive", budgit)
+        if code != 0:
+            postupdate.answer("keepalive", "later")     # nothing was set up: try again next session
+            return
+        line = ("Tell the user once, in their language: keep-alive (a wake-up of idle project work every 2 hours) is on by default; "
+                "`budgit setup --answer keepalive=no` or `budgit job off keepalive` switches it off.")
+        if postupdate.away_enabled():
+            line += (" Away mode («me voy») is on too; `budgit setup --answer away=no` switches it off. "
+                     "Stand-up and cleanup stay off unless the user asks.")
+        _context("SessionStart", line)
+    except Exception:
+        sl.log_error("session-start: keep-alive default")
+
+
+def on_rules_and_questions(inp, project):
+    """R-788: the team rules for this role (sent again after a compact) and, at most once per session, one question line
+    for what an update still has to ask. Returns True when SETUP_NUDGE was merged into that one directive.
+    Role: the coordinator when portfolio.is_tm(session), a project lead when a project is bound, else core only.
+    There is no [design] line: the cards add no new UI of their own."""
+    import postupdate
+    import rules
+    import portfolio
+    sid = inp.get("session_id")
+    state = postupdate.load()
+    if state["rules"]["enabled"]:
+        role = "coordinator" if portfolio.is_tm(sid) else ("lead" if project else "plain")
+        text = rules.digest(role, off=state["rules"]["off"])
+        version = __import__("updatelib").running_version(sl.studio_root()) or "0"
+        if inp.get("source") != "compact" and state["rules"]["told"] != version:
+            text += ("\nTell the user once, in their language: Budgit team rules are on; `budgit rules off <topic>` "
+                     "turns a part off, `budgit rules list` shows the topics.")
+            postupdate.mark_told(version)
+        _context("SessionStart", text)
+    if sl.vendored():
+        return False
+    _default_keepalive(postupdate)
+    keys = postupdate.unanswered()
+    if not keys or not postupdate.claim(sid or "", time.time()):
+        return False
+    need_nudge = not project and not os.path.exists(os.path.join(sl.home_state(), "config.json"))
+    if need_nudge:                                 # one directive, not two: the setup call, then the questions
+        _context("SessionStart", sl.SETUP_NUDGE + " " + postupdate.question_line(keys, with_setup_first=True))
+        return True
+    _context("SessionStart", postupdate.question_line(keys))
+    return False
+
+
 def on_session_start(inp, project, held=True):
     import brain
     sid = inp.get("session_id")
@@ -652,7 +748,21 @@ def when_busy(event, inp, project):
         _busy_note(event, "skipped")
 
 
-HANDLERS = {"user-prompt-submit": on_prompt, "pre-tool-use": on_pre_tool_use,
+def on_permission_request(inp, project=None):
+    """R-641: Claude Code's own permission prompt; unchanged unless the user is away, then denied and queued."""
+    if _away_now():
+        import away
+        try:
+            shown = json.dumps(inp.get("tool_input"), ensure_ascii=False)[:300]
+        except Exception:
+            shown = "(unreadable)"
+        _away_note("permission prompt for %s %s" % (inp.get("tool_name"), shown), "permission", inp.get("session_id"),
+                   project, inp.get("cwd"))
+        emit({"hookSpecificOutput": {"hookEventName": "PermissionRequest",
+                                     "decision": {"behavior": "deny", "message": away.REASON, "interrupt": False}}})
+
+
+HANDLERS = {"permission-request": on_permission_request, "user-prompt-submit": on_prompt, "pre-tool-use": on_pre_tool_use,
             "post-tool-use": on_post_tool_use, "stop": on_stop, "subagent-stop": on_subagent_stop,
             "session-start": on_session_start, "post-compact": on_post_compact, "session-end": on_session_end,
             "pre-compact": on_pre_compact, "post-tool-use-failure": on_post_tool_use_failure}
@@ -664,7 +774,13 @@ def main():
         inp = json.load(sys.stdin)
         if isinstance(inp, dict) and inp.get("agent_type"):
             inp["agent_type"] = sl.canon_agent(inp["agent_type"])   # cloud `studio-X` == plugin `studio:X` for every guard
-        project = sl.project_for_session(inp.get("session_id"))
+        try:                                           # a failed lookup must not take the guards down with it
+            project = sl.project_for_session(inp.get("session_id"))
+        except Exception:
+            sl.log_error("project lookup")
+            project = None
+            emit({"systemMessage": "budgit: project lookup failed in %s — enforcement off this turn; "
+                                   "see ~/.budgit/hooks.log" % event})
         if not project and event in ("session-start", "user-prompt-submit"):
             project = sl.auto_bind(inp.get("session_id"), inp.get("cwd"), inp)   # a chat in a project folder is bound
         if event in ("user-prompt-submit", "stop"):    # R-115 heartbeat: last_seen, at most once a minute
@@ -673,6 +789,32 @@ def main():
                 project = None
         if event == "user-prompt-submit":
             on_trust_prompt(inp)            # the user's own typed /budgit-trust work|revoke, in every session
+            try:                            # R-641: «me voy» sets, the user's next real prompt clears; only from this real event
+                import away
+                import postupdate
+                import i18n
+                state = away.on_prompt(inp) if postupdate.away_enabled() else None     # R-583: away=no switches «me voy» off
+                if state == "on":
+                    emit({"systemMessage": i18n.t("away.on")})
+                elif state == "off" and away.queue(project=away.project_key(project, inp.get("cwd"))):
+                    _context("UserPromptSubmit", "budgit: the user is back. %d question(s) were queued while they were away: run `budgit "
+                             "away off` to read and clear them, then bring them to the user in ONE card with a recommended default each."
+                             % len(away.queue(project=away.project_key(project, inp.get("cwd")))))
+            except Exception:
+                sl.log_error("away prompt")
+        if event == "permission-request":   # R-641: Claude Code's own permission prompt; unchanged unless the user is away
+            on_permission_request(inp, project)
+            return 0
+        if event == "pre-tool-use" and inp.get("tool_name") == "AskUserQuestion":   # R-641: only while away; otherwise as before
+            if _away_now():
+                import away
+                try:
+                    asked = away.ask_text(inp.get("tool_input"))
+                except Exception:
+                    asked = "(unreadable question)"
+                _away_note(asked, "ask", inp.get("session_id"), project, inp.get("cwd"))
+                _decision("PreToolUse", "deny", away.REASON)
+            return 0
         if event == "user-prompt-submit":  # context nudge runs in EVERY session, zero model tokens
             try:
                 note = relay_note(inp)
@@ -720,6 +862,15 @@ def main():
                         _context("SessionStart", offer)
                 except Exception:
                     sl.log_error("session-start: verifier checks offer")
+            try:                                 # R-399: the role block and the once-per-version reorganize
+                import roles
+                done = roles.apply_once()
+                if done:
+                    emit({"systemMessage": "budgit: " + done})
+                for text in roles.session_start_texts(inp, project):
+                    _context("SessionStart", text)
+            except Exception:
+                sl.log_error("session-start: roles")
             import general
             if not project:
                 project = general.bind(inp)      # R-373: the general notebook
@@ -727,8 +878,14 @@ def main():
             if found:                            # R-373: one line and the command, once per folder; nothing is created
                 emit({"systemMessage": found[0]})
                 _context("SessionStart", "budgit: offered the user a notebook for this folder (%s). Create it only if they say yes." % found[1])
+        nudged = False
+        if event == "session-start":
+            try:
+                nudged = on_rules_and_questions(inp, project)
+            except Exception:
+                sl.log_error("session-start: rules and questions")
         if event == "session-start" and not project:   # model rules matter in every session, not only Budgit ones
-            if not sl.vendored() and not os.path.exists(os.path.join(sl.home_state(), "config.json")):
+            if not nudged and not sl.vendored() and not os.path.exists(os.path.join(sl.home_state(), "config.json")):
                 _context("SessionStart", sl.SETUP_NUDGE)   # R-52 E3: first run on a new machine
             import budget
             cur = budget.current()
@@ -740,9 +897,13 @@ def main():
             import agentcap
             agentcap.reset(inp.get("agent_id"))
         if event == "pre-tool-use" and inp.get("agent_id"):   # R-63: per-subagent call ceiling, every session
-            import agentcap
-            import budget
-            cap = agentcap.check(inp, budget.policy(budget.current()["level"])["agent_calls"])
+            try:                                # a failure of the call-count bookkeeping must not drop the guards that follow
+                import agentcap
+                import budget
+                cap = agentcap.check(inp, budget.policy(budget.current()["level"])["agent_calls"])
+            except Exception:
+                sl.log_error("agent call cap")
+                cap = None
             if cap and cap[0] == "deny":
                 _decision("PreToolUse", "deny", cap[1])
                 return 0
