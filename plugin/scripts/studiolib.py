@@ -3973,7 +3973,7 @@ _BASH_WRITE = re.compile(r">|\btee\b|\bsed\b[^|;&]*\s(?:-[a-zA-Z]*i|--in-place)|
                          r"\bcurl\b[^|;&]*\s-(o|-output)\b")
 _HARMLESS_REDIR = re.compile(r"&>>?\s*/dev/null\b|\d*>>?\s*/dev/null\b|\d*>&\d+")
 _GIT_VERB = re.compile(r"\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*\S*git\s+(?:-[Cc]\s+\S+\s+|--?[a-z-]+(?:=\S+)?\s+)*(\S+)")
-_GIT_READ_VERBS = {"add", "commit", "diff", "log", "show", "status", "ls-files", "blame", "grep", "push", "fetch"}
+_GIT_READ_VERBS = {"add", "commit", "diff", "log", "show", "status", "ls-files", "blame", "grep"}
 _GIT_PATH_VERBS = {"checkout", "restore", "mv", "rm", "apply", "checkout-index", "read-tree", "update-index",
                    "stash"}                  # stash: only `stash push` (or `stash -- paths`) takes paths
 _ASK_TAIL = " If you cannot get the user's answer, stop and report it — do not reword or retry."
@@ -4641,8 +4641,158 @@ def _verify_command_clean(command, cwd):
     return True
 
 
+_GIT_ENV = re.compile(r"(?:^|\s)GIT_\w+=")      # GIT_PAGER=.. / GIT_EXTERNAL_DIFF=.. run a program
+
+# 0.13.9 security: a `git <read verb>` line is read-only under ONE accepted shape (an allow list, not a deny list): git accepts
+# abbreviated long options (`--open=CMD` is `--open-files-in-pager=CMD`, `--outp=F` is `--output=F`), so a list of bad names
+# can never be complete. Every word that starts with `-` must be: between `git` and the verb only `-C <dir>`, `--no-pager`, `-P`;
+# after the verb a long option whose exact name is in _GIT_SAFE_LONG (with or without `=value`), or a short cluster made only of
+# letters in _GIT_SAFE_SHORT (no `O` pager, no `c` config/command). `--` ends the options. Anything else, abbreviations included,
+# is refused.
+_GIT_SAFE_SHORT = frozenset("abdfglmnqrstuvwxzABCDEFGHILMNPRSTUWXZ0123456789")      # no e, i, p: -e / -i open an editor
+_GIT_SAFE_LONG = frozenset((
+    "oneline", "stat", "name-only", "name-status", "graph", "all", "follow", "format", "pretty", "porcelain", "short", "branch",
+    "ignored", "untracked-files", "no-index", "cached", "staged", "others", "exclude-standard", "show-toplevel", "abbrev-ref",
+    "message", "amend", "include", "dry-run", "no-verify", "quiet", "verbose", "max-count", "since", "until", "grep", "no-merges",
+    "merges", "first-parent", "reverse", "decorate", "no-decorate", "date", "shortstat", "numstat", "summary", "patch", "unified",
+    "color", "no-color", "check", "line-number", "ignore-case", "word-regexp", "files-with-matches", "count", "extended-regexp",
+    "fixed-strings", "untracked", "and", "or", "not", "modified", "deleted", "full-name", "abbrev", "heading", "break", "context",
+    "show-function", "invert-match", "only-matching", "files-without-match", "no-patch", "oneline-abbrev", "stdin", "tracked",
+))
+
+
+def _git_options_listed(rseg):
+    """True when every `-` word of the segment is in the accepted shape above."""
+    try:
+        words = _shlex.split(rseg)
+    except ValueError:
+        return False
+    if not words or os.path.basename(words[0]) != "git":        # any leading NAME=value is refused (EDITOR=cmd git commit -e)
+        return False
+    i = 1
+    while i < len(words) and words[i].startswith("-"):          # between `git` and the verb
+        if words[i] == "-C" and i + 1 < len(words):
+            i += 2
+        elif words[i] in ("--no-pager", "-P"):
+            i += 1
+        else:
+            return False
+    i += 1                                                      # the verb
+    after_dd = False
+    for w in words[i:]:
+        if after_dd:                     # a `--` may be the VALUE of `-e`: after it, any `-` word is refused
+            if w.startswith("-"):
+                return False
+            continue
+        if w == "--":
+            after_dd = True
+            continue
+        if not w.startswith("-") or w == "-":
+            continue
+        if w.startswith("--"):
+            if w[2:].partition("=")[0] not in _GIT_SAFE_LONG:
+                return False
+        elif not set(w[1:]) <= _GIT_SAFE_SHORT:
+            return False
+    return True
+
+
+def _git_raw_expands(rseg):
+    """R-801: the line is judged unexpanded, so the RAW segment (quotes still in) must hold no `$` or backtick anywhere and
+    no unquoted `{`, `*`, `?` or `~` (the shell would expand them into words the option check never saw)."""
+    if "$" in rseg or "`" in rseg:
+        return True
+    quote = ""
+    esc = False
+    for ch in rseg:
+        if esc:
+            esc = False
+        elif ch == "\\" and quote != "'":
+            esc = True
+        elif quote:
+            if ch == quote:
+                quote = ""
+        elif ch in "'\"":
+            quote = ch
+        elif ch in "{*?~":
+            return True
+    return False
+
+
 _GIT_EXEC_OPTS = re.compile(r"(?:^|\s)(?:-c|-[A-Za-z]*O)|--(?:output|open-files|ext-diff|textconv|upload-pack|receive-pack|exec|config-env|paginate)|"
                             r"(?:^|\s)GIT_\w+=")      # `git diff --output=F` writes F, `-c core.pager=..` / `--upload-pack=..` run a program
+
+
+_GIT_PLAIN_CHARS = re.compile(r"[A-Za-z0-9 \t._/:=@,+%^'\"-]+")     # the only characters a no-ask git read line may hold
+
+
+def _git_read_segment(seg, rseg, backslash=False):
+    """A `git <read verb>` segment with no output redirect and only listed options (see _git_options_listed).
+    `backslash`: the ORIGINAL command held a backslash; _norm_cmd(quotes=True) had already turned it into `/`, so the
+    segment text can no longer show it (`\\-\\-output=F` looks like `/-/-output=F`): such a line is never a plain read."""
+    git = _GIT_VERB.match(seg)
+    if backslash or not _GIT_PLAIN_CHARS.fullmatch(rseg.strip()) or re.search(r"(?<![A-Za-z0-9])\^", rseg):     # `^` only after a name (HEAD^): zsh EXTENDED_GLOB `^x`    # one accepted shape on the RAW text: no backslash, bracket, parenthesis, newline ...
+        return False
+    return bool(git and ">" not in seg and git.group(1) in _GIT_READ_VERBS and not _GIT_ENV.search(rseg)
+                and not _git_raw_expands(rseg) and _git_options_listed(rseg))
+
+
+# R-623: `cd <dir> && ls .studio/verify` was refused only because of the `cd` (the reader judges relative targets from the
+# starting folder, so any cd bailed). A `cd` writes nothing, so it is let through under ONE accepted shape: every other part
+# of the line is a plain reader from _VERIFY_READERS (or a git read verb) with no redirect except to /dev/null|stderr|stdout, no
+# assignment, no variable or substitution, no find action. Then nothing in the line writes, whichever folder the cd picked.
+def _is_bare_cd(rseg):
+    """`cd DIR`: exactly one literal word (no glob, no option, no variable: _lex_plain refuses those), no redirect."""
+    parts = _lex_plain(rseg)
+    if not parts or len(parts) != 1 or parts[0][1]:
+        return False
+    words = parts[0][0]
+    return len(words) == 2 and words[0] == ("cd", False) and not words[1][1] and not words[1][0].startswith("-") \
+        and bool(words[1][0])
+
+
+def _cd_then_readers_only(raw, backslash=False):
+    """True when every part of the line is a bare `cd DIR` or a pure reader (shape above); a line with no cd at all counts too:
+    a reader writes nothing, so a backslash or regex in its quoted pattern (`grep -E "^\\.studio/"`) is not an obfuscation.
+    The line is split by the quote-aware lexer (a `|` inside a quoted pattern is not a pipe)."""
+    all_parts = _lex_plain(raw)
+    if not all_parts:
+        return False
+    for words, redirs in all_parts:
+        toks = [w for w, _g in words]
+        if len(toks) == 2 and toks[0] == "cd" and not redirs and toks[1] and not toks[1].startswith("-") and not words[1][1]:
+            continue
+        seg = " ".join(toks)
+        if toks and not redirs and _git_read_segment(seg.lower(), seg, backslash):
+            continue
+        if toks and toks[0] in ("cd", "pushd", "popd", "chdir"):
+            return False
+        if not toks or _ASSIGN.match(toks[0]) or "/" in toks[0] and os.path.dirname(toks[0]) not in _TRUSTED_BIN:
+            return False
+        head = os.path.basename(toks[0])
+        if head in _VERIFY_READERS_CHECKED:
+            if not _checked_reader_ok(head, toks):
+                return False
+        elif head not in _VERIFY_READERS or (head == "find" and _FIND_ACTIONS.intersection(toks)) or (
+                head == "printf" and "-v" in toks[1:]) or any("$(" in t or "`" in t for t in toks[1:]):
+            return False
+        if any(r[0] not in ("/dev/null", "/dev/stderr", "/dev/stdout") for r in redirs):
+            return False
+    return True
+
+
+# R-623: the ONE accepted shape for a heredoc: `git [-C DIR] commit ... -m "$(cat <<'DELIM'` + body + `DELIM` + `)"`, a QUOTED
+# delimiter (nothing in the body is expanded), the body having no line equal to DELIM (the shell would stop there), and no quote,
+# backslash, `#`, `$`, backtick or redirect before the git word on its line (so that none of it sits inside a string). The body is
+# a commit message, text; it is dropped before the line is judged. Everything else around it stays and is judged as before.
+_COMMIT_BODY = re.compile(
+    r"(?m)^(?P<pre>(?:[^\n'\"\\#`$()<>]*(?:&&|;)[ \t]*)?git(?:[ \t]+-C[ \t]+[^\s$`;&|<>()'\"\\]+)?[ \t]+commit\b"
+    r"[^\n$`;&|<>'\"\\]*?[ \t]-m[ \t]+\"\$\(cat[ \t]+<<[ \t]*'(?P<d>\w+)'[ \t]*)\n"
+    r"(?:(?!(?P=d)[ \t]*\n)[^\n]*\n)*(?P<end>(?P=d)\n\)\")")
+
+
+def _drop_commit_message_body(cmd):
+    return _COMMIT_BODY.sub(lambda m: m.group("pre") + "\n" + m.group("end"), cmd) if "<<" in cmd else cmd
 
 
 def verify_forgery_decision(tool, tool_input, agent_type, cwd):
@@ -4679,6 +4829,8 @@ def verify_forgery_decision(tool, tool_input, agent_type, cwd):
         return ("deny", "budgit guard: a Bash command may not run the plugin hook.py by hand or point BUDGIT_HOME "
                         "elsewhere for `ledger verify` — that mints or swaps the seal that proves budgit:verifier "
                         "wrote a report. Dispatch budgit:verifier instead.")
+    cmd = _drop_commit_message_body(cmd)
+    norm = _norm_cmd(cmd)
     lc = _fold(cmd)                          # the raw text, folded like the file system folds (APFS ignores case)
     has_data = re.search(r"\.(?:studio|budgit)", lc)
     # `verify` as a path part, a value or a group member (`/verify`, `=verify`, `{verify,x}`, `verify/`), not the CLI word `ledger verify`
@@ -4698,13 +4850,18 @@ def verify_forgery_decision(tool, tool_input, agent_type, cwd):
     # bash turns `verif\y` / `{x,verify}` into the verify dir, and _norm_cmd folds `\` to `/`: such a command never
     # gets the copy-out exemption (P6 r5 L1)
     obfuscated = re.search(r"[\\{}]", cmd)
+    # _norm_cmd(quotes=True) hides every backslash as `/` and NFKC turns look-alike characters into separators, so the
+    # normalised segments cannot say what the shell will run: ONE rule on the original text, no per-segment mapping
+    git_bs = ("\\" in cmd) or not cmd.isascii()
+    if mentions and _cd_then_readers_only(raw, git_bs):
+        return None                         # R-623: nothing on the line but readers (and a cd): it writes nowhere
     for seg, rseg in zip(segs, raw_segs):
+        bs = git_bs
         if not mentions:
             if _names_data_dir(seg) and _copies_into_studio(rseg):
                 return ("deny", reason)
             continue
-        git = _GIT_VERB.match(seg)
-        if git and ">" not in seg and git.group(1) in _GIT_READ_VERBS and not _GIT_EXEC_OPTS.search(rseg):  # `git diff --output=F` writes F, `-c core.pager=..` / `--upload-pack=..` run a program
+        if _git_read_segment(seg, rseg, bs) and not _GIT_EXEC_OPTS.search(rseg):   # allow list AND the exec-option refusal (`-c`, `-O`, `--output=` ...)
             continue                         # reading/committing reports is bookkeeping, not authorship
         if not chdir and not obfuscated and _names_data_dir(seg) and _copy_out_only(rseg, seg):
             continue                         # copying OUT of .budgit/verify cannot forge a report (P6 r4 INFO)

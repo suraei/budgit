@@ -661,9 +661,10 @@ def cmd_setup_answer(args):
                     print(_t("setup.structure_no_session"))
                 else:
                     import livework
-                    here = livework.canon(os.getcwd())
+                    explicit = getattr(args, "project", None)    # R-816: an explicit --project names the folder; no flag keeps the current one
+                    here = livework.canon(os.path.abspath(explicit) if explicit else os.getcwd())
                     try:
-                        hub = livework.canon(sl.hub_path(sl.load_config()))
+                        hub =livework.canon(sl.hub_path(sl.load_config()))
                     except sl.StudioError:
                         hub = None
                     if value == "yes" and livework.has_ledger(here) and here != hub:    # R-806: a project chat becomes that project's PM, never the lead
@@ -721,6 +722,12 @@ def cmd_job(args):
 
 
 def cmd_setup(args):
+    if getattr(args, "pending", False):          # R-816: the unanswered setup keys, same source as the post-update ask
+        import postupdate
+        keys = postupdate.unanswered()
+        if keys:
+            print(" ".join(keys))
+        return 0
     if args.answer:
         return cmd_setup_answer(args)
     accounts = {}
@@ -2356,12 +2363,23 @@ def _hours(text):
     return value
 
 
+def _plugin_version():
+    """R-816: the version of this plugin's own plugin.json (next to bin/), never another install's."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), ".claude-plugin", "plugin.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return str(json.load(f).get("version") or "unknown")
+    except (OSError, ValueError):
+        return "unknown"
+
+
 def build_parser():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--project", default=argparse.SUPPRESS,
                         help="project dir (default: session binding, then cwd)")
     p = argparse.ArgumentParser(prog="budgit", parents=[common], epilog=MAINTAINER_EPILOG,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--version", action="version", version="budgit " + _plugin_version())
     sub = p.add_subparsers(dest="cmd", required=True, metavar="command")
 
     a = sub.add_parser("activate", parents=[common])
@@ -2592,6 +2610,7 @@ def build_parser():
     s.add_argument("--force", action="store_true", help="change an existing config: only the flags you pass change, every other key is kept")
     s.add_argument("--answer", action="append", metavar="KEY=VALUE",
                    help="record an answer, repeatable: structure|cleanup|keepalive|standup|jobs = yes|no|later (a yes sets a job up)")
+    s.add_argument("--pending", action="store_true", help="list the setup keys still unanswered (nothing when none are left)")
     s.add_argument("--at", help="with --answer standup=yes (or cleanup): the time of day, HH:MM")
     s.add_argument("--every", help="with --answer keepalive=yes: the period, e.g. 2h, 90m (at least 10m)")
     s.set_defaults(func=cmd_setup)

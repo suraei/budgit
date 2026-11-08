@@ -2,6 +2,13 @@
 
 To update, ask Claude in any chat to update Budgit: it runs `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, and reports the version. Your next chat uses it. In a terminal session, `/reload-plugins` is an optional extra. The Release notes page of the wiki has the same notes.
 
+## 0.13.9.3
+
+- **Read-only git commands pass the report-folder guard.** A plain git read (status, log, diff and similar) with known options is allowed; anything else is still refused.
+- **`budgit --version`** prints the version of the installed plugin.
+- **`budgit setup --pending`** lists the setup questions that are still unanswered, and prints nothing when none are left.
+- **The structure answer honours `--project`.** With an explicit project folder the answer applies to that folder; without the flag it uses the current one.
+
 ## 0.13.9.2
 
 - **Answering yes inside a project's chat now works.** Budgit makes it the lead for that project and opens a separate coordinator chat on its own; each chat it opens is top level, never nested in another.
