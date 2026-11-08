@@ -34,7 +34,7 @@ def load():
     off = rules.get("off") if isinstance(rules.get("off"), list) else []
     return {"rules": {"enabled": rules.get("enabled", True) is not False, "off": [x for x in off if isinstance(x, str)],
                       "told": rules.get("told") if isinstance(rules.get("told"), str) else ""},
-            "answers": {k: v for k, v in answers.items() if k in KEYS + EXTRA_KEYS and v in VALUES}}
+            "answers": {k: v for k, v in answers.items() if k in KEYS + EXTRA_KEYS and (v in VALUES or (k == "structure" and v == "single"))}}
 
 
 def save(data):
@@ -64,8 +64,8 @@ def default_keepalive_due():
 
 
 def answer(key, value):
-    if key not in KEYS + EXTRA_KEYS or value not in VALUES:
-        raise sl.StudioError("answer %s=%s: keys %s, values %s" % (key, value, "/".join(KEYS + EXTRA_KEYS), "/".join(VALUES)))
+    if key not in KEYS + EXTRA_KEYS or not (value in VALUES or (key == "structure" and value == "single")):
+        raise sl.StudioError("answer %s=%s: keys %s, values %s (structure also takes single)" % (key, value, "/".join(KEYS + EXTRA_KEYS), "/".join(VALUES)))
     return update(lambda d: d["answers"].__setitem__(key, value))
 
 
@@ -100,14 +100,14 @@ def _has_agent(key):
 
 def state(key):
     stored = load()["answers"].get(key)
-    if stored in ("yes", "no"):
+    if stored in ("yes", "no", "single"):     # single (structure only) is a recorded pick, offered again like later
         return stored
     existing = _has_structure() if key == "structure" else _has_agent(key)
     return "yes" if existing else (stored or "unset")
 
 
 def unanswered():
-    return [k for k in KEYS if k not in DEFAULT_ON and state(k) in ("unset", "later")]
+    return [k for k in KEYS if k not in DEFAULT_ON and state(k) in ("unset", "later", "single")]
 
 
 def claim(session, now):

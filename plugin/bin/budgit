@@ -640,8 +640,8 @@ def cmd_setup_answer(args):
     code = 0
     for item in args.answer:
         key, sep, value = item.partition("=")
-        if not sep or value not in postupdate.VALUES:
-            raise sl.StudioError("--answer takes KEY=yes|no|later, keys %s, away or jobs (got %r)" % ("/".join(postupdate.KEYS), item))
+        if not sep or not (value in postupdate.VALUES or (key == "structure" and value == "single")):
+            raise sl.StudioError("--answer takes KEY=yes|no|later (structure also takes single), keys %s, away or jobs (got %r)" % ("/".join(postupdate.KEYS), item))
         if key == "away":                            # R-583: no job; away=no switches «me voy» off, anything else leaves it on
             postupdate.answer("away", value)
             print("budgit setup: away = %s" % value)
@@ -655,14 +655,36 @@ def cmd_setup_answer(args):
         for k in keys:
             postupdate.answer(k, value)
             print("budgit setup: %s = %s" % (k, value))
-            if value == "yes" and k == "structure":      # R-802: a yes makes this chat the lead; a lead already set is never overwritten
+            if value in ("yes", "single") and k == "structure":      # R-802: a yes makes this chat the lead; a lead already set is never overwritten. R-806: single is the user's explicit pick of one chat for everything
                 import portfolio
                 if not SESSION:
                     print(_t("setup.structure_no_session"))
                 else:
-                    if not portfolio.tm_session():
-                        portfolio.set_tm(SESSION)
-                    print(_t("portfolio.tm_is", session=portfolio.tm_session()[:8]))
+                    import livework
+                    here = livework.canon(os.getcwd())
+                    try:
+                        hub = livework.canon(sl.hub_path(sl.load_config()))
+                    except sl.StudioError:
+                        hub = None
+                    if value == "yes" and livework.has_ledger(here) and here != hub:    # R-806: a project chat becomes that project's PM, never the lead
+                        portfolio.add(here, None)
+                        old_pm = portfolio.find(portfolio.registry(), here).get("pm")
+                        if old_pm and old_pm != SESSION:         # I-1245: an existing PM is never replaced; moving it is a deliberate `portfolio pm .`
+                            print(_t("setup.structure_pm_kept", session=old_pm[:8]))
+                            if not portfolio.tm_session():       # no lead yet: the step is still due
+                                print(_t("setup.structure_open_lead", folder=hub or os.path.expanduser("~")))
+                        else:
+                            portfolio.set_pm(here, SESSION)
+                            if portfolio.tm_session():           # a lead exists: no "open a lead chat" step
+                                print(_t("setup.structure_pm_bound", project=here))
+                            else:
+                                print(_t("setup.structure_project_pm", project=here, folder=hub or os.path.expanduser("~")))
+                        if portfolio.tm_session():
+                            print(_t("portfolio.tm_is", session=portfolio.tm_session()[:8]))
+                    else:
+                        if not portfolio.tm_session():
+                            portfolio.set_tm(SESSION)
+                        print(_t("portfolio.tm_is", session=portfolio.tm_session()[:8]))
             if value == "yes" and k != "structure":
                 done, text = jobs.turn_on(k, os.path.realpath(__file__), args.at, _every_seconds(args.every))
                 print(text)

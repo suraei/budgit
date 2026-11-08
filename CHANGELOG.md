@@ -2,6 +2,11 @@
 
 To update, ask Claude in any chat to update Budgit: it runs `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, and reports the version. Your next chat uses it. In a terminal session, `/reload-plugins` is an optional extra. The Release notes page of the wiki has the same notes.
 
+## 0.13.9.2
+
+- **Answering yes inside a project's chat now works.** Budgit makes it the lead for that project and opens a separate coordinator chat on its own; each chat it opens is top level, never nested in another.
+- **No silent single chat.** If the app cannot open chats, Budgit asks first and says how to allow it; one chat for everything only if you pick it.
+
 ## 0.13.9.1
 
 - **A yes to team structure now sets it up.** The chat where you answer becomes the lead; it opens one chat per project (or leads them all itself when it cannot open chats), and each project chat records itself as that project's lead. Nothing to type.
