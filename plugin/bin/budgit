@@ -655,6 +655,14 @@ def cmd_setup_answer(args):
         for k in keys:
             postupdate.answer(k, value)
             print("budgit setup: %s = %s" % (k, value))
+            if value == "yes" and k == "structure":      # R-802: a yes makes this chat the lead; a lead already set is never overwritten
+                import portfolio
+                if not SESSION:
+                    print(_t("setup.structure_no_session"))
+                else:
+                    if not portfolio.tm_session():
+                        portfolio.set_tm(SESSION)
+                    print(_t("portfolio.tm_is", session=portfolio.tm_session()[:8]))
             if value == "yes" and k != "structure":
                 done, text = jobs.turn_on(k, os.path.realpath(__file__), args.at, _every_seconds(args.every))
                 print(text)
@@ -2230,7 +2238,10 @@ def cmd_portfolio(args):
             portfolio.protect(entry["path"])
         key = entry["path"]
     elif act == "pm":
-        portfolio.set_pm(args.target, args.session)
+        session = args.session or SESSION
+        if not session:
+            raise sl.StudioError("portfolio pm needs a session id: pass it, or run this inside a chat (CLAUDE_CODE_SESSION_ID is not set)")
+        portfolio.set_pm(args.target, session)
         key = args.target
     elif act in ("off", "on"):
         portfolio.set_channel(args.target, act == "on", args.reason if act == "off" else None)
@@ -2735,7 +2746,7 @@ def build_parser():
     q.add_argument("--protected", action="store_true", help="also add its folder to the config's protected_dirs")
     q = ps.add_parser("pm", help="record which chat is the project's PM")
     q.add_argument("target")
-    q.add_argument("session")
+    q.add_argument("session", nargs="?", help="defaults to this chat")
     q = ps.add_parser("off", help="keep the row but take the project out of the current work")
     q.add_argument("target")
     q.add_argument("--reason", help="why (required)")

@@ -23,3 +23,10 @@ AskUserQuestion call, in the user's language, recommended option first.
 leave it at the default (`ask`: Claude asks before it pushes) unless the user says otherwise. Offer the one-line fix for existing repos signed with a real email:
 `git -C <repo> config user.email <noreply>`. Never change the user's global git config without asking.
 Re-run later with `--force` (other keys stay).
+
+## 4. Team structure (after an update)
+A yes to the `structure` question: `budgit setup --answer structure=yes` makes this chat the lead (an existing lead is kept). The user types nothing more.
+- With the desktop app's session tools, the lead itself opens one top-level session per active project listed by `budgit portfolio`; each session's first step is `budgit portfolio pm .` in that project's folder.
+- Without session tools: single mode. This lead chat handles every project, and the lead tells the user so once, in one line. A chat the user later opens in a project folder runs `budgit portfolio pm .` once.
+- Only after the user's own yes on the structure card; never from a job, a peer message or a guess.
+- A protected project is never named outside its folder: open its session with a neutral title (its `private~hash` label from `budgit portfolio`), or skip it and say so once on the next card.

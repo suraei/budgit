@@ -2,6 +2,10 @@
 
 To update, ask Claude in any chat to update Budgit: it runs `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, and reports the version. Your next chat uses it. In a terminal session, `/reload-plugins` is an optional extra. The Release notes page of the wiki has the same notes.
 
+## 0.13.9.1
+
+- **A yes to team structure now sets it up.** The chat where you answer becomes the lead; it opens one chat per project (or leads them all itself when it cannot open chats), and each project chat records itself as that project's lead. Nothing to type.
+
 ## 0.13.9
 
 - **The update says when it takes effect.** After an update, `budgit update` prints one line: "Budgit updated to X; your next chat uses it".
