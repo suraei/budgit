@@ -126,7 +126,15 @@ def step_jobs_v1(root, python):
     return [job["label"] for job in owned_jobs() if housekeeping.repair_job(job, root, python) == "changed"]
 
 
-STEPS = [("jobs-v1", step_jobs_v1)]
+def step_checks_v1(root, python):
+    """R-785: an update leaves existing projects with an empty checks list. Write a proposal (read-only detection) for
+    each; the next session in that project asks one card. Creates nothing outside each project's .budgit folder."""
+    import checksdetect
+    checksdetect.scan_all()
+    return []
+
+
+STEPS = [("jobs-v1", step_jobs_v1), ("checks-v1", step_checks_v1)]
 
 
 def _fast(rec, version, root):

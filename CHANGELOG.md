@@ -2,6 +2,11 @@
 
 Update with `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, then `/reload-plugins` in Claude Code. The Release notes page of the wiki has the same notes.
 
+## 0.13.8
+
+- **Test and lint checks are detected and offered for you.** New projects and updated projects now get their test and lint commands detected and offered as one question in the chat; one click approves them.
+- **A first design review waits instead of failing.** A design review with no approved baseline yet now waits for your approval of the captures instead of failing.
+
 ## 0.13.7
 
 - **Brote no longer flies to the bottom-left corner after you switch tab, app or Space.** He waits for the window to settle (a short recheck after 0.6 s, another after 3 s) and then walks with the walking animation.

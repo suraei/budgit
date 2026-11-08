@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.13.7-7d68c4?style=flat-square" alt="Version 0.13.7">
+  <img src="https://img.shields.io/badge/version-0.13.8-7d68c4?style=flat-square" alt="Version 0.13.8">
   <img src="https://img.shields.io/badge/Claude_Code-2.1.292%2B-D97757?style=flat-square&logo=claude&logoColor=white" alt="Claude Code 2.1.292 or newer">
   <img src="https://img.shields.io/badge/Python-3-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3">
   <img src="https://img.shields.io/badge/macOS-tested-000000?style=flat-square&logo=apple&logoColor=white" alt="Tested on macOS">

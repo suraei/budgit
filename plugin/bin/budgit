@@ -1473,6 +1473,10 @@ def cmd_new(args):
     print("hub card: %s%s" % (card, "" if SESSION else "  — run `budgit activate %s` in the session" % project))
     _auto_watermark(project)
     _audit_hint(project)
+    import checksdetect
+    offer = checksdetect.offer_line(project)   # R-785: reads files only; the user's card answer records it
+    if offer:
+        print(offer)
 
 
 def cmd_image(args):
@@ -1603,6 +1607,9 @@ def cmd_design_check(args):
             print(designcheck.tokens_report(found))
             return 1 if found else 0
         if args.op == "diff":
+            if not designcheck.baseline_pngs(args.baseline):
+                print(designcheck.awaiting_report(args.baseline, args.current))
+                return designcheck.AWAITING_RC
             text, drifted = designcheck.diff_report(
                 designcheck.diff_dirs(args.baseline, args.current, args.max_pct), args.max_pct)
             print(text)

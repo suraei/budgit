@@ -98,6 +98,29 @@ def diff_dirs(baseline, current, max_pct=0.5):
     return rows
 
 
+AWAITING_RC = 3   # not a pass and not a failure: no approved baseline yet, the user has to approve the captures
+
+
+def baseline_pngs(baseline):
+    """The approved baseline screens in `baseline` (empty when the folder does not exist or holds no PNG)."""
+    try:
+        return sorted(n for n in os.listdir(baseline) if n.lower().endswith(".png"))
+    except OSError:
+        return []
+
+
+def awaiting_report(baseline, current):
+    """A missing approved baseline is not drift: the item waits for the user to approve the captures. Lists them."""
+    try:
+        shots = sorted(n for n in os.listdir(current) if n.lower().endswith(".png"))
+    except OSError:
+        shots = []
+    out = ["AWAITING the user's approval of the captures: no approved baseline in %s (not a failure)." % baseline]
+    out += ["  capture: %s" % os.path.join(current, n) for n in shots] or ["  (no captures found in %s)" % current]
+    out.append("Show these to the user; only the user's word approves them (design-check approve --user-word).")
+    return "\n".join(out)
+
+
 def diff_report(rows, max_pct):
     out = []
     for r in rows:

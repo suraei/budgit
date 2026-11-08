@@ -1440,6 +1440,12 @@ def reconcile_transcript(project, transcript_path, session):
                 new_id = append_inbox(project, text, session, source, ref=ref)
                 if new_id:
                     added.append(new_id)
+                if source == "answer":                 # the user's own card answer may approve the proposed verifier checks
+                    try:
+                        import checksdetect
+                        checksdetect.on_answer(project, record.get("toolUseResult"))   # structured answers, never the flattened text
+                    except Exception:
+                        log_error("card answer: verifier checks")
     state["offsets"][transcript_path] = pos
     state["pending_ask"] = pending[-50:]
     save_state(project, state)

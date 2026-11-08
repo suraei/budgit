@@ -27,6 +27,9 @@ Inputs you are given: the project dir and one or more ledger item ids (R-n). For
      (`budgit design-check shots` makes them, exact viewports), plus `budgit design-check tokens`, `detect` and
      `diff` output vs the user's approved baselines, and a rubric score (reference/design-rubric.md) — never run
      `design-check approve` yourself; only the user's word moves a baseline. A layer with no executed evidence → FAIL.
+     No approved baseline yet (`diff` exits 3, "AWAITING") is NOT a FAIL: if the functional layers pass, the item is
+     PENDING, awaiting the user's approval of the captures — list the capture files. A baseline that exists and differs
+     (`diff` exits 1) is still a FAIL.
    - The builder's summary, its claims, or tests you did not run are not evidence; the same model writing
      and checking is not evidence — re-execute.
    - Path parity: when demo/mock/sample data exists, check the criterion on both paths; "0 results"

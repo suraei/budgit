@@ -712,6 +712,14 @@ def main():
             note = cloud_note()
             if note:
                 _context("SessionStart", note)
+            if project:
+                try:                                   # R-785: an update brings the checks question to existing projects
+                    import checksdetect
+                    offer = checksdetect.offer_line(project)
+                    if offer:
+                        _context("SessionStart", offer)
+                except Exception:
+                    sl.log_error("session-start: verifier checks offer")
             import general
             if not project:
                 project = general.bind(inp)      # R-373: the general notebook
