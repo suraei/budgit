@@ -301,6 +301,18 @@ def on_pre_tool_use(inp, project, defer=None):
             _decision("PreToolUse", "deny", reason)
         return
     if tool in ("Agent", "Task"):
+        if project:                     # R-849: all-tools agents only with an ALL-TOOLS: line, in projects bound to Budgit
+            try:
+                import agentgate
+                gate = agentgate.deny_reason(inp.get("tool_input"))
+            except Exception:
+                sl.log_error("agent gate")
+                gate = None
+                emit({"systemMessage": "budgit: the all-tools agent check could not run; enforcement did not run for this spawn "
+                                       "(see ~/.budgit/hooks.log)"})
+            if gate:
+                _decision("PreToolUse", "deny", gate)
+                return
         try:                            # bookkeeping and advice only; a failure here is logged, never a reason to skip the rest
             fill_agent_model(inp)
             import admit
@@ -600,7 +612,8 @@ def on_session_start(inp, project, held=True):
         _session_start_writes(inp, project, sid)
     pointer = brain.session_pointer(project)
     conflict = sl.data_dir_conflict(project)      # R-120: a stale session recreated .studio next to .budgit
-    _context("SessionStart", sl.session_summary(project, inp.get("session_id"), extra=(pointer, conflict)))
+    _context("SessionStart", sl.session_summary(project, inp.get("session_id"), extra=(pointer, conflict),
+                                                  full=inp.get("source") in ("compact", "resume")))
     if inp.get("source") == "compact":           # R-123: the resumed session is pointed at the checkpoint written before the cut
         try:
             line = checkpoint_line(project, inp.get("session_id"))
@@ -772,6 +785,8 @@ def main():
     event = sys.argv[1] if len(sys.argv) > 1 else ""
     try:
         inp = json.load(sys.stdin)
+        if os.environ.get("BUDGIT_HOOK_DEBUG") and isinstance(inp, dict) and inp.get("agent_id"):   # R-849: which fields a subagent payload carries
+            _hook_note("payload-keys %s %s" % (event, ",".join(sorted(k for k in inp if "path" in k or k.startswith("agent")))))
         if isinstance(inp, dict) and inp.get("agent_type"):
             inp["agent_type"] = sl.canon_agent(inp["agent_type"])   # cloud `studio-X` == plugin `studio:X` for every guard
         try:                                           # a failed lookup must not take the guards down with it
@@ -893,6 +908,19 @@ def main():
         if event == "post-tool-use-failure":  # introspection runs in EVERY session
             on_post_tool_use_failure(inp, project)
             return 0
+        if event in ("session-start", "session-end", "subagent-stop"):   # R-847: machine-wide, hook-side, zero model calls
+            try:
+                import procclose
+                if event == "session-start":
+                    procclose.on_session_start(inp)
+                elif event == "session-end":
+                    procclose.on_session_end(inp)
+                else:
+                    out = procclose.on_subagent_stop(inp)
+                    if out:
+                        emit(out)
+            except Exception:
+                sl.log_error("procclose " + event)
         if event == "subagent-stop" and inp.get("agent_id"):  # R-64: the counter goes too in unbound sessions
             import agentcap
             agentcap.reset(inp.get("agent_id"))
@@ -904,6 +932,8 @@ def main():
             except Exception:
                 sl.log_error("agent call cap")
                 cap = None
+                emit({"systemMessage": "budgit: the call budget check could not run; enforcement did not run for this call "
+                                       "(see ~/.budgit/hooks.log)"})
             if cap and cap[0] == "deny":
                 _decision("PreToolUse", "deny", cap[1])
                 return 0

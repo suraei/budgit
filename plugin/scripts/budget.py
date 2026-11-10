@@ -185,9 +185,8 @@ def policy_text(level):
 def short_line(level, reason):
     p = POLICY[level]
     m = p["models"]
-    return ("budgit budget: %s — %s. Brain %s (build sessions: sonnet); agents (pass model= on every call): judgement %s, work %s, mechanical %s. "
-            "At most %d parallel subagents, ~%d tool calls each, checkpoint at %d%% of the window; "
-            "ledger, phase gates, verification, progress.md and the user's scope are unchanged. Details: `budgit budget`."
+    return ("budgit budget: %s — %s. Brain %s (build sessions: sonnet); pass model= on every agent call: judgement %s, work %s, mechanical %s. "
+            "Max %d parallel subagents, ~%d calls each, checkpoint at %d%%. Details: `budgit budget`."
             % (level, reason, p["brain"], m["judgement"], m["work"], m["mechanical"], p["subagents"],
                p["agent_calls"], round(p["checkpoint_at"] * 100)))
 

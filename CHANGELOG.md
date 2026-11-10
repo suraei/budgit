@@ -2,6 +2,26 @@
 
 To update, ask Claude in any chat to update Budgit: it runs `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, and reports the version. Your next chat uses it. In a terminal session, `/reload-plugins` is an optional extra. The Release notes page of the wiki has the same notes.
 
+## 0.13.9.6
+
+- **The export leak gate stops flagging code and our own README text.** It still refuses the real phrases a person wrote, so a release is no longer blocked by wording that only describes shipped code.
+- **`budgit ext-review`** asks an outside reviewer to check a change and now gives up after a timeout instead of waiting forever.
+
+## 0.13.9.5
+
+- **`budgit test --full` runs the whole suite in parallel.** It starts as many workers as your machine can spare, halves them on battery, waits outside the locks while the machine is busy, and cleans up its workers when it ends.
+- **One busy rule everywhere.** The runner and the admission checks judge busy the same way: CPU above 85 % of all cores, or under 1 GB of free memory.
+- **Plan and verify reviews check what varies** (0.13.9.4 notes below) now ship in this release together with the parallel runner.
+- **Fewer tokens per session.** Each brief carries a call cap that is enforced, agents that carry every tool need a stated reason, and the text a session starts with shrinks from 22.9 KB to 4.0 KB on real-size data.
+- **Leftover processes get closed.** A process a helper agent leaves behind is closed, its owner read from the environment only, and the daily sweep closes only fully-marked orphans.
+- **`budgit export <folder> --check` on a missing or empty folder** now says to run `budgit export` first instead of crashing.
+- The timing test for the status line now compares against a bare start on the same machine, so it no longer fails on a loaded computer.
+
+## 0.13.9.4
+
+- **Plan and verify reviews check what varies.** They list what changes per machine and user, walk 3 different users through the design, and flag local figures used as constants.
+- **`budgit varies <file>`** checks a brief or plan file for a figure measured on one machine and used as a constant, and exits 1 when it finds one.
+
 ## 0.13.9.3
 
 - **Read-only git commands pass the report-folder guard.** A plain git read (status, log, diff and similar) with known options is allowed; anything else is still refused.

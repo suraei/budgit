@@ -1,10 +1,11 @@
 """R-381: `budgit admit` -- may this machine take one more suite or lane right now? go / wait / refuse with a one-line reason.
 
-No model, no network. It reads the 1-minute load average, the core count, free memory and how many Claude sessions are busy
-this minute, and compares them with thresholds that live in the home config under `admit` (all optional):
+No model, no network. It reads the busy CPU (median of short %CPU samples, in cores; never the load average, R-841), the core count, free
+memory and how many Claude sessions are busy this minute, and compares them with thresholds that live in the home config under
+`admit` (all optional; "load" below means busy cores):
 
-    wait_load      load1 above this -> wait      (default: the core count)
-    refuse_load    load1 above this -> refuse    (default: twice the core count)
+    wait_load      cpu_load above this -> wait      (default: 85 % of the cores, admission.busy_cpu_cores)
+    refuse_load    cpu_load above this -> refuse    (default: twice the core count)
     min_free_mb    free memory under this -> refuse a lane   (default 1536)
     max_busy       this many busy sessions or more -> refuse a lane   (default 6: a PM, the TM and four lanes)
 
@@ -27,12 +28,11 @@ def cores():
     return os.cpu_count() or 1
 
 
-def load1():
-    try:
-        return os.getloadavg()[0]
-    except (OSError, AttributeError):
-        return None
-
+def cpu_load(sampler=None, sleep=None, window=1, step=0.5):
+    """R-841: how many cores' worth of CPU is busy now (median of short %CPU samples x cores / 100), or None when unreadable.
+    This replaces the 1-minute load average: no decision here depends on os.getloadavg."""
+    median = cpu_median(sampler or cpu_sample, sleep, window, step)
+    return None if median is None else median * cores() / 100.0
 
 def free_mb():
     """Memory a new process could use now, in MB: free + inactive + speculative pages on macOS, MemAvailable on Linux."""
@@ -68,9 +68,7 @@ def busy_sessions():
     return sum(1 for s in found["sessions"] if s["status"] == "busy" and s.get("verified"))
 
 
-BUSY_CPU_PCT = 85          # the owner's rule (R-532): median CPU over a minute above 85 % of the cores
-BUSY_FREE_MB = 1024        # ... or free + inactive memory under 1 GB
-BUSY_EXIT = 10
+BUSY_EXIT = 10             # the thresholds (85 % CPU, 1 GB) live once, in admission.busy_reason
 
 
 def cpu_sample():
@@ -102,17 +100,17 @@ def cpu_median(sampler=cpu_sample, sleep=None, window=60, step=5):
 
 def is_busy(sampler=cpu_sample, sleep=None, window=60, free=None):
     """-> (busy, reason). Memory first (cheap, no waiting); then the CPU median. A reading that cannot be taken is skipped."""
+    import admission
     free_now = free() if free else free_mb()
-    if free_now is not None and free_now < BUSY_FREE_MB:
-        return True, "free memory %d MB is under %d MB" % (free_now, BUSY_FREE_MB)
-    median = cpu_median(sampler, sleep, window)
-    if median is not None and median > BUSY_CPU_PCT:
-        return True, "median CPU %.0f %% is above %d %%" % (median, BUSY_CPU_PCT)
-    return False, "free"
+    why = admission.busy_reason(free_now, None)
+    if why:
+        return True, why
+    why = admission.busy_reason(None, cpu_median(sampler, sleep, window))
+    return (True, why) if why else (False, "free")
 
 
 def measure():
-    return {"load1": load1(), "cores": cores(), "free_mb": free_mb(), "busy": busy_sessions()}
+    return {"cpu_load": cpu_load(), "cores": cores(), "free_mb": free_mb(), "busy": busy_sessions()}
 
 
 def thresholds(m, config=None):
@@ -124,7 +122,8 @@ def thresholds(m, config=None):
     def num(key, default):
         value = cfg.get(key)
         return value if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 else default
-    wait, refuse = num("wait_load", float(m["cores"])), num("refuse_load", 2.0 * m["cores"])
+    import admission
+    wait, refuse = num("wait_load", admission.busy_cpu_cores(m["cores"])), num("refuse_load", 2.0 * m["cores"])
     explicit = sl.env("SUITE_LOAD_LIMIT")
     try:
         value = float(explicit) if explicit else None
@@ -148,30 +147,49 @@ def decide(m, kind="lane", config=None, share=None):
     import i18n
     t = i18n.t
     limits = thresholds(m, config)
-    load = m.get("load1")
+    load = m.get("cpu_load")
     lane = kind == "lane" and share is not None
     mine = share["lanes"] if lane else None
-    verdict, reason = GO, t("ad.r_go", load=_n(load), mem=_n(m.get("free_mb")), busy=_n(m.get("busy")))
+    n_cores = max(1, m.get("cores") or 1)
+
+    def pct(cores_busy):                                  # R-864: the message names CPU % and free memory, never a load average
+        return "?" if cores_busy is None else "%.0f" % (cores_busy * 100.0 / n_cores)
+    mem = _n(m.get("free_mb"))
+    verdict, reason = GO, t("ad.r_go", cpu=pct(load), mem=mem, busy=_n(m.get("busy")))
     short_of_memory = kind == "lane" and m.get("free_mb") is not None and m["free_mb"] < limits["min_free_mb"]
     if lane and mine == 0 and not short_of_memory:
-        reason = t("ad.r_floor", load=_n(load))
+        reason = t("ad.r_floor", cpu=pct(load), mem=mem)
     elif load is not None and load > limits["refuse_load"]:
-        verdict, reason = REFUSE, t("ad.r_load_refuse", load=round(load, 1), limit=round(limits["refuse_load"], 1))
+        verdict, reason = REFUSE, t("ad.r_load_refuse", cpu=pct(load), limit=pct(limits["refuse_load"]), mem=mem)
     elif short_of_memory:
         verdict, reason = REFUSE, t("ad.r_memory", free=int(m["free_mb"]), limit=int(limits["min_free_mb"]))
     elif kind == "lane" and m.get("busy") is not None and m["busy"] >= limits["max_busy"]:
         verdict, reason = REFUSE, t("ad.r_busy", busy=m["busy"], limit=int(limits["max_busy"]))
     elif load is not None and load > limits["wait_load"]:
         verdict = WAIT
-        reason = (t("ad.r_yield", lanes=mine, load=round(load, 1), limit=round(limits["wait_load"], 1)) if lane and share["most"]
-                  else t("ad.r_load_wait", load=round(load, 1), limit=round(limits["wait_load"], 1)))
+        reason = (t("ad.r_yield", lanes=mine, cpu=pct(load), limit=pct(limits["wait_load"]), mem=mem) if lane and share["most"]
+                  else t("ad.r_load_wait", cpu=pct(load), limit=pct(limits["wait_load"]), mem=mem))
     elif lane and mine >= 2 and share["starved"] > 0:
         verdict, reason = WAIT, t("ad.r_starved", lanes=mine, n=share["starved"])
     cap = None
     if lane:
-        cap = 1 if load is not None and load > limits["wait_load"] else (2 if share["starved"] > 0 else None)
+        cap = lane_quota(load is not None and load > limits["wait_load"], True, share["starved"])
     return {"verdict": verdict, "reason": reason, "exit": EXIT[verdict], "kind": kind, "measured": m, "limits": limits,
             "share": share, "lane_cap": cap}
+
+
+LANE_FLOOR = 1
+
+
+def lane_quota(busy, pending, starved):
+    """R-877: lanes a project may hold. No pending work: 0 is allowed. Pending work: never under LANE_FLOOR (1), whatever the
+    load. Only the 2nd and 3rd lane are gated: busy machine -> 1; not busy -> 2 while another pending project holds none,
+    else None (no cap: the 3rd lane needs every pending project to hold one)."""
+    if not pending:
+        return 0
+    if busy:
+        return LANE_FLOOR
+    return max(LANE_FLOOR, 2) if starved > 0 else None
 
 
 def _n(value):

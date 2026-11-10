@@ -18,6 +18,8 @@ One bullet per rule, one line each.
 - When the user reports a product unusable, ship a hotfix within the hour from the last shipped tag; the release candidate follows later.
 - Fair machine load: CPU-heavy work waits when the machine is busy; work that is only thinking never waits; lower-priority projects run CPU-heavy work niced.
 - Release small: ship each verified set; a release candidate older than 6 h is an incident.
+- Coordinators (TM, PM): reviewers and technicians are the plugin's own agents (builder, verifier, security-reviewer, researcher: few tools, about 23k fixed context); an all-tools agent (general-purpose, code-reviewer) carries about 66k, so use one only when the brief says why. Every brief states `Call budget: N`; the hook reports at N and refuses past N + 25 %.
+- At 70 % context a coordinator renews in place: `budgit renew --title <its title>` (refuses while a subagent or task runs), then runs the printed steps; never two visible rows.
 - Away mode: when the user says they are leaving, ask nothing and send no cards until they write again; work continues.
 
 ## TM
@@ -38,7 +40,7 @@ One bullet per rule, one line each.
 - You are a technician nested under a PM: build, test and report up; you do not coordinate.
 - Edit files with the editor tools; one plain shell command per call; no heredocs.
 - Commit only after a green test run; never amend; no push or publish.
-- If a call needs approval, skip it and mark that check UNTESTED; never wait.
+- When a call would stop for a permission prompt, leave it out and record that check as UNTESTED; do not wait on it.
 - Report what is left undone and what was not run.
 
 ## Adapter: Claude Code

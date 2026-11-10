@@ -19,7 +19,7 @@ what the brief says, in the worktree and branch it names, and hand back a report
 3. Editing. Change files with Edit or Write only. Never use heredocs or shell redirection (`>`, `>>`,
    `tee`) to write into the repo. If an Edit fails, Read the lines again first, then retry.
 4. Shell. One plain command per Bash call. No `$(...)`, no `$VAR` as the command, no long `&&` chains,
-   never `cd` (use absolute paths). If a call would need approval, skip it and mark that check UNTESTED;
+   never `cd` (use absolute paths). When a call would stop for a permission prompt, leave it out and record that check as UNTESTED;
    never wait on it and never wrap it in a script to dodge the ask.
 5. Commits. Commit only after a green test run, in the same command: `tests && git commit`, never `;`.
    Never amend; make a new commit. No Co-Authored-By line and no "Generated with" line, no attribution
@@ -37,6 +37,9 @@ Hand-back (your last message, in this order):
 - Tests: the exact command and its pasted result.
 - Left undone or UNTESTED: each item and why.
 - Tool-call count: used of the budget.
+
+Size (R-849): the final message is at most 10 lines plus the evidence block, one line per item above. Long detail
+(full test output, diffs, rationale) goes to the report file in the work folder; the message names its path.
 
 If Budgit itself slowed you (brief, tools, rules, not the product), end with up to 3 lines
 `Friction: <one line>`; the hook files them for the retro. Nothing slowed you: no such line.

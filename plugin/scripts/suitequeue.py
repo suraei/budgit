@@ -195,13 +195,13 @@ class SuiteSlot:
         """Holding the lock: ask admit; refuse (or, with wait_load, wait for) a machine that is not ready for a suite."""
         import admit
         while True:
-            self.load = load_average()
-            got = admit.decide({"load1": self.load[0] if self.load else None, "cores": admit.cores()}, "suite")
+            self.load = load_average()                              # recorded for timing notes only, never decides (R-841)
+            got = admit.decide({"cpu_load": admit.cpu_load(), "cores": admit.cores()}, "suite")
             if got["verdict"] == admit.GO:
                 return
             limits = got["limits"]
             limit = limits["refuse_load"] if got["verdict"] == admit.REFUSE else limits["wait_load"]
-            load = got["measured"]["load1"]
+            load = got["measured"]["cpu_load"]
             if not self.wait_load:
                 raise LoadTooHigh(load, limit)
             if self.load_notice:

@@ -2747,7 +2747,12 @@ def untracked_notice(entries):
             % (len(entries), listed, more))
 
 
-def session_summary(project, session, extra=()):
+SUMMARY_ITEMS = 8       # R-849: the SessionStart summary lists this many open items, then a count
+SUMMARY_PROGRESS = 5
+SUMMARY_REPORTS = 3
+
+
+def session_summary(project, session, extra=(), full=False):
     """The SessionStart context. Everything from the project is on one line and inside the fence; `extra` (more
     project-sourced lines, e.g. the brain pointer) goes inside it too."""
     data = load_ledger(project)
@@ -2765,8 +2770,11 @@ def session_summary(project, session, extra=()):
     lines.append(mvp_line(data))
     lines.extend(round_cap_lines(project, data))
     lines.append("Open ledger items (%d):" % len(open_items))
-    for it in open_items[:20]:
-        lines.append("  %s [%s] %s" % (oneline(it["id"], 30), oneline(it["status"], 20), short(it["text"])))
+    shown = sorted(open_items, key=lambda i: i["status"] != "doing")[:SUMMARY_ITEMS]     # R-849: doing first, then ledger order
+    for it in shown:
+        lines.append("  %s [%s] %s" % (oneline(it["id"], 30), oneline(it["status"], 20), short(it["text"], 80)))
+    if len(open_items) > len(shown):
+        lines.append("  (+%d more open: `budgit ledger list`)" % (len(open_items) - len(shown)))
     mine = untracked(project, data, session=session)
     if mine:
         lines.append(untracked_notice(mine))
@@ -2774,15 +2782,17 @@ def session_summary(project, session, extra=()):
     if others:
         lines.append("(%d untracked input(s) from other sessions — see `budgit status`)" % others)
     try:
-        tail = read_text(os.path.join(studio_dir(project), "progress.md")).splitlines()[-60:]
-        lines.append("progress.md (the last checkpoint — continue from here):")
-        lines.extend("  " + oneline(l, 300) for l in tail)
+        # `full` (a session that resumes or follows a compaction) gets the whole checkpoint back; a fresh start gets the capped tail
+        whole = read_text(os.path.join(studio_dir(project), "progress.md")).splitlines()
+        tail = whole if full else whole[-SUMMARY_PROGRESS:]
+        lines.append("progress.md (the last checkpoint; the file has the rest):")
+        lines.extend("  " + oneline(l, 130) for l in tail)
     except OSError:
         pass
     reports = recent_reports(project)
     if reports:
         lines.append("Saved agent reports (.budgit/reports/, newest last — read the file, do not re-run the agent):")
-        lines.extend("  " + oneline(r, 200) for r in reports)
+        lines.extend("  " + oneline(r, 160) for r in (reports if full else reports[-SUMMARY_REPORTS:]))
     lines.extend(oneline(l, 400) for l in extra if l)
     lines.append("END UNTRUSTED PROJECT DATA")
     lines.append("CLI: budgit status | budgit ledger add|link|ack|set|phase|done|verify|drop|list|accept-edit")
@@ -3784,6 +3794,92 @@ def _file_names_home(path, base, named):
         and bool(_CODE_WRITES.search(text))
 
 
+def safe_git_argv(path, *args):
+    """R-856: a git command over a tree whose own config is not trusted: no fsmonitor command and no hooks run."""
+    return ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", path] + list(args)
+
+
+def safe_git_env():
+    """R-856: the environment for `safe_git_argv`: no system config, and no GIT_DIR / GIT_WORK_TREE pointing elsewhere."""
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    return env
+
+
+_RELEASE_REPO = "sur" + "aei/budgit"             # the one public repo; split so the export's own leak gate does not read it as an account
+_PLAIN_ABS = re.compile(r"/[\w.\-]+(?:/[\w.\-]+)*")
+
+
+def _plain_dir_under(word, roots):
+    """An absolute, plain-character folder (no `..`, no variable, no glob) whose real path lies strictly under one of `roots`
+    and is neither a Budgit home nor a folder that holds one."""
+    if not _PLAIN_ABS.fullmatch(word or "") or ".." in word.split("/"):
+        return False
+    try:
+        real = os.path.realpath(word)
+    except (OSError, ValueError):
+        return False
+    if _in_home(real) or _above_home(real):
+        return False
+    return any(r and real.startswith(r + os.sep) for r in roots)
+
+
+def _pinned_cli(word):
+    """R-856: THIS checkout's own plugin/bin/budgit, named by an ABSOLUTE path (a bare `budgit` is looked up in the hook's PATH,
+    which may differ from the shell's, so it asks), by realpath: a file that merely carries the name `budgit` next to two stub
+    scripts, or another or edited checkout's CLI, is not it."""
+    if not word or "\0" in word or not os.path.isabs(word):
+        return False
+    try:
+        own = os.path.realpath(os.path.join(studio_root(), "bin", "budgit"))
+        return os.path.isfile(own) and os.path.realpath(word) == own
+    except (OSError, ValueError):
+        return False
+
+
+def _pinned_python(word):
+    """R-856: a system interpreter named by an ABSOLUTE path (a bare `python3` is looked up in the hook's PATH, which may differ
+    from the shell's, so it asks), by realpath: the one running the guard or a python3 under a system folder."""
+    import sys
+    try:
+        found = word
+        if not found or "\0" in found or not os.path.isabs(found):
+            return False
+        ok = {os.path.realpath(p) for p in ("/usr/bin/python3", "/opt/homebrew/bin/python3", "/usr/local/bin/python3",
+                                            sys.executable) if p and os.path.exists(p)}
+        return os.path.realpath(found) in ok
+    except (OSError, ValueError):
+        return False
+
+
+def _is_release_check(words, tokens, cwd, user_home):
+    """R-856: the ONE accepted shape of Budgit's read-only release checks, as the plain command (no env prefix, no wrapper, no
+    flag before the script): `[python3] <budgit CLI> export <scratch dir> [--repo <the public repo> | --check]` and
+    `[python3] <budgit CLI> secrets <dir under ~/studio-wt>`. The scratch dir is under /tmp; neither command writes the Budgit
+    home. The CLI is pinned by realpath to THIS checkout's own bin/budgit (`_pinned_cli`) and the interpreter to a system
+    python3 (`_pinned_python`), both by absolute path (a bare name asks); anything else keeps the script-reading rule, which
+    refuses the CLI's docstring (BUDGIT_HOME) plus a write. (`--source` moved to R-861.)"""
+    if not tokens or len(tokens) != len(words):
+        return False
+    if not re.fullmatch(r"python[\d.]*", os.path.basename(tokens[0])) or not _pinned_python(tokens[0]):
+        return False                                     # the direct form `<CLI> ...` is not covered: its shebang lets the shell's PATH pick python
+    k = 1
+    if len(tokens) < 2 or not os.path.isabs(tokens[1]):
+        return False
+    cli = tokens[k]
+    if not _pinned_cli(cli):
+        return False
+    rest = tokens[k + 1:]
+    if len(rest) >= 2 and rest[0] == "export":
+        tmp = {os.path.realpath("/tmp"), os.path.realpath("/private/tmp")}
+        if not _plain_dir_under(rest[1], tmp):
+            return False
+        return rest[2:] in ([], ["--check"], ["--repo", _RELEASE_REPO])
+    if len(rest) == 2 and rest[0] == "secrets":
+        return _plain_dir_under(rest[1], [os.path.realpath(os.path.join(user_home, "studio-wt"))])
+    return False
+
+
 def _home_write_decision(tool, tool_input, cwd=None, verifier=False, box=None):
     """Deny a tool or a plain Bash write into a Budgit home candidate (realpath, symlinks followed, case-folded); deny
     running Budgit's hook or library by hand; ask when a writing command names a home through something the guard
@@ -3855,6 +3951,9 @@ def _home_write_decision(tool, tool_input, cwd=None, verifier=False, box=None):
             continue
         if len(steps) == 1 and not redirs and _is_syntax_check(words) and not re.search(r"[;|&<>`\n]|\$\(", text):
             continue                                     # R-733: `bash -n FILE` only parses FILE, it never runs it
+        if len(steps) == 1 and not redirs and not re.search(r"[;|&<>`\n$\\]", text) \
+                and _is_release_check(words, tokens, dirs[-1], user_home):
+            continue                                     # R-856: export / secrets release checks write no Budgit home
         if names_a_home:
             if os.path.basename(words[0]) == "eval":
                 return deny                              # eval of a command line that names a home

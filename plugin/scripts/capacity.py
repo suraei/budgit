@@ -2,7 +2,7 @@
 
 Three layers, all plain arithmetic (zero model tokens):
   A. total()  - the portfolio's limit T from the budget level, kept between runs (drops at once, rises +1 a day).
-  B. split()  - T shared between projects by priority weight, at least 1 each, never above what is ready.
+  B. split()  - T shared between projects by priority weight, at least 1 each (even when that exceeds T, R-877), never above what is ready.
   C. free()   - what a project may still start now, less what is stuck.
 `portfolio_snapshot` reads the project list; `check_start` is the gate `start_item` calls for a NEW start only.
 A reason is a short code (see `capacity.r.*` in i18n); every user-facing sentence goes through i18n.
@@ -16,7 +16,7 @@ import time
 
 import studiolib as sl
 
-LEVEL_LIMITS = {"ample": (1, 6), "normal": (1, 5), "tight": (1, 3), "critical": (0, 1)}     # (floor, ceiling)
+LEVEL_LIMITS = {"ample": (1, 6), "normal": (1, 5), "tight": (1, 3), "critical": (1, 1)}     # (floor, ceiling); R-877: the floor is never 0
 LEVELS = ("ample", "normal", "tight", "critical")
 WEIGHTS = {"high": 3, "normal": 2, "low": 1}
 PROJECT_CAP = 4
@@ -67,14 +67,11 @@ def split(T, projects):
                           "reason": "paused" if p.get("paused") else "idle"}
         if live:
             elig.append(p)
-    if not elig or T <= 0:
+    if not elig:
         return out
-    if len(elig) >= T:
-        order = sorted(elig, key=lambda p: (-out[p["slug"]]["weight"], -(p.get("waited_s") if p.get("waited_s") is not None else math.inf)))
-        for p in order[:T]:
+    if len(elig) >= T:                    # R-877: the floors do not fit in T (or T is 0): every live project still keeps its one lane
+        for p in elig:
             out[p["slug"]].update(slots=1, reason="floor")
-        for p in order[T:]:
-            out[p["slug"]]["reason"] = "no_room"
         return out
     frozen, free_set, rest = {}, [p["slug"] for p in elig], float(T)
     while free_set:

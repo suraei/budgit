@@ -13,7 +13,7 @@
 - Evidence before "done". Test it yourself before asking the user.
 
 ### Worker brief checklist
-- Edit and Write for files, not heredocs through the shell. One plain command per shell call; no `$(...)`, no long chains; if a call would need approval, skip it and mark the check UNTESTED.
+- Edit and Write for files, not heredocs through the shell. One plain command per shell call; no `$(...)`, no long chains; when a call would stop for a permission prompt, leave it out and record the check as UNTESTED.
 - Budget: items times 8 tool calls plus renders; report before the cap.
 - Commit only after green tests (`tests && git commit`); no amends.
 - No destructive recovery: never run a hard `reset`, a forced push, `rm`, `stash`, `clean`, or a `checkout` with force. On red, stop and report. Use `--quit`, not `--abort`, for cherry-pick, merge, rebase and am. Merge briefs check HEAD against the expected commit first and each expected commit's ancestry at the end.

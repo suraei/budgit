@@ -5,7 +5,7 @@ Checks per main session (~/.claude/projects/<dir>/<session>.jsonl + <session>/su
 - models_above_policy: Agent calls whose `model=` is dearer than the role's policy at the level, with no `ESCALATE:` in the
   prompt and not lowered by the PreToolUse hook (R-383; lowered and escalated calls are shown, not counted)
 - bursts_over_limit: one assistant message launching more agents than the level's parallel cap
-- agents_over_call_budget: subagents whose tool calls exceed the level's per-agent budget
+- agents_over_call_budget: subagents whose own work calls exceed the level's per-agent budget (waits and hook-injected calls do not count)
 - compactions_without_checkpoint: compactions with no progress.md write since the previous one
 - untracked_inputs / research_unsaved: only for sessions bound to a Budgit project (ledger, .budgit/reports)
 - with a skills registry (`--skills`): skills_unlogged (a registered skill used with no `budgit skills why` earlier in the
@@ -17,6 +17,7 @@ import os
 import re
 import time
 
+import agentcap
 import budget
 import studiolib as sl
 
@@ -52,6 +53,26 @@ def _tool_uses(rec):
             yield msg.get("id"), block
 
 
+def own_calls(rec, seen):
+    """The tool_use blocks of `rec` not seen before (`seen`: a set of tool_use ids, updated). Real subagent
+    transcripts repeat a tool_use id in a second record, so each id counts once."""
+    for _, block in _tool_uses(rec):
+        tid = block.get("id")
+        if tid:
+            if tid in seen:
+                continue
+            seen.add(tid)
+        yield block
+
+
+def call_kind(block):
+    """'work' or 'wait' for one subagent tool_use. Only 'work' counts against the call budget:
+    a wait (background-output read, sleep) is free."""
+    if agentcap.is_wait(block.get("name"), block.get("input")):
+        return "wait"
+    return "work"
+
+
 def _is_progress_write(block):
     if block.get("name") not in ("Write", "Edit", "MultiEdit"):
         return False
@@ -68,9 +89,10 @@ def _subagents(main_path):
             meta = {}
         aid = os.path.basename(ap)[len("agent-"):-6]
         calls, wrote_research = 0, False
+        seen = set()
         for rec in _records(ap):
-            for _, block in _tool_uses(rec):
-                calls += 1
+            for block in own_calls(rec, seen):
+                calls += call_kind(block) == "work"
                 if block.get("name") == "Write" and "/research/" in str((block.get("input") or {}).get("file_path", "")):
                     wrote_research = True
         yield aid, meta.get("agentType", "?"), calls, wrote_research

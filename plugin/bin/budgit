@@ -128,6 +128,19 @@ def cmd_suite(args):
     import maincheck
     import suitequeue
     project = sl.resolve_project(args.project)
+    command = [c for c in (getattr(args, "command", None) or [])]
+    if command:                                   # R-569: `budgit suite --wait [--rc] -- <cmd>`, one blocking process
+        import suitewait
+        import suiteorder
+        key = suiteorder.project_key(project)         # the git folder all worktrees share: the MAIN project's name, not the worktree's
+        name = os.path.basename(os.path.dirname(key)) if os.path.basename(key) == ".git" else os.path.basename(key)
+        try:
+            return suitewait.run(command, name, rank=args.rank, rc=args.rc, cwd=project)
+        except suitewait.StateDirError as exc:
+            print("budgit suite: refused: %s" % exc)
+            return 1
+        except KeyboardInterrupt:
+            return 130
 
     def started(slot):
         print(i18n.t("sq.started", secs=slot.waited, load=_load_text(slot.load)), flush=True)
@@ -146,6 +159,17 @@ def cmd_suite(args):
         return 0
     print(i18n.t("sq.done", code=code, secs=slot.waited, load=_load_text(slot.load)))
     return code
+
+
+def cmd_test(args):
+    """`budgit test [--full]`: the project's own pool entry (tools/budgit_test.py: iCloud preflight, then the parallel runner)
+    when it has one; any other project runs `budgit suite`, the queue-aware full suite."""
+    project = sl.resolve_project(args.project)
+    entry = os.path.join(project, "tools", "budgit_test.py")
+    if not os.path.isfile(entry):
+        return cmd_suite(args)
+    import subprocess
+    return subprocess.call([sys.executable, entry] + (["--full"] if args.full else []), cwd=project)
 
 
 def cmd_tm(args):
@@ -202,13 +226,26 @@ def cmd_housekeeping(args):
         return 0 if text else 1
     report = housekeeping.run(only=args.only, apply_changes=args.apply, hours=args.hours)
     text = housekeeping.render(report)
+    try:                                   # R-847: the backstop; the dry run only lists, --apply closes under the user's standing yes
+        import procclose
+        rows = procclose.sweep_orphans(args.apply)
+        text += "".join("%s orphaned process pid %d (%s)\n" % ("closed" if args.apply else "would close", r["pid"], r["owner"]) for r in rows)
+    except Exception:
+        sl.log_error("housekeeping: procclose")
     if args.apply:
         housekeeping.save_last(text)
     if args.json:
         print(json.dumps(report, indent=2))
     elif not args.quiet:
         print(text)
-    return 1 if report["totals"]["failed"] else 0
+    reason = housekeeping.skip_reason(report)
+    if reason and not args.json:
+        print("budgit housekeeping: %s (exit %d)" % (reason, housekeeping.exit_code(report)), file=sys.stderr)
+    code = housekeeping.exit_code(report)
+    if args.apply:                         # R-874: the scheduled cleanup run is recorded like the other jobs
+        import jobhealth
+        jobhealth.record("cleanup", code)
+    return code
 
 
 def cmd_main_check(args):
@@ -699,6 +736,31 @@ def cmd_busy(args):
     busy, why = admit.is_busy(window=args.window)
     print("busy: " + why if busy else "not busy")
     return admit.BUSY_EXIT if busy else 0
+
+
+def cmd_ext_review(args):
+    """R-889a: the one wrapper for external-model reviews (codex, gemini): deadline, own process group, owner tag."""
+    import extreview
+    if not os.path.isfile(args.diff):
+        print("diff file not found: %s" % args.diff)
+        return extreview.EXIT_USAGE
+    return extreview.review(args.tool, args.diff, args.prompt, args.out, args.timeout)
+
+
+def cmd_jobs(args):
+    """R-332: `budgit jobs list` (active and retired jobs) | `budgit jobs repoint --root <abs> [--dry-run]`."""
+    import jobs
+    if args.op == "list":
+        for name, state, note in jobs.listing():
+            print("%-22s %-8s %s" % (name, state, note))
+        return 0
+    if not args.root:
+        print("budgit jobs repoint: --root <absolute path> is required")
+        return 64
+    import repoint
+    code, text = repoint.run_real(args.root, args.dry_run)
+    print(text)
+    return code
 
 
 def cmd_job(args):
@@ -1324,6 +1386,13 @@ def cmd_status(args):
         print("  %s [%s] %s" % (e["id"], (e.get("session") or "?")[:8],
                                 e["text"][:100].replace("\n", " ")))
     _denies_line(project)
+    try:                                   # R-874: one line only when a scheduled job failed or missed its interval
+        import jobhealth
+        health = jobhealth.line()
+        if health:
+            print(health)
+    except Exception:
+        sl.log_error("status: job health")
 
 
 def _ago(seconds):
@@ -1963,6 +2032,20 @@ def cmd_audit_mcp(args):
     return 1 if auditmcp.high_count(findings) else 0
 
 
+def cmd_varies(args):
+    import varies
+    try:
+        with open(args.file, encoding="utf-8") as f:
+            text = f.read()
+    except (OSError, ValueError) as e:   # 1 means "found"; an unreadable file is a different outcome
+        print("budgit varies: cannot read %s: %s" % (args.file, e.__class__.__name__), file=sys.stderr)
+        return 2
+    hits = varies.find_local_constants(text)
+    for h in hits:
+        print("LOCAL CONSTANT: " + h)
+    return 1 if hits else 0
+
+
 def cmd_brain(args):
     import brain
     repo = args.repo
@@ -2034,6 +2117,18 @@ def cmd_vendor(args):
             print(line)
         return rc
     print(vendor.vendor(target))
+    return 0
+
+
+def cmd_renew(args):
+    """R-834: renew a coordinator in place: preconditions, handoff, then the ordered app steps for the coordinator."""
+    import renew
+    project = sl.resolve_project(args.project)
+    path, steps = renew.prepare(project, args.session or SESSION, args.title,
+                                live_subagents=args.live_subagent or [], live_tasks=args.live_task or [])
+    print("renew: handoff written: %s" % path)
+    for line in steps:
+        print(line)
     return 0
 
 
@@ -2547,6 +2642,10 @@ def build_parser():
     c.add_argument("--home", action="store_true",
                    help="also the fixed user list: ~/.claude/settings.json, ~/.claude.json, installed plugins")
     c.set_defaults(func=cmd_audit_mcp)
+    c = sub.add_parser("varies", parents=[common],
+                       help="flag a figure measured on one machine used as a constant in a brief or plan (exit 1 = found)")
+    c.add_argument("file", help="brief, plan or text file to check")
+    c.set_defaults(func=cmd_varies)
     c = sub.add_parser("secrets", parents=[common],
                        help="local scan: gitleaks (redacted) + osv-scanner --offline on lockfiles; never installs, never sends")
     c.add_argument("path", nargs="?", help="repo or folder (default: current dir)")
@@ -2617,12 +2716,25 @@ def build_parser():
     s = sub.add_parser("busy", parents=[common], help="is the machine busy? median CPU over a minute above 85 %% or memory under 1 GB: exit 10, else 0")
     s.add_argument("--window", type=int, default=60, help="seconds of CPU sampling (default 60)")
     s.set_defaults(func=cmd_busy)
+    s = sub.add_parser("ext-review", parents=[common],
+                       help="one timed, tagged wrapper for an external-model review (codex, else gemini); exit 3 none, 4 timeout, 5 unavailable")
+    s.add_argument("--tool", choices=("auto", "codex", "gemini"), default="auto")
+    s.add_argument("--diff", required=True, help="file whose text goes to the tool as stdin")
+    s.add_argument("--prompt", required=True)
+    s.add_argument("--out", required=True, help="written only when the tool finished with a verdict")
+    s.add_argument("--timeout", type=float, default=None, help="seconds (default 600, hard cap 1800)")
+    s.set_defaults(func=cmd_ext_review)
     s = sub.add_parser("job", parents=[common], help="the opt-in background jobs: on (needs a recorded yes), off, status, precheck, run")
     s.add_argument("op", choices=("on", "off", "status", "precheck", "run"))
     s.add_argument("name", choices=("cleanup", "keepalive", "standup"))
     s.add_argument("--at", help="with on: HH:MM for cleanup and stand-up")
     s.add_argument("--every", help="with on: the period for keep-alive, e.g. 2h")
     s.set_defaults(func=cmd_job)
+    s = sub.add_parser("jobs", parents=[common], help="all jobs: list (with the retired ones), repoint --root <abs> [--dry-run] after the project folder moved")
+    s.add_argument("op", choices=("list", "repoint"))
+    s.add_argument("--root", help="with repoint: the new absolute project (or plugin) folder")
+    s.add_argument("--dry-run", action="store_true", help="with repoint: print the diff, write nothing")
+    s.set_defaults(func=cmd_jobs)
     s = sub.add_parser("layout", parents=[common], help="documents saved outside the project's data folder: list, move (--move --yes), undo")
     s.add_argument("--move", action="store_true", help="move them into the data folder (dry run unless --yes)")
     s.add_argument("--yes", action="store_true", help="with --move: really move them")
@@ -2648,7 +2760,16 @@ def build_parser():
     s.add_argument("--rerun", action="store_true", help="run again even if this exact tree already ran green")
     s.add_argument("--release", action="store_true", help="a release suite: it goes before every ordinary waiting suite")
     s.add_argument("--wait", action="store_true", help="when the machine is overloaded, wait and recheck every 30 s instead of exiting 4")
+    s.add_argument("--rc", action="store_true", help="with `-- CMD`: a release candidate goes before ordinary suites in this project's queue (there is no machine-wide lock)")
+    s.add_argument("--rank", type=int, default=1, help="with `-- CMD`: project priority, 0 = top (runs without nice), larger waits behind smaller (default 1)")
+    s.add_argument("command", nargs="*", help="`-- CMD ...`: wait for this project's suite lock (the only one), run CMD (nice 10 unless rank 0), release")
     s.set_defaults(func=cmd_suite)
+    s = sub.add_parser("test", parents=[common], help="run the project's tests: the whole suite with --full, else only what changed (a project without a pool entry runs `budgit suite`)")
+    s.add_argument("--full", action="store_true", help="the whole suite")
+    s.add_argument("--rerun", action="store_true", help="(budgit suite fallback) run again even if this exact tree already ran green")
+    s.add_argument("--release", action="store_true", help="(budgit suite fallback) a release suite")
+    s.add_argument("--wait", action="store_true", help="(budgit suite fallback) wait while the machine is overloaded")
+    s.set_defaults(func=cmd_test)
     s = sub.add_parser("admit", parents=[common], help="may the machine take one more lane or suite? go / wait / refuse (exit 0 / 1 / 2)")
     s.add_argument("kind", nargs="?", default="lane", help="lane (default) or suite")
     s.add_argument("--json", action="store_true")
@@ -2738,6 +2859,12 @@ def build_parser():
     o.add_argument("lane")
     o.add_argument("--echo", required=True, help="the successor's restatement of the handoff (a file)")
     s.set_defaults(func=cmd_handoff)
+    s = sub.add_parser("renew", parents=[common], help="renew a coordinator in place at 70 percent context: checks, handoff, ordered steps")
+    s.add_argument("--title", required=True, help="the exact session title that must stay (e.g. the PM or TM title)")
+    s.add_argument("--session", help="the session id (default: this one)")
+    s.add_argument("--live-subagent", action="append", help="a running subagent (repeat); renew refuses while any is listed")
+    s.add_argument("--live-task", action="append", help="a running background task (repeat); renew refuses while any is listed")
+    s.set_defaults(func=cmd_renew)
     s = sub.add_parser("upgrade", parents=[common],
                        help="bring a project's data folder, CLAUDE.md names, project.json and card to this Budgit (--check reads only)")
     s.add_argument("target", nargs="?", help="a project from the portfolio list (default: this one)")
@@ -2894,6 +3021,9 @@ def build_parser():
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "admit" and "--slots" in argv:    # R-848: `budgit admit --slots N [--kind K] -- <cmd>` runs cmd under the cap
+        import admission
+        return admission.main(argv[1:])
     args = build_parser().parse_args(argv or ["status"])
     if not hasattr(args, "project"):
         args.project = None

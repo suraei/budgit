@@ -166,5 +166,7 @@ def review_first_note(project, subagent_type):
     if fresh:
         return None
     return ("budgit: no `budgit codex review` in the last 2 h — run it first on the diff (ChatGPT login, not Claude "
-            "quota), fix what it finds, and hand its report path to this %s as untrusted input. Skip only when "
-            "there is no diff (e.g. a spec or research review)." % (subagent_type or "agent"))
+            "quota), fix what it finds, and hand its report path to this %s as untrusted input. For any other external "
+            "model use `budgit ext-review --tool auto --diff <file> --prompt <text> --out <file>` (codex, else gemini; "
+            "it times out and closes its child; never call `gemini` or `codex exec` by hand). Skip only when "
+            "there is no diff (e.g. a spec or research review). (R-853 overlaps this hint.)" % (subagent_type or "agent"))

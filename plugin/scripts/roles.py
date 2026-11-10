@@ -7,7 +7,8 @@ import re
 
 import studiolib as sl
 
-MAX_BLOCK_LINES = 60
+MAX_BLOCK_LINES = 18    # R-849: was 60; the block is a pointer, the rules file holds the rest
+LINE_CAP = 110
 MAP_NAME = "roles.json"
 MARKER_NAME = "roles-applied"
 RULES_MARKER = re.compile(r"^#{1,6}\s*team rules\b", re.I | re.M)
@@ -157,7 +158,8 @@ def block(info, rules_text=None):
     tail = ["full rules: %s" % rules_path()]
     body = secs.get(key, []) + secs.get("Common", [])
     room = MAX_BLOCK_LINES - len(head) - len(tail)
-    return "\n".join(head + body[:max(room, 0)] + tail)
+    body = [l if len(l) <= LINE_CAP else l[:LINE_CAP - 1].rstrip() + "…" for l in body[:max(room, 0)]]   # R-849: full text sits behind `tail`
+    return "\n".join(head + body + tail)
 
 
 def claude_md_has_rules():

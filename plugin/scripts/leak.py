@@ -31,8 +31,8 @@ def _stem(name):
 
 def _origin_repo(path):
     try:
-        r = subprocess.run(["git", "-C", path, "remote", "get-url", "origin"], capture_output=True, text=True,
-                           timeout=5)
+        r = subprocess.run(sl.safe_git_argv(path, "remote", "get-url", "origin"), capture_output=True, text=True,
+                           timeout=5, env=sl.safe_git_env())
     except (OSError, subprocess.SubprocessError):
         return None
     m = re.search(r"github\.com[:/]+[^/]+/([^/\s]+?)(?:\.git)?/?$", r.stdout.strip()) if r.returncode == 0 else None
@@ -42,8 +42,8 @@ def _origin_repo(path):
 def _common_dir(path):
     """The repo's shared git dir (one for a repo and all its worktrees), or None."""
     try:
-        r = subprocess.run(["git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                           capture_output=True, text=True, timeout=5)
+        r = subprocess.run(sl.safe_git_argv(path, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+                           capture_output=True, text=True, timeout=5, env=sl.safe_git_env())
     except (OSError, subprocess.SubprocessError):
         return None
     return os.path.realpath(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
@@ -266,7 +266,7 @@ def sweep_messages(root, config=None, fallback=MESSAGE_FALLBACK):
     import subprocess
 
     def git(*args):
-        r = subprocess.run(["git", "-C", root] + list(args), capture_output=True, timeout=30)
+        r = subprocess.run(sl.safe_git_argv(root, *args), capture_output=True, timeout=30, env=sl.safe_git_env())
         return r.stdout.decode("utf-8", "replace") if r.returncode == 0 else None
 
     if git("rev-parse", "--verify", "-q", "HEAD") is None:
@@ -322,7 +322,8 @@ def sweep(root, config=None):
     import subprocess
     alnum = _name_regex(names)
     try:
-        raw = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True, timeout=30).stdout
+        raw = subprocess.run(sl.safe_git_argv(root, "ls-files", "-z"), capture_output=True, timeout=30,
+                             env=sl.safe_git_env()).stdout
     except (OSError, subprocess.SubprocessError):
         raise                                             # git missing or hung: the caller must not read that as "clean"
     hits = []

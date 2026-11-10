@@ -25,6 +25,21 @@ Check, citing file:line:
 7. A plan without `## Assumptions` (≤5) → Important.
 8. Rigor fits the size (mini vs standard); call out ceremony that adds no value.
 
+## What varies and what is assumed
+A figure measured on the author's machine is not a design. Reason: a plan fixed "8 workers" because one
+Mac has 8 cores; it must follow the environment, and the author never asked what else changes. Check the
+thinking, not just the checklist:
+1. List what changes per user and machine, and how the code reads each at run time: OS, CPU count
+   (affinity, container quota), memory, current load, battery, Python version, language, LLM vendor,
+   data size. A missing reader is Important.
+2. Tag every fact or number in the brief/plan "measured on this machine" or "true everywhere". A local
+   measurement used as a constant, cap or target is a finding. Run
+   `budgit varies <plan>`: it flags hard-coded local figures; exit 1 = findings.
+3. Walk the design through 3 different users and write what breaks for each, e.g. a laptop on battery,
+   a 2-CPU Linux container on a large host, a busy 4-core Windows PC, Python 3.8, a non-Spanish speaker.
+4. List the assumptions and what would make each false.
+5. Name the question nobody asked.
+
 Return only findings, never a recap of the plan: Critical / Important / Minor, each with `file:line` and a
 concrete fix, then a verdict (ready / ready with fixes / not ready).
 

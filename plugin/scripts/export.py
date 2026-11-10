@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 
 import floatmanifest
 import leak
@@ -345,6 +346,12 @@ def _copy_float(hub, stage_dir):
 
 def _ledger_texts(config):
     """The user's own words: ledger item texts and prompt inputs of the hub and every project under projects_root."""
+    return [t for t, _ in _her_sources(config)]
+
+
+def _her_sources(config):
+    """[(text, epoch or None)]: each piece of the user's words with the time of its inbox row (None for ledger text or a row
+    without a readable `ts`)."""
     dirs = []
     for key in ("hub", "projects_root"):
         if config.get(key):
@@ -356,12 +363,16 @@ def _ledger_texts(config):
     texts = []
     for d in dict.fromkeys(dirs):
         data = sl.studio_dir(d)
-        try:
-            if lint._regular(os.path.join(data, "ledger.json")):                    # a pipe here would block the export for ever
-                with open(os.path.join(data, "ledger.json"), encoding="utf-8") as f:
-                    texts += [i.get("text") or "" for i in json.load(f).get("items", [])]
-        except (OSError, ValueError, AttributeError):
-            pass
+        ledger = os.path.join(data, "ledger.json")
+        if os.path.lexists(ledger):
+            try:
+                if not lint._regular(ledger):                                       # a pipe here would block the export for ever
+                    raise ValueError("not a regular file")
+                with open(ledger, encoding="utf-8") as f:
+                    for i in json.load(f).get("items", []):
+                        texts += [(t, None) for t in _item_words(i)]
+            except (OSError, ValueError, AttributeError, TypeError) as exc:       # an unread ledger is never "clean"
+                raise ExportRefused("could not read %s (%s); fix it and run the export again" % (ledger, exc))
         try:
             if not lint._regular(os.path.join(data, "inbox.jsonl")):
                 continue
@@ -371,16 +382,134 @@ def _ledger_texts(config):
                         row = json.loads(line)
                     except ValueError:
                         continue
-                    if row.get("source") == "prompt":
-                        texts.append(row.get("text") or "")
+                    if isinstance(row, dict) and row.get("source") != "manual":
+                        when = sl._epoch(row.get("ts")) if isinstance(row.get("ts"), str) else None
+                        texts += [(_typed(t), when) for t in _row_words(row)]
         except OSError:
             pass
     return texts
 
 
+_ASK_JSON = "AskUserQuestion answer: "
+_ASK_PAIR = re.compile(r'"[^"]*"="')                   # the start of one `"question"="answer` pair in the text form of an answer
+_ASK_TEMPLATE = re.compile(r"^(Your questions have been answered:|The user answered:)|You can now continue with these answers "
+                           r"in mind\.?\s*$")
+
+
+def _strings(value):
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return []
+
+
+def _row_words(row):
+    """R-746: the words the user typed in one inbox row. `manual` rows are an agent's (never here); prompt and transcript rows are
+    the user's whole (tool blocks are cut later). An answer row drops the agent's question and the option labels the user only
+    picked; the user's free text, notes and rejection reason stay. Any other or future source counts whole: the gate fails closed."""
+    text = row.get("text") or ""
+    if not isinstance(text, str):
+        return _strings(text)
+    if row.get("source") != "answer":
+        return [text]
+    if sl.REJECTION_MARKER in text:                    # a refused tool call: the harness's wording, then the user's reason
+        return [text[text.index(sl.REJECTION_MARKER) + len(sl.REJECTION_MARKER):]]
+    if sl.REJECTION_PREFIX in text:                    # the harness's refusal alone, no reason typed: nothing of the user's
+        return []
+    if text.startswith(_ASK_JSON):
+        try:
+            data = json.loads(text[len(_ASK_JSON):])
+            asked = {q.get("question"): {o.get("label") for o in q.get("options") or [] if isinstance(o, dict)}
+                     for q in data.get("questions") or [] if isinstance(q, dict)}
+            out = []
+            for question, answer in (data.get("answers") or {}).items():
+                labels = asked.get(question, set())
+                out += [a for a in _strings(answer) if not all(p.strip() in labels for p in a.split(","))]
+            out += _strings({k: v for k, v in data.items() if k not in ("questions", "answers")})
+            return out
+        except (ValueError, AttributeError, TypeError):
+            return [text]
+    return [_ASK_TEMPLATE.sub(" ", _ASK_PAIR.sub("\n", text))]
+
+
+# R-746: a prompt row holds what the chat app recorded for that turn. Its tool blocks are a shell command and its output (a `!`
+# command, the gate's own report, a traceback that quotes shipped code), never words the user typed; they are cut before matching.
+# `command-args` (typed after a slash command) and `command-message` stay: counting too much is safe, dropping typed words is not.
+_TOOL_BLOCK = re.compile(r"<(bash-input|bash-stdout|bash-stderr|local-command-stdout|local-command-stderr|command-name|"
+                         r"task-notification|system-reminder)>.*?</\1>", re.S)
+_QUOTE = re.compile(r"«([^«»]*)»")
+
+
+def _typed(text):
+    return _TOOL_BLOCK.sub("\n", text)
+
+
+def _item_words(item):
+    """R-746: a ledger item that names its source input (`src`) was written by an agent; the user's words are in that input row,
+    and in the item only inside «…». An item with no `src` predates that link (or is hand-made): its whole text still counts."""
+    text = item.get("text") or ""
+    if item.get("src"):
+        return _QUOTE.findall(text)                    # one text per quote: a run never spans two quotes
+    return [text]
+
+
 def _runs(text):
     words = [w.lower() for w in _WORD.findall(text)]
     return {" ".join(words[i:i + RUN_WORDS]) for i in range(len(words) - RUN_WORDS + 1)}
+
+
+def _code_words():
+    """Names that are code before they are anyone's wording: Python keywords and builtins, the names in the modules every
+    script here uses, and the subprocess keyword arguments. Read from this Python at run time, never a hand list."""
+    import builtins, inspect, keyword, shutil as _sh, subprocess as _sp, sys as _sys
+    names = set(keyword.kwlist) | set(dir(builtins))
+    for mod in (os, os.path, _sys, _sp, json, re, _sh):
+        names |= set(dir(mod))
+    for fn in (_sp.Popen, _sp.run):
+        try:
+            names |= set(inspect.signature(fn).parameters)
+        except (TypeError, ValueError):
+            pass
+    return {n.lower() for n in names if not n.startswith("__")}
+
+
+# English function words and the ledger's own vocabulary (statuses, fields).
+_FUNCTION_WORDS = set("""a an the this that these those it its i you we they me us them my your our their
+of to in on at by for from with without into onto over under above below about after before between through during until
+and or but nor so if then else than as is are was were be been being am do does did done has have had having can could will
+would shall should may might must not no yes all any each every some one two more most less only also just very too
+there here when where which who whom whose what why how up down out off again once both either neither own same such""".split())
+_LEDGER_WORDS = set(sl.STATUSES) | {"item", "items", "id", "phase", "status", "text", "title", "src", "ledger", "parked", "blocked"}
+# Python names that are also ordinary English words: they never make a run code on their own ('print all the items and open
+# the list' is wording). Only this subtraction is written by hand; the code names themselves are read from the running Python.
+_PLAIN = set("""print open list all any map filter input set type range round sum max min help exit quit format next object
+property file path text check error errors name names time times sleep link remove rename move copy read write close kill
+wait run call match search split compile escape load dump stat walk access system pipe group user shell timeout args true
+false none hash slice super vars iter zip abs float sorted reversed enumerate license credits copyright sep join exists
+abort mode flags environ executable encoding output process sub template platform version pass break continue return raise
+ascii audit bin bool callable complex del dup ellipsis exception fork hex implementation intern len locale major minor nice
+nonlocal pattern pow prefix purge replace scanner select signal sync truncate unlink verbose warning
+yield import class global lambda while with try except finally assert await async is in not and or if else for from as
+case""".split())
+_COMMON = None
+_CODE = None
+
+
+def _common_only(run):
+    """True for a run that is code, not wording: every token is a code name, a function word or a ledger word, and at least
+    one token is plainly code (has `_` or a digit, or is a Python name that is no ordinary English word: 'os path realpath os
+    path expanduser'). A run of English words only ('print all the items and open the list') is never skipped."""
+    global _COMMON, _CODE
+    if _COMMON is None:
+        names = _code_words()
+        _CODE = names - _FUNCTION_WORDS - _LEDGER_WORDS - _PLAIN
+        _COMMON = names | _FUNCTION_WORDS | _LEDGER_WORDS
+    tokens = run.split()
+    code = {t for t in tokens if "_" in t or any(c.isdigit() for c in t) or t in _CODE}
+    return bool(code) and all(t in _COMMON or t in code for t in tokens)
 
 
 def _distinctive(run):
@@ -416,13 +545,27 @@ def run_allowed(root=None):
         raise ExportRefused("could not read %s (%s); fix it and run the export again" % (RUN_ALLOW, exc))
 
 
+def _spaced_runs(line):
+    """R-746: the 6-word runs of a shipped line whose words are written as wording: at least half of the 5 joins between them hold
+    a space. Words glued by code punctuation (`content="width=device-width, initial-scale`, `match(r"[A-Za-z0-9`) are identifiers
+    or a pattern, not a sentence anyone typed. Residual: a phrase shipped only as a slug (`a-b-c-d-e-f`) is not matched."""
+    found = list(_WORD.finditer(line))
+    out = set()
+    for i in range(len(found) - RUN_WORDS + 1):
+        win = found[i:i + RUN_WORDS]
+        spaced = sum(1 for a, b in zip(win, win[1:]) if any(c.isspace() for c in line[a.end():b.start()]))
+        if spaced * 2 >= RUN_WORDS - 1:
+            out.add(" ".join(m.group().lower() for m in win))
+    return out
+
+
 def run_hits(stage_dir, texts, allowed=()):
     """Any 6-word run of the user's own words that reached a shared file → [leak.Hit]. `allowed`: {(exported path, phrase)} pairs
     that are reviewed and cleared; the line's other runs still count."""
     runs = set()
     for t in texts:
         runs |= _runs(t)
-    runs = {r for r in runs if _distinctive(r)}
+    runs = {r for r in runs if _distinctive(r) and not _common_only(r)}
     hits = []
     if not runs:
         return hits
@@ -432,12 +575,91 @@ def run_hits(stage_dir, texts, allowed=()):
             text, _ = lint._text(os.path.join(d, f))
             rel = os.path.relpath(os.path.join(d, f), stage_dir)
             for n, line in enumerate((text or "").splitlines(), 1):
-                for run in sorted(r for r in _runs(line) & runs if (rel, r) not in allowed)[:1]:
+                for run in sorted(r for r in _spaced_runs(line) & runs if (rel, r) not in allowed):   # every run, never the first only
                     hits.append(leak.Hit(rel, n, "her words", run))  # voice-ok
     return hits
 
 
-def gate(stage_dir, config):
+GIT_TIMEOUT = 10
+SHIPPED_PATHS = ("plugin", "skills/budgit-kickoff", "share")     # where shipped text lives in the repo (security review round 2)
+
+
+def _git_first_seen(repo, span):
+    """Epoch of the oldest commit in `repo` that added the literal `span` (git log -S, not a regex), or None on any doubt: no git,
+    a shallow clone, an error, a timeout or no such commit. Fixed argument list, no shell, no textconv or external diff."""
+    git = shutil.which("git")
+    if not git or not repo or not span:
+        return None
+    base = [git, "-c", "core.fsmonitor=false", "-C", repo]
+    env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1")
+    try:
+        shallow = subprocess.run(base + ["rev-parse", "--is-shallow-repository"], capture_output=True, text=True,
+                                 timeout=GIT_TIMEOUT, stdin=subprocess.DEVNULL, env=env)
+        if shallow.returncode != 0 or shallow.stdout.strip() != "false":
+            return None
+        r = subprocess.run(base + ["log", "--no-textconv", "--no-ext-diff", "--no-show-signature", "-S" + span, "--reverse",
+                                   "--format=%ct", "--"] + list(SHIPPED_PATHS),
+                           capture_output=True, text=True, timeout=GIT_TIMEOUT, stdin=subprocess.DEVNULL, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    first = r.stdout.split()[:1] if r.returncode == 0 else []
+    return int(first[0]) if first and first[0].isdigit() else None
+
+
+def _span(line, run):
+    """The literal text of `run` in `line` (its words with the line's own punctuation and case), or None."""
+    found = list(_WORD.finditer(line))
+    for i in range(len(found) - RUN_WORDS + 1):
+        win = found[i:i + RUN_WORDS]
+        if " ".join(m.group().lower() for m in win) == run:
+            return line[win[0].start():win[-1].end()]
+    return None
+
+
+def product_quotes(hits, stage_dir, sources, repo):
+    """R-746: a hit is not the user's words when the repo held that very text in a commit BEFORE the user's earliest inbox row
+    with it (the user quoted the product back). Only runs that already hit are looked up. Ledger text, a row without a time and
+    any git doubt keep the hit. A line is cleared only when EVERY run that hit on it is such a quote; one run of new words keeps
+    all of the line's hits. Returns (kept hits, one note per cleared line naming the rule; a date only, never the text)."""
+    if not hits:
+        return hits, []
+    terms = {h.term for h in hits}
+    earliest, unknown = {}, set()
+    for text, when in sources:
+        for run in _runs(text) & terms:
+            if when is None:
+                unknown.add(run)
+            else:
+                earliest[run] = min(when, earliest.get(run, when))
+    by_line = {}
+    for h in hits:
+        by_line.setdefault((h.path, h.line), []).append(h)
+    kept, notes, seen, files = [], [], {}, {}
+    for (path, n), line_hits in by_line.items():
+        if path not in files:
+            text, _ = lint._text(os.path.join(stage_dir, path))
+            files[path] = (text or "").splitlines()
+        line = files[path][n - 1] if 0 < n <= len(files[path]) else ""
+        dates = []
+        for h in line_hits:
+            mine = earliest.get(h.term)
+            if mine is None or h.term in unknown:
+                break
+            span = _span(line, h.term)
+            if span not in seen:
+                seen[span] = _git_first_seen(repo, span)
+            if seen[span] is None or not seen[span] < mine:
+                break
+            dates.append(seen[span])
+        else:
+            notes.append("%s:%d: her words skipped: found in the repo since %s, before her row" % (  # voice-ok
+                path, n, time.strftime("%Y-%m-%d", time.gmtime(max(dates)))))
+            continue
+        kept += line_hits
+    return kept, notes
+
+
+def gate(stage_dir, config, repo=None):
     """leak.scan + the user's 6-word runs + `budgit secrets`. Returns the report text; raises on any hit."""
     allow = config.get("share_allow") or ()
     try:
@@ -448,13 +670,17 @@ def gate(stage_dir, config):
     prebuilt = os.path.join(stage_dir, "plugin", "float")
     if os.path.isdir(prebuilt):
         hits += leak.scan_binary_strings(prebuilt, terms, allow)      # the text scanners skip files with NUL bytes
-    hits += [h for h in run_hits(stage_dir, _ledger_texts(config), run_allowed())
+    sources = _her_sources(config)
+    words = [h for h in run_hits(stage_dir, [t for t, _ in sources], run_allowed())
              if ("%s:%s" % (h.path, h.term)).lower() not in {a.lower() for a in allow}]
+    words, notes = product_quotes(words, stage_dir, sources, repo or os.path.dirname(vendor.plugin_root()))
+    hits += words
+    tail = "".join("\n" + n for n in notes)
     rules = public_rules(stage_dir) + hidden_hits(stage_dir)
     if hits or rules:
-        raise ExportRefused(leak.report(hits + rules))
+        raise ExportRefused(leak.report(hits + rules) + tail)
     vendor.scan_staged(stage_dir)
-    return leak.report(hits)
+    return leak.report(hits) + tail
 
 
 PUBLISHED = "share-published.json"
@@ -512,4 +738,11 @@ def export(out, repo="OWNER/REPO", check_release=True, config=None, record=False
 def check(path, config=None):
     """`budgit export --check <dir>`: the gate alone over an existing folder."""
     config = sl.load_config() if config is None else config
-    return gate(os.path.realpath(os.path.expanduser(path)), config)
+    folder = os.path.realpath(os.path.expanduser(path))
+    try:
+        leak.terms(config)                                       # a config that cannot be read is refused before anything else
+    except ValueError as exc:
+        raise ExportRefused("could not run the leak check (%s); fix config.json and run it again" % exc)
+    if not os.path.isdir(folder) or not os.listdir(folder):      # R-857: nothing to scan; never start the secrets scanner on it
+        raise ExportRefused("run budgit export first; folder not found or empty: %s" % folder)
+    return gate(folder, config)

@@ -390,7 +390,8 @@ def run_plain_suite(project, notify=None, started=None, wait_load=False, load_no
         if started:
             started(slot)
         began = time.time()
-        code = subprocess.run(suitequeue.lower_priority(command), shell=True, cwd=top, stdin=subprocess.DEVNULL).returncode
+        import suitewait                                                       # R-869: the machine stays awake while it runs
+        code = suitewait.run_awake(suitequeue.lower_priority(command), shell=True, cwd=top)
         if code == 0 and ckey and suitecache.clean_tree(top) == tree:        # the same clean tree before and after
             suitecache.record(ckey, top, tree, command, time.time() - began)
         elif code != 0 and ckey:

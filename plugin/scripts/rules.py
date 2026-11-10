@@ -73,7 +73,10 @@ def _digest_of(t, shipped_only):
     if rep is None:
         return t["digest"]
     bullets = " ".join(x.lstrip("- ").strip() for x in rep.splitlines() if x.startswith("- "))
-    return (bullets or "your own text") [:160] + (" (your edit)" if bullets else "")
+    return (bullets or "your own text") [:100] +(" (your edit)" if bullets else "")
+
+
+DIGEST_CAP = 80
 
 
 def digest(role, off=(), shipped_only=False):
@@ -83,7 +86,8 @@ def digest(role, off=(), shipped_only=False):
     for t in topics():
         if t["id"] in off or not any(r in tags for r in t["roles"]):
             continue
-        lines.append("- %s: %s" % (t["id"], _digest_of(t, shipped_only)))
+        d = _digest_of(t, shipped_only)
+        lines.append("- %s: %s" % (t["id"], d if len(d) <= DIGEST_CAP else d[:DIGEST_CAP - 1].rstrip() + "…"))   # R-849: `budgit rules show` has the rest
     return "\n".join(lines)
 
 

@@ -49,7 +49,7 @@ def plugin_version():
 
 
 def _git(path, *args):
-    r = subprocess.run(["git", "-C", path] + list(args), capture_output=True, text=True)
+    r = subprocess.run(sl.safe_git_argv(path, *args), capture_output=True, text=True, env=sl.safe_git_env())
     return r.stdout.strip() if r.returncode == 0 else None
 
 

@@ -105,18 +105,23 @@ def _live_counts(transcript_path, level, inc):
                 if not (block.get("input") or {}).get("model"):
                     nomodel.append(block.get("id"))
     subs = inc.setdefault("subs", {})
+    for key, entry in list(subs.items()):    # older saved states hold 2 or 3 fields: pad all, files gone from disk too
+        subs[key] = (list(entry) + [0, 0, 0, []][len(entry):])[:4]
     sid = os.path.basename(transcript_path)[:-6]
     for ap in glob.glob(os.path.join(os.path.dirname(transcript_path), sid, "subagents", "agent-*.jsonl")):
-        off, calls = subs.get(ap, (0, 0))
+        off, calls, waits, ids = subs.get(ap, (0, 0, 0, []))
         new, off2 = _new_lines(ap, off)
         if off2 < off:
-            calls = 0
-        calls += sum(1 for rec in new for _ in comply._tool_uses(rec))
-        subs[ap] = (off2, calls)
+            calls, waits, ids = 0, 0, []
+        seen = set(ids)           # a tool_use id repeats in a second record of a real transcript: count it once
+        kinds = [comply.call_kind(b) for rec in new for b in comply.own_calls(rec, seen)]
+        calls += kinds.count("work")
+        waits += kinds.count("wait")
+        subs[ap] = (off2, calls, waits, sorted(seen))
     filled = budget.filled_ids(sid)
     return {"agents_without_model": sum(1 for t in nomodel if t not in filled),
             "bursts_over_limit": sum(1 for n in per_msg.values() if n > max(pol["subagents"], 1)),
-            "agents_over_call_budget": sum(1 for _, c in subs.values() if c > pol["agent_calls"]),
+            "agents_over_call_budget": sum(1 for e in subs.values() if e[1] > pol["agent_calls"]),
             "compactions_without_checkpoint": inc.get("cwc", 0)}
 
 
@@ -138,6 +143,13 @@ def live_check(session_id, transcript_path, level=None):
     if before is None:
         return None
     grew = ["+%d %s" % (now[k] - before.get(k, 0), comply.LABELS[k]) for k in LIVE if now[k] > before.get(k, 0)]
+    if now["agents_over_call_budget"] > before.get("agents_over_call_budget", 0):
+        import budget
+        cap = budget.POLICY[level]["agent_calls"]
+        over = [(e[1], e[2]) for e in data["inc"].get("subs", {}).values() if e[1] > cap]
+        c, w = max(over)
+        grew = [g + " (work %d, waits %d)" % (c, w) if g.endswith(comply.LABELS["agents_over_call_budget"]) else g
+                for g in grew]
     if not grew:
         return None
     return "budgit self-check: since the last prompt: %s (rules: reference/budget.md). " % ", ".join(grew) + ASK

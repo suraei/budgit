@@ -351,20 +351,51 @@ def load_now():
         return None
 
 
-def run(only=None, apply_changes=False, hours=IDLE_HOURS, now=None, load=None, live=None):
-    """The whole pass -> a report dict (see render). `only` limits it to those project folders (they must be projects)."""
+EXIT_SKIPPED = 11          # --apply was skipped because the machine was busy (nothing to clean is success, exit 0; a dry run is always 0)
+
+
+def busy_now():
+    """R-864/I-1395: the SAME busy reading admit and `budgit busy` use (median CPU % of the cores, free memory; never the
+    load average) -> (busy, reason). One function, no second copy."""
+    import admit
+    try:
+        window = int(sl.env("BUSY_WINDOW") or 15)           # seconds of CPU sampling; a knob for slow or tiny machines
+    except ValueError:
+        window = 15
+    return admit.is_busy(window=max(1, window))
+
+
+def exit_code(report):
+    """0 when --apply did work, had nothing to clean, or this was a dry run; 1 when something failed to remove; EXIT_SKIPPED only for a busy skip."""
+    if report["totals"]["failed"]:
+        return 1
+    return EXIT_SKIPPED if (report.get("requested_apply") and report.get("busy_reason")) else 0
+
+
+def skip_reason(report):
+    """The one line that says why --apply did nothing, or None (a dry run never has one)."""
+    if not report.get("requested_apply"):
+        return None
+    if report.get("busy_reason"):
+        return "skipped: machine busy (%s)" % report["busy_reason"]
+    if not (report["totals"]["removed"] or report["totals"]["deleted"]):
+        return "nothing to clean"
+    return None
+
+
+def run(only=None, apply_changes=False, hours=IDLE_HOURS, now=None, busy=None, live=None):
+    """The whole pass -> a report dict (see render). `only` limits it to those project folders (they must be projects).
+    `busy` is a (busy, reason) reading, injected by tests; else busy_now()."""
     now = time.time() if now is None else now
     config = sl.load_config()
     found, left = projects(config)
     if only:
         wanted = {os.path.realpath(os.path.expanduser(p)) for p in only}
         found = [p for p in found if os.path.realpath(p) in wanted]
-    load = load_now() if load is None else load
-    limit = _load_limit()
-    busy = load is not None and load > limit
+    busy, why = busy_now() if busy is None else busy
     if live is None and not busy:
         live = live_cwds()
-    report = {"projects": [], "left_alone": left, "load": load, "load_limit": limit, "git_skipped": busy,
+    report = {"projects": [], "left_alone": left, "busy_reason": why if busy else None, "git_skipped": busy, "requested_apply": bool(apply_changes),
               "applied": bool(apply_changes and not busy), "hours": hours,
               "totals": {"removed": 0, "deleted": 0, "kept": 0, "failed": 0}}
     for path in found:
@@ -412,7 +443,7 @@ def render(report, lang=None):
     if lo and (lo["trash"] or lo["unknown"]):
         lines.append(t("hk.leftovers", trash=lo["trash"], unknown=lo["unknown"], private=lo["private"]))
     if report["git_skipped"]:
-        lines.append(t("hk.busy", load=round(report["load"], 1), limit=round(report["load_limit"], 1)))
+        lines.append(t("hk.busy", why=report["busy_reason"]))
         return "\n".join(lines)
     done_word = "hk.removed" if report["applied"] else "hk.would_remove"
     drop_word = "hk.deleted" if report["applied"] else "hk.would_delete"

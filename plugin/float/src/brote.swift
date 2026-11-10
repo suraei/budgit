@@ -36,6 +36,9 @@ enum K {
     static let fallPause = 0.5                              // he notices there is nothing under him before he drops
     static let hug = 20.0                                   // how far into the window's side he holds on while climbing
     static let tripEvery = 60.0, tripAway = 60.0, firstTrip = 20.0   // one outing at most every 60 s (the first 20 s after launch), a window trip lasts 60 s
+    // Stopgap until the window-level redesign: no outings (edge and ladder climbs, flights up, window trips) and no random strolls.
+    // He stays where he is and plays his activities in place; a walk only starts when something asks for it (a fetch, back inside his limits).
+    static let outingsOn = false, randomStroll = false
     static let homeRadius = 1.5 * spriteW                   // he wanders this far each side of the spot the user put him on
     static let focusMinW = 300.0, focusMinH = 200.0         // a window this big in a focus app counts as the chat or the terminal
     static let inputBand = 170.0                            // the strip along the bottom of a chat window where the input box sits
@@ -256,11 +259,13 @@ struct Stroll {
     /// One 10 fps tick: he walks to a spot anywhere on `lo...hi` (the window top he stands on, or the floor), stands a few seconds, and goes on.
     /// `busy` (a gesture, a clip, the calm after one, hover) pauses the walk; it goes on afterwards.
     /// `visit`: a spot he likes (beside the book); now and then a new walk goes there.
-    mutating func tick(state: String, busy: Bool, x: inout Double, lo: Double, hi: Double, rng: () -> Double, visit: Double? = nil) {
+    /// `wander` false: he never picks a walk of his own; a target set from outside (a fetch, back inside his limits) is still walked.
+    mutating func tick(state: String, busy: Bool, x: inout Double, lo: Double, hi: Double, rng: () -> Double, visit: Double? = nil, wander: Bool = true) {
         guard let step = Stroll.pace(state) else { walking = false; target = nil; return }
         if busy { walking = false; return }
         guard let t = target else {
             walking = false
+            if !wander { return }
             if rest > 0 { rest -= 1; return }
             guard hi - lo >= K.strollMin else { return }
             if let v = visit, v >= lo, v <= hi, abs(v - x) > 1, rng() < K.bookVisit { target = v; return }
@@ -500,6 +505,29 @@ struct Explorer {
         awaySince == nil && Stroll.lively(state) && idle && now - lastTrip >= K.tripEvery
     }
     func shouldReturn(now: Double) -> Bool { awaySince.map { now - $0 >= K.tripAway } ?? false }
+}
+/// The app's one gate for an outing. With `K.outingsOn` false the trip clock never fires, whatever his mood.
+func outingDue(_ ex: Explorer, state: String, idle: Bool, now: Double, on: Bool = K.outingsOn) -> Bool {
+    on && ex.mayLeave(state: state, idle: idle, now: now)
+}
+/// Every spot a route aims at lies inside the visible frame (Dock and menu bar or notch out) of the screen it ends on.
+func clampedLegs(_ legs: [Leg], from start: Pt, screens: [Rc]) -> [Leg] {
+    func frame(_ p: Pt) -> Rc { screens.isEmpty ? Rc(0, 0, 1440, 900) : screens[screenIndex(for: spriteCentre(p), in: screens)] }
+    func fx(_ x: Double, _ v: Rc) -> Double { clamp(x, v.minX, max(v.minX, v.maxX - K.spriteW)) }
+    func fy(_ y: Double, _ v: Rc) -> Double { clamp(y, v.minY, max(v.minY, v.maxY - K.spriteH)) }
+    func fit(_ p: Pt) -> Pt { let v = frame(p); return Pt(fx(p.x, v), fy(p.y, v)) }
+    var cur = fit(start)
+    return legs.map { (l: Leg) -> Leg in      // a walk keeps its height and a climb its x, so each is held to the screen it starts on; hops and flights to the one they end on
+        switch l {
+        case .walk(let x): cur = Pt(fx(x, frame(cur)), cur.y); return .walk(x: cur.x)
+        case .climb(let y, let left): cur = Pt(cur.x, fy(y, frame(cur))); return .climb(y: cur.y, left: left)
+        case .ladder(let y, let left): cur = Pt(cur.x, fy(y, frame(cur))); return .ladder(y: cur.y, left: left)
+        case .descend(let y, let left): cur = Pt(cur.x, fy(y, frame(cur))); return .descend(y: cur.y, left: left)
+        case .hop(let to): cur = fit(to); return .hop(to: cur)
+        case .fly(let to): cur = fit(to); return .fly(to: cur)
+        case .cling, .hover: return l
+        }
+    }
 }
 /// Is he free to go on an outing? No gesture, fidget, hover, hold or call on him. The director's work clip (he sits at the laptop while Claude works)
 /// does not hold him back: an outing's own clips win over it, and Claude is working most of the time.
@@ -3345,6 +3373,56 @@ func runSelftest(assets: String) -> Never {
         check(zPurposeOK, "10 minutes, the user put him on the corner under the window: he stays there (only the flight before the drop), outings return home, no loop")
         check(zSim(seed: 1, windows: [(5, zWinA)], legacyBack: true).flees > 1, "the replay of the round-5 failure is caught: with the covered home as every outing's return point he flees again after each outing")
         check(K.tripEvery <= 60 && K.firstTrip < K.tripEvery, "trips come often enough to be seen, the first one soon after launch")
+        // stopgap, one test per invariant
+        do { // 30 simulated minutes at 10 Hz, radiante and idle (the mood that went out most): the app's outing gate never fires
+            var ex = Explorer(lastTrip: -1e9), ctl = Explorer(lastTrip: -1e9)
+            var fired = 0, control = 0
+            for i in 0..<18000 {
+                let now = Double(i) / 10
+                if outingDue(ex, state: "radiante", idle: true, now: now) { fired += 1; ex.lastTrip = now }
+                if outingDue(ctl, state: "radiante", idle: true, now: now, on: true) { control += 1; ctl.lastTrip = now }
+            }
+            check(!K.outingsOn && fired == 0 && control >= 29, "R-846 no outing timer fires in 30 simulated minutes (fired \(fired); the control with outings on fired \(control))")
+        }
+        do { // 30 minutes of ticks in every awake mood, a book to visit: he never starts a walk of his own; a walk asked from outside still arrives
+            var started = 0
+            for mood in ["radiante", "contento", "justo", "cansado", "agotado", "enfermo"] {
+                var s = Stroll(); s.rest = 0; var x = 500.0
+                for _ in 0..<18000 {
+                    s.tick(state: mood, busy: false, x: &x, lo: 0, hi: 1300, rng: { Double.random(in: 0..<1) }, visit: 900, wander: K.randomStroll)
+                    if s.target != nil || s.walking || x != 500 { started += 1 }
+                }
+            }
+            var asked = Stroll(); asked.target = 700; var xa = 500.0
+            for _ in 0..<200 { asked.tick(state: "contento", busy: false, x: &xa, lo: 0, hi: 1300, rng: { Double.random(in: 0..<1) }, wander: K.randomStroll) }
+            var ctl = Stroll(); ctl.rest = 0; var xc = 500.0
+            for _ in 0..<100 { ctl.tick(state: "contento", busy: false, x: &xc, lo: 0, hi: 1300, rng: { Double.random(in: 0..<1) }, wander: true) }
+            check(!K.randomStroll && started == 0 && xa == 700 && xc != 500, "R-846 no stroll starts unless asked (\(started) ticks moved; asked walk ended at \(xa); control with wandering on at \(xc))")
+        }
+        do { // every target of a route, on one screen and on two, lies inside the visible frame (menu bar or notch and Dock already out of it)
+            let scr = [Rc(0, 80, 1470, 843), Rc(1470, 0, 1920, 1055)]
+            func ends(_ legs: [Leg], from s: Pt) -> [Pt] {
+                var c = s
+                return legs.compactMap { l -> Pt? in
+                    switch l {
+                    case .walk(let x): c = Pt(x, c.y)
+                    case .climb(let y, _), .ladder(let y, _), .descend(let y, _): c = Pt(c.x, y)
+                    case .hop(let to), .fly(let to): c = to
+                    case .cling, .hover: return nil
+                    }
+                    return c
+                }
+            }
+            func inFrame(_ p: Pt) -> Bool { scr.contains { p.x >= $0.minX && p.x <= $0.maxX - K.spriteW && p.y >= $0.minY && p.y <= $0.maxY - K.spriteH } }
+            let start = Pt(400, 80)
+            let wild: [Leg] = [.walk(x: -400), .ladder(y: 2000, left: true), .climb(y: 940, left: false), .hop(to: Pt(1460, 990)), .fly(to: Pt(-50, -50)),
+                               .fly(to: Pt(3800, 2000)), .descend(y: -300, left: true), .cling(secs: 1, left: true), .hover(secs: 1), .walk(x: 9000)]
+            let fitted = clampedLegs(wild, from: start, screens: scr)
+            let tame: [Leg] = [.walk(x: 600), .fly(to: Pt(900, 300)), .hop(to: Pt(2000, 0))]
+            check(fitted.count == wild.count && ends(fitted, from: start).allSatisfy(inFrame) && !ends(wild, from: start).allSatisfy(inFrame)
+                  && clampedLegs(tame, from: start, screens: scr) == tame,
+                  "R-846 every target stays inside the visible frame (\(fitted))")
+        }
     }
     do { // pickClaude
         let list = [WinInfo(pid: 5, layer: 0, bounds: Rc(0, 0, 500, 400)), WinInfo(pid: 5, layer: 0, bounds: Rc(10, 10, 900, 600)),
@@ -5517,7 +5595,7 @@ final class Brote: NSObject {
             if let t = stroll.target, t < r.lo || t > r.hi { stroll.target = clamp(t, r.lo, r.hi) }                // a walk never ends outside where he may be
             if stroll.target == nil, x < r.lo - 0.5 || x > r.hi + 0.5 { stroll.target = clamp(x, r.lo, r.hi) }     // out of bounds (the chat came up, or the window moved): back in
             let visit = layout.host == nil && bookOnFloor ? bookBlockNow.map { x <= ($0.lo + $0.hi) / 2 ? $0.lo - 4 : $0.hi + 4 } : nil   // beside the book, 13 pt of gap
-            for _ in 0..<reps { stroll.tick(state: glue.bridge.state, busy: glue.busy || pressedDown || glue.bridge.calm, x: &x, lo: r.lo, hi: r.hi, rng: { Double.random(in: 0..<1) }, visit: visit) }
+            for _ in 0..<reps { stroll.tick(state: glue.bridge.state, busy: glue.busy || pressedDown || glue.bridge.calm, x: &x, lo: r.lo, hi: r.hi, rng: { Double.random(in: 0..<1) }, visit: visit, wander: K.randomStroll) }
             if x != layout.pos.x { layout.pos.x = x; positionWindows() }
             glue.walking = stroll.walking
             fetchStep()
@@ -6290,7 +6368,7 @@ final class Brote: NSObject {
         if explorer.shouldReturn(now: now) {
             explorer.awaySince = nil
             goHome(why: "home")
-        } else if explorer.mayLeave(state: glue.bridge.state, idle: glue.outingFree, now: now) {
+        } else if outingDue(explorer, state: glue.bridge.state, idle: glue.outingFree, now: now) {
             let home = layout.homeSpot()
             let zone = zc.zone(noGo, home: home)
             let screen = layout.visible(for: layout.pos)
@@ -6382,7 +6460,8 @@ final class Brote: NSObject {
     }
 
     /// A route played at 60 fps: walking, climbing, a ladder, a hop or a flight, each with its clip.
-    func startRoute(_ legs: [Leg], to target: Plat?, arrive: String?, why: String) {
+    func startRoute(_ raw: [Leg], to target: Plat?, arrive: String?, why: String) {
+        let legs = clampedLegs(raw, from: layout.pos, screens: layout.screens)      // never a target outside the visible frame
         guard !legs.isEmpty else { return }
         stopRoute()
         layout.leave(); riding = false; stroll.target = nil; stroll.walking = false
