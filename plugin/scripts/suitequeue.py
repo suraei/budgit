@@ -5,7 +5,7 @@ wrong reason. Every full-suite run (`budgit main-check`, `budgit suite`) takes o
 waits for one to free up (R-382: two slots by default, `admit.suite_slots` in the home config or BUDGIT_SUITE_SLOTS; one
 reproduces the old one-at-a-time queue). A slot is an flock on one file under the Budgit home (suite.lock, suite.lock.1, ...),
 so it is released when the holder dies (no stale pid to judge). The load average at the start is recorded so a timing
-failure can be judged against how busy the machine was.
+failure can be judged against how busy the machine was (the busy snapshot of admit.is_busy: CPU and memory pressure).
 
 The suite command itself runs under `nice -n 10`, which leaves the CPU to hooks and the UI (BUDGIT_SUITE_PRIORITY=background uses
 `taskpolicy -b` instead, =off leaves the priority alone). `taskpolicy -b` is not the default: on Apple silicon it confines the
@@ -14,8 +14,8 @@ suite to the efficiency cores and measured 4.5x slower than `nice` for the same 
 Who gets a free slot is decided by suiteorder.py (R-402): a release suite first, then the projects in turn, one waiting
 suite per checkout, so a project with many lanes cannot keep another project's suite waiting.
 
-A suite also asks `budgit admit` (admit.py) before it starts: while the 1-minute load average is above the core count it does
-not start (`--wait` waits and rechecks every 30 s instead). The thresholds live in the home config, not here; nothing here
+A suite also asks `budgit admit` (admit.py) before it starts: while the busy CPU (kernel counters, in cores) is above the
+limit, 85 % of the cores by default, it does not start (`--wait` waits and rechecks every 30 s instead). The thresholds live in the home config, not here; nothing here
 runs inside a hook.
 
 A suite that starts a nested run (a test that calls `budgit main-check`) passes through: the holder marks its child with
@@ -77,7 +77,7 @@ def lower_priority(command):
 
 class LoadTooHigh(sl.StudioError):
     def __init__(self, load, limit):
-        super().__init__("load %.1f is above the limit %.1f" % (load, limit))
+        super().__init__("busy CPU %.1f cores is above the limit %.1f cores" % (load, limit))
         self.load, self.limit = load, limit
 
 
@@ -88,11 +88,19 @@ def load_limit():
     return admit.thresholds({"cores": admit.cores()})["wait_load"]
 
 
-def load_average():
+SNAPSHOT_WINDOW = 1        # seconds of CPU sampling for the start note; a note, so one short sample
+
+
+def busy_snapshot():
+    """R-889b: the busy snapshot recorded at suite start, from the ONE shared busy check (admit.is_busy): "busy: <signal>"
+    or the calm text ("free", plus any signal that could not be read). A timing note only, never decides; never the load
+    average. None when the check fails."""
+    import admit
     try:
-        return [round(x, 1) for x in os.getloadavg()]
-    except (OSError, AttributeError):
+        busy, why = admit.is_busy(window=SNAPSHOT_WINDOW)
+    except Exception:
         return None
+    return ("busy: " + why) if busy else why
 
 
 def _holder(fd_path):
@@ -104,18 +112,22 @@ def _holder(fd_path):
 
 
 class SuiteSlot:
-    """`with SuiteSlot(label, notify=fn) as slot:` -> slot.waited (seconds queued), slot.load (load average at start).
-    `notify(waited_seconds, holder_dict)` is called when the wait begins and then every minute."""
+    """`with SuiteSlot(label, notify=fn) as slot:` -> slot.waited (seconds queued), slot.load (the busy snapshot at start,
+    a string from busy_snapshot; `snapshot` injects it). `notify(waited_seconds, holder_dict)` is called when the wait
+    begins and then every minute."""
 
-    def __init__(self, label="", notify=None, sleep=time.sleep, wait_load=False, load_notice=None, project=None, release=None):
+    def __init__(self, label="", notify=None, sleep=time.sleep, wait_load=False, load_notice=None, project=None, release=None,
+                 snapshot=None, cpu=None):
         self.label, self.notify, self.sleep = label, notify, sleep
+        self.snapshot = snapshot or busy_snapshot
+        self.cpu = cpu                                   # busy cores reader; default admit.cpu_load (kernel counters)
         self.project, self.release = project, (release if release is not None else bool(sl.env("SUITE_RELEASE")))
         self.wait_load, self.load_notice = wait_load, load_notice
         self.waited, self.load, self.fd, self.path = 0, None, None, None
 
     def __enter__(self):
         if os.environ.get(HELD_ENV):
-            self.load = load_average()
+            self.load = self.snapshot()
             return self
         paths = slot_paths()
         os.makedirs(os.path.dirname(paths[0]), exist_ok=True)
@@ -195,8 +207,8 @@ class SuiteSlot:
         """Holding the lock: ask admit; refuse (or, with wait_load, wait for) a machine that is not ready for a suite."""
         import admit
         while True:
-            self.load = load_average()                              # recorded for timing notes only, never decides (R-841)
-            got = admit.decide({"cpu_load": admit.cpu_load(), "cores": admit.cores()}, "suite")
+            self.load = self.snapshot()                             # recorded for timing notes only, never decides (R-889b)
+            got = admit.decide({"cpu_load": (self.cpu or admit.cpu_load)(), "cores": admit.cores()}, "suite")
             if got["verdict"] == admit.GO:
                 return
             limits = got["limits"]

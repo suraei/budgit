@@ -444,8 +444,10 @@ def _title_head(s):
 NAME_MAX = 20                   # R-283 S2b: the project name at the head of the status line, cut to keep LINE_MAX,
 NAME_MIN = 6                    # never below NAME_MIN: the longest line (12/144/139, 100 %, end day) still fits
 LINE_MAX = 80
+H5_WARN, H5_HOT = 70, 90       # R-878: the 5-hour gauge is blue below 70 %, amber from 70, coral from 90 (replaces the "5 h al N %" text)
+H5_KINDS = ("bar", "warn", "end")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
-_ANSI_COLOURS = {"doing": "9ed36a", "todo": "f2a7c3", "ideas": "c9b6ff", "bar": "7cc4ff", "end": "ff8f70", "arrive": "9ed36a",
+_ANSI_COLOURS = {"doing": "9ed36a", "todo": "f2a7c3", "ideas": "c9b6ff", "bar": "7cc4ff", "end": "ff8f70", "arrive": "9ed36a", "warn": "f5c04a",
                  "dim": "6f6d66"}
 
 
@@ -459,6 +461,7 @@ def status_line(sit, lang, ansi=False, extras=False, tail="", drop_ideas=False):
     the stalled-item count (stale > 0) and the 5-hour window (h5 >= 70), so the line may then pass 80 columns. `tail`
     (the update notice) goes last and its width is kept free before the name is cut."""
     import i18n
+    import time
     t = lambda key, **kw: i18n.t(key, lang, **kw)
 
     def paint(kind, text):
@@ -469,13 +472,14 @@ def status_line(sit, lang, ansi=False, extras=False, tail="", drop_ideas=False):
 
     dim = lambda text: paint("dim", text)
     name = None if sit.get("noproject") else sit.get("name")
-    label, ideas = "", ""
+    label, ideas, head_short = "", "", ""
     if sit.get("noproject"):             # R-238: no ledger here: the account part (plan limit) still shows
         head = dim(t("status.general" if sit.get("general") else "status.no_project"))     # R-373: the general notebook answers here
     elif sit["doing"] or sit["next"] or sit["later"]:
         later = t("status.idea" + ("_one" if sit["later"] == 1 else "_many"), n=sit["later"])
         head = " ".join((paint("doing", "\u273f " + t("status.doing", n=sit["doing"])),
                          paint("todo", "\u2058 " + t("status.todo", n=sit["next"]))))
+        head_short = " ".join((paint("doing", "\u273f %d" % sit["doing"]), paint("todo", "\u2058 %d" % sit["next"])))
         ideas = " " + paint("ideas", "\u2727 " + later)
         if drop_ideas:                   # R-522: room for the weekly sub-limit
             ideas = ""
@@ -484,13 +488,29 @@ def status_line(sit, lang, ansi=False, extras=False, tail="", drop_ideas=False):
         head = t("status.no_tasks") if name else t("status.nothing")
     wait = paint("end", t("status.waiting", n=sit["waiting"])) + " " + dim("\u00b7") + " " if sit.get("waiting") else ""
 
-    def compose(keep_ideas, keep_forecast):
-        line, extra = head + (ideas if keep_ideas else ""), ""
+    def gauge(used, kind):
+        filled = max(0, min(6, int(float(used) * 6 / 100 + 0.5)))
+        bar = paint(kind, "\u25b0" * filled) + dim("\u25b1" * (6 - filled)) if ansi else "\u25b0" * filled + "\u25b1" * (6 - filled)
+        return bar + " " + paint(kind, "%d %%" % int(float(used)))
+
+    h5 = sit.get("h5_pct")               # R-878: the 5-hour window exists only when the host sent one (Pro/Max, not Ultra)
+    h5_at = None
+    if h5 is not None and sit.get("h5_reset") is not None:     # R-525: no resets_at means no time, never a crash
+        try:
+            h5_at = time.strftime("%H:%M", time.localtime(float(sit["h5_reset"])))
+        except (TypeError, ValueError, OverflowError, OSError):
+            h5_at = None
+
+    def compose(keep_ideas, keep_forecast, keep_reset=True, keep_labels=True, compact=False):
+        line, extra = (head_short if compact and head_short else head) + (ideas if keep_ideas else ""), ""
+        if h5 is not None:
+            kind = H5_KINDS[(float(h5) >= H5_WARN) + (float(h5) >= H5_HOT)]
+            line += " " + dim("\u250a") + " " + (dim(t("status.h5") + " ") if keep_labels else "") + gauge(h5, kind)
+            if keep_reset and h5_at:
+                line += " " + dim("\u21bb " + h5_at)
         if sit["week"] is not None:
             used = float(sit["week"])
-            filled = max(0, min(6, int(used * 6 / 100 + 0.5)))
-            bar = paint("bar", "\u25b0" * filled) + dim("\u25b1" * (6 - filled)) if ansi else "\u25b0" * filled + "\u25b1" * (6 - filled)
-            line += " " + dim("\u250a") + " " + bar + " " + paint("bar", "%d %%" % int(used))
+            line += " " + dim("\u250a") + " " + (dim(t("status.wk") + " ") if keep_labels and h5 is not None else "") + gauge(used, "bar")
             if keep_forecast and sit.get("forecast") == "out":
                 line += " " + dim("\u00b7") + " " + paint("end", t("status.end", day=sit["out_day"], hour="%02d" % sit["out_hour"]))
             elif keep_forecast and sit.get("forecast") == "ok":
@@ -499,16 +519,18 @@ def status_line(sit, lang, ansi=False, extras=False, tail="", drop_ideas=False):
                 stale = sit.get("stale") or 0
                 if stale > 0:
                     extra += " " + dim("\u00b7") + " " + paint("end", t("status.stale" + ("_one" if stale == 1 else "_many"), n=stale))
-                if (sit.get("h5") or 0) >= 70:
-                    extra += " " + dim("\u00b7") + " " + paint("bar", t("status.five_hour", used=int(sit["h5"])))
         return line, extra
 
     # R-361: what waits on the user goes first and always shows; when it makes the line pass 80 columns the ideas
     # count gives way first, then the forecast.
     plain = lambda body: len(_ANSI_RE.sub("", body))
-    for keep_ideas, keep_forecast in (((True, True), (False, True), (False, False)) if wait else ((True, True),)):
-        line, extra = compose(keep_ideas, keep_forecast)
-        if not wait or plain("budgit  " + wait + line if not name else wait + line + tail) + (0 if not name else NAME_MIN + 3) <= LINE_MAX:
+    # R-878: with a 5-hour gauge the order goes on: then the reset time, then the "5h"/"sem" labels.
+    # Last resort (R-878 round 3): the counts lose their words (glyph and number) so every language fits 80 columns.
+    steps = ((True, True, True, True), (False, True, True, True), (False, False, True, True),
+             (False, False, False, True), (False, False, False, False), (False, False, False, False, True))
+    for keep in (steps if wait or h5 is not None else steps[:1]):
+        line, extra = compose(*keep)
+        if not (wait or h5 is not None) or plain("budgit  " + wait + line if not name else wait + line + tail) + (0 if not name else NAME_MIN + 3) <= LINE_MAX:
             break
     if not name:
         return "budgit  " + wait + line + extra + tail
@@ -647,18 +669,68 @@ def match_items(data, text, now=None, limit=3):
     return [f[3] for f in found[:limit]]
 
 
+def main_project_root(project):
+    """The MAIN project root: the parent of the git common dir, so a worktree resolves to the checkout that owns it.
+    No git around `project`: `project` itself."""
+    cur = os.path.realpath(project)
+    while True:
+        dot = os.path.join(cur, ".git")
+        if os.path.isdir(dot):
+            return cur
+        if os.path.isfile(dot):
+            try:
+                gitdir = read_text(dot).strip()
+                if gitdir.startswith("gitdir:"):
+                    gitdir = os.path.normpath(os.path.join(cur, gitdir[7:].strip()))
+                    common = os.path.realpath(os.path.join(gitdir, read_text(os.path.join(gitdir, "commondir")).strip()))
+                    back = read_text(os.path.join(gitdir, "gitdir")).strip()   # the worktree's own .git file
+                    back = os.path.realpath(os.path.join(gitdir, back))
+                    real_gitdir = os.path.realpath(gitdir)
+                    # trust the pointer only if the common dir's worktrees/<name>/gitdir points back HERE
+                    if (back == os.path.realpath(dot) and os.path.dirname(os.path.dirname(real_gitdir)) == common
+                            and os.path.basename(os.path.dirname(real_gitdir)) == "worktrees"):
+                        return os.path.dirname(common)
+            except (OSError, ValueError):
+                pass
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return os.path.realpath(project)
+        cur = parent
+
+
+def verify_dirs(project):
+    """R-765: THE verify folders `ledger verify` reads: every folder the guard seals against non-verifier writes
+    (`DATA_NAMES` + /verify), in the MAIN project root. Never a folder outside that set (that would be self-evidence)."""
+    root = main_project_root(project)
+    first = os.path.basename(resolve_data_dir(root))
+    names = [first] + [n for n in DATA_NAMES if n != first]
+    return [os.path.join(root, n, "verify") for n in names]
+
+
+def verify_reports(project, item_id):
+    """The existing verify reports for `item_id`, in `verify_dirs` order."""
+    return [p for p in (os.path.join(d, item_id + ".md") for d in verify_dirs(project)) if os.path.isfile(p)]
+
+
+def verify_report_path(project, item_id):
+    """The report `ledger verify` reads: the first existing one, else where the verifier would write it."""
+    found = verify_reports(project, item_id)
+    return found[0] if found else os.path.join(verify_dirs(project)[0], item_id + ".md")
+
+
 def _stale_receipt(project, item_id):
     """Rename verify/R-n.md to verify/R-n.stale-YYYYMMDD.md so the old PASS cannot verify the reopened item again."""
-    report = os.path.join(studio_dir(project), "verify", item_id + ".md")
-    if not os.path.isfile(report):
-        return None
-    day = now()[:10].replace("-", "")
-    target, n = os.path.join(os.path.dirname(report), "%s.stale-%s.md" % (item_id, day)), 1
-    while os.path.exists(target):
-        n += 1
-        target = os.path.join(os.path.dirname(report), "%s.stale-%s-%d.md" % (item_id, day, n))
-    os.replace(report, target)
-    return os.path.basename(target)
+    names = []
+    for report in verify_reports(project, item_id):
+        day = now()[:10].replace("-", "")
+        target, n = os.path.join(os.path.dirname(report), "%s.stale-%s.md" % (item_id, day)), 1
+        while os.path.exists(target):
+            n += 1
+            target = os.path.join(os.path.dirname(report), "%s.stale-%s-%d.md" % (item_id, day, n))
+        os.replace(report, target)
+        names.append(os.path.basename(target))
+    return names[0] if names else None
 
 
 def link_change(project, data, item_id, src, change, why, by=None):
@@ -925,7 +997,7 @@ def round_cap_lines(project, data, cap=3):
     for it in data["items"]:
         if it["status"] not in ("open", "doing"):
             continue
-        n = counts.get(_fold(os.path.realpath(os.path.join(studio_dir(project), "verify", it["id"] + ".md"))), 0)
+        n = counts.get(_fold(os.path.realpath(verify_report_path(project, it["id"]))), 0)
         if n >= cap:
             out.append("budgit: %s has had %d verifier rounds without closing — round cap (%d) reached: fix the "
                        "defect CLASS once, then close it naming the residual risk to the user (or the user asks for more)"
@@ -1053,6 +1125,19 @@ def sealed_at(report_path):
         return None
 
 
+DONE_PROOF_MSG = "done needs a commit sha and a test name in --evidence"
+_PROOF_SHA = re.compile(r"(?<![0-9A-Za-z_])[0-9a-fA-F]{7,40}(?![0-9A-Za-z_])")
+_PROOF_TEST = re.compile(r"(?<![0-9A-Za-z_])test_\w+|\b\w+Test(?:\.\w+)?\b|\.py::\w+")
+
+
+def check_done_proof(evidence):
+    """R-922 part 3: closing an item needs a commit sha (7-40 hex, whole word) and a test name in its evidence.
+    One validator for `ledger done` and `ledger verify`. It does not check the sha exists in git (part 2)."""
+    text = evidence or ""
+    if not _PROOF_SHA.search(text) or not _PROOF_TEST.search(text):
+        raise StudioError(DONE_PROOF_MSG)
+
+
 def set_status(project, data, item_id, status, evidence="", by_user=None):
     item = find_item(data, item_id)
     if status not in STATUSES:
@@ -1064,7 +1149,18 @@ def set_status(project, data, item_id, status, evidence="", by_user=None):
         raise StudioError("done needs --evidence (test output, screenshot path, link)")
     if status == "verified":
         _check_prepared(project)
-        report = os.path.join(studio_dir(project), "verify", item_id + ".md")
+        report = verify_report_path(project, item_id)
+        both = verify_reports(project, item_id)
+        if len(both) > 1:
+            firsts = []
+            for p in both:
+                try:
+                    with open(p, "rb") as f:
+                        firsts.append((f.read().decode("utf-8", "replace").splitlines() or [""])[0].strip().startswith("PASS"))
+                except OSError:
+                    firsts.append(False)
+            if len(set(firsts)) > 1:
+                raise StudioError("verify reports disagree (PASS vs not): %s and %s" % (both[0], both[1]))
         try:
             with open(report, "rb") as f:               # bytes: a report that is not UTF-8 is not a crash
                 first = (f.read().decode("utf-8", "replace").splitlines() or [""])[0].strip()
@@ -1075,7 +1171,7 @@ def set_status(project, data, item_id, status, evidence="", by_user=None):
         if not report_sealed(report):
             raise StudioError("report not sealed by budgit:verifier on this machine (written another way or edited "
                               "after) — dispatch budgit:verifier")
-        evidence = evidence or "verify report %s/verify/%s.md" % (os.path.basename(studio_dir(project)), item_id)
+        evidence = evidence or "verify report %s/verify/%s.md" % (os.path.basename(os.path.dirname(os.path.dirname(report))), item_id)
     if status == "dropped":
         if not by_user:
             raise StudioError("drop needs --by-user I-n (the input where you asked to drop it)")
@@ -1154,7 +1250,7 @@ def render_md(data):
 HARNESS_MARKERS = ("<task-notification", "<agent-message", "<cross-session-message",
                    "<system-reminder", "[Subagent hand-back]", "<local-command",
                    "<command-stdout", "<bash-stdout", "<ide_opened_file", "<ide_selection",
-                   "<side-sessions-event", "<command-name>", "[SYSTEM NOTIFICATION",
+                   "<side-sessions-event", "<scheduled-task", "<command-name>", "[SYSTEM NOTIFICATION",
                    "This session is being continued from a previous conversation",
                    "Another Claude session sent a message")
 
@@ -3717,12 +3813,12 @@ def home_write_decision(tool, tool_input, cwd=None, agent_type=None):
     return home_write_check(tool, tool_input, cwd, agent_type)[0]
 
 
-def home_write_check(tool, tool_input, cwd=None, agent_type=None, session=None):
+def home_write_check(tool, tool_input, cwd=None, agent_type=None, session=None, subagent=False):
     """-> (decision or None, memory keys). An ask of a class the session already said yes to (R-473, the same forgery-proof
     memory as R-493: written only by the PostToolUse of the same session and call) passes; a deny never does."""
     box = {}
     try:
-        got = _home_write_decision(tool, tool_input, cwd, canon_agent(agent_type) == VERIFIER, box=box)
+        got = _home_write_decision(tool, tool_input, cwd, canon_agent(agent_type) == VERIFIER, box=box, subagent=subagent)
     except Exception:
         import i18n
         return ("ask", i18n.t("guard.home_ask")), []
@@ -3780,17 +3876,194 @@ def _is_syntax_check(words):
     return bool(re.fullmatch(r"[\w./~-]+", words[2])) and words[2][0] not in "-+"
 
 
-def _file_names_home(path, base, named):
-    """A small file that spells out a Budgit home (or its trust file) and writes."""
+_HOME_VAR = r"(?:budgit_home|studio_home)"
+_Q = r"""['"]"""
+# R-964 r3: an ALLOWLIST. The words budgit_home / studio_home in a script are harmless text ONLY as (a) a comment or docstring,
+# (b) a name set for a child (`environ["X"] = ..`, `env={"X": ..}`, `{**environ, "X": ..}`, `patch.dict(environ, {"X": ..})`,
+# `monkeypatch.setenv("X", ..)`, `X=value cmd`) or (c) an unset (`del environ["X"]`, a statement `environ.pop("X", None)`,
+# `env -u X`). Every other occurrence is a read, exactly as before R-964: no list of read forms, so no form is missed.
+_HOME_VAR_SETS = [re.compile(p) for p in (
+    r"environ\s*\[\s*" + _Q + _HOME_VAR + _Q + r"\s*\]\s*=(?!=)",
+    r"(?m)^[ \t]*del\s+(?:\w+\.)*environ\s*\[\s*" + _Q + _HOME_VAR + _Q + r"\s*\][ \t]*$",
+    r"(?m)^[ \t]*(?:\w+\.)*environ\.pop\(\s*" + _Q + _HOME_VAR + _Q + r"\s*,\s*none\s*\)[ \t]*$",
+    r"\bmonkeypatch\.setenv\(\s*" + _Q + _HOME_VAR + _Q + r"\s*,",
+    r"(?<![\w$.\[\"'])" + _HOME_VAR + r"=(?!=)",
+    r"\benv\b[^\n;|&]*?\s-u\s*" + _HOME_VAR + r"(?!\w)",
+)]
+_HOME_VAR_DICTS = re.compile(r"\benv\s*=\s*\{|(?<![\w.])(?!environ\b)(?P<recv>\w+)\.update\(\s*\{|\{\s*\*\*\s*(?:\w+\.)*environ\s*,|\bpatch\.dict\(\s*(?:\w+\.)*environ\s*,\s*\{")
+_HOME_VAR_KEY = re.compile(r"(^|,)(\s*)" + _Q + _HOME_VAR + _Q + r"\s*:")
+
+
+def _mask_comments_and_docstrings(raw):
+    """The text with comments and docstrings (statement-level string literals) blanked, newlines kept. Python source is parsed (`ast`)
+    and tokenized, so a string that merely contains `#` or triple quotes hides nothing; anything else drops whole-line `#` comments."""
+    import ast
+    import io
+    import tokenize
+    try:
+        spans = [(n.lineno, n.col_offset, n.end_lineno, n.end_col_offset) for n in ast.walk(ast.parse(raw))
+                 if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)]
+        lines = [l.encode("utf-8", "replace") for l in raw.split("\n")]
+        for l1, c1, l2, c2 in spans:
+            for k in range(l1 - 1, l2):
+                a = c1 if k == l1 - 1 else 0
+                b = c2 if k == l2 - 1 else len(lines[k])
+                lines[k] = lines[k][:a] + b" " * (b - a) + lines[k][b:]
+        text = b"\n".join(lines).decode("utf-8", "replace")
+        rows = text.split("\n")
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            if tok.type == tokenize.COMMENT:
+                r, c = tok.start
+                rows[r - 1] = rows[r - 1][:c] + " " * len(tok.string) + rows[r - 1][c + len(tok.string):]
+        return "\n".join(rows)
+    except (SyntaxError, ValueError, tokenize.TokenError, RecursionError, MemoryError, IndexError):
+        return re.sub(r"(?m)^[ \t]*#.*$", "", raw)
+
+
+class _EnvScope:
+    def __init__(self, comp, parent):
+        self.comp, self.parent = comp, parent
+        self.binds, self.fresh, self.glob, self.calls = {}, set(), set(), []
+
+
+def _fresh_env_updates(raw):
+    """R-964 r4: the (line, name) of each `<name>.update(..)` call in this Python file whose name is bound EXACTLY ONCE in the
+    innermost scope (def, lambda, class body, comprehension or module) that holds the call, and that one binding is a fresh dict
+    (`os.environ.copy()`, `dict(os.environ)`, `{**os.environ, ..}`, `{}`, `dict()`). Every binding form counts (assignment, augmented
+    assignment, for, with, walrus, except, import, match capture, parameter, def, class, del); a `global` / `nonlocal` of the name,
+    an alias of `os.environ`, a name bound only in an outer scope, or no binding found leaves the call out: a read."""
+    import ast
+    scopes = []
+
+    def new(comp, parent):
+        s = _EnvScope(comp, parent)
+        scopes.append(s)
+        return s
+
+    def bind(s, name):
+        s.binds[name] = s.binds.get(name, 0) + 1
+
+    def bind_args(s, a):
+        for x in a.posonlyargs + a.args + a.kwonlyargs + [a.vararg, a.kwarg]:
+            if x is not None:
+                bind(s, x.arg)
+
+    def environ_ref(n):
+        return (isinstance(n, ast.Name) and n.id == "environ") or (isinstance(n, ast.Attribute) and n.attr == "environ")
+
+    def fresh_value(v):
+        if isinstance(v, ast.Dict):
+            return all(k is not None or environ_ref(x) for k, x in zip(v.keys, v.values))
+        if isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id == "dict":
+            return all(environ_ref(a) for a in v.args) and all(kw.arg is not None for kw in v.keywords)
+        return isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) and v.func.attr == "copy" \
+            and environ_ref(v.func.value) and not v.args and not v.keywords
+
+    def visit_all(nodes, s):
+        for n in nodes:
+            if n is not None:
+                visit(n, s)
+
+    def visit(node, s):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            bind(s, node.name)
+            visit_all(node.decorator_list + node.args.defaults + node.args.kw_defaults, s)
+            f = new(False, s)
+            bind_args(f, node.args)
+            visit_all(node.body, f)
+        elif isinstance(node, ast.Lambda):
+            visit_all(node.args.defaults + node.args.kw_defaults, s)
+            f = new(False, s)
+            bind_args(f, node.args)
+            visit(node.body, f)
+        elif isinstance(node, ast.ClassDef):
+            bind(s, node.name)
+            visit_all(node.decorator_list + node.bases + [k.value for k in node.keywords], s)
+            visit_all(node.body, new(False, s))
+        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            c = new(True, s)
+            for k, g in enumerate(node.generators):
+                visit(g.iter, s if k == 0 else c)
+                visit(g.target, c)
+                visit_all(g.ifs, c)
+            visit_all([node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt], c)
+        elif isinstance(node, ast.NamedExpr):            # a walrus binds in the nearest non-comprehension scope
+            t = s
+            while t.comp and t.parent:
+                t = t.parent
+            bind(t, node.target.id)
+            visit(node.value, s)
+        else:
+            if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                bind(s, node.id)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                bind(s, node.name)
+            elif isinstance(node, ast.alias):
+                bind(s, (node.asname or node.name).split(".")[0])
+            elif isinstance(node, (ast.Global, ast.Nonlocal)):
+                s.glob.update(node.names)
+            elif type(node).__name__ in ("MatchAs", "MatchStar", "MatchMapping"):
+                for attr in ("name", "rest"):
+                    if getattr(node, attr, None):
+                        bind(s, getattr(node, attr))
+            elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) \
+                    and fresh_value(node.value):
+                s.fresh.add(node.targets[0].id)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "update" \
+                    and isinstance(node.func.value, ast.Name):
+                s.calls.append((node.lineno, node.func.value.id))
+            for child in ast.iter_child_nodes(node):
+                visit(child, s)
+
+    try:
+        visit_all(ast.parse(raw).body, new(False, None))
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return set()
+    ok, bad = set(), set()
+    declared = set().union(*[s.glob for s in scopes])     # R-964 r5: a `global` / `nonlocal` of the name in ANY scope can rebind it
+    for s in scopes:
+        for line, name in s.calls:
+            (ok if s.binds.get(name) == 1 and name in s.fresh and name not in declared else bad).add((line, _fold(name)))
+    return ok - bad
+
+
+def _home_var_read(raw):
+    """True when a home variable name occurs in `raw` anywhere but the allowed text shapes above."""
+    # R-964 r5: a comment or docstring is text only while nothing in the file can run its own text: `exec(` / `eval(` / `compile(`
+    # as a builtin call (not `re.compile(`), or `__doc__`. Then the file is judged unmasked, a name in a comment counts as a read.
+    runs_own_text = re.search(r"(?<![\w.])(?:exec|eval|compile)\s*\(|__doc__", _fold(raw))
+    text = _fold(raw if runs_own_text else _mask_comments_and_docstrings(raw))
+    fresh = _fresh_env_updates(raw)
+    for m in reversed(list(_HOME_VAR_DICTS.finditer(text))):
+        if m.group("recv") and (text.count("\n", 0, m.start("recv")) + 1, _fold(m.group("recv"))) not in fresh:
+            continue                                     # `<name>.update({..})` unless a fresh dict bound once in its own scope: a read
+        depth, i = 1, m.end()                            # every opener ends inside the literal's brace
+        start = i
+        while i < len(text) and depth:
+            depth += {"{": 1, "}": -1}.get(text[i], 0)
+            i += 1
+        body = _HOME_VAR_KEY.sub(lambda k: k.group(1) + k.group(2) + " ", text[start:i])
+        text = text[:start] + body + text[i:]
+    for rx in _HOME_VAR_SETS:
+        text = rx.sub(" ", text)
+    return bool(re.search(_HOME_VAR, text))
+
+
+def _file_names_home(path, base, named, cli_name=False):
+    """A small file that spells out a Budgit home (or its trust file), or holds a home variable name outside the allowed text
+    shapes (`_home_var_read`), and writes. `cli_name`: the file is run by a python interpreter and is named `budgit` (a CLI run
+    outside the pinned shapes, R-856): any occurrence of the name counts."""
     try:
         full = os.path.realpath(os.path.join(base, os.path.expanduser(path)))
         if not os.path.isfile(full) or os.path.getsize(full) > 262144:
             return False
         with open(full, errors="replace") as fh:
-            text = _fold(fh.read())
+            raw = fh.read()
+        text = _fold(raw)
     except (OSError, ValueError):
         return False
-    return (_names_home_in(text, named) or any(n in text for n in ("trust.json", "trust-offered", "budgit_home", "studio_home"))) \
+    names = (cli_name and bool(re.search(_HOME_VAR, text))) or _home_var_read(raw)
+    return (_names_home_in(text, named) or names or any(n in text for n in ("trust.json", "trust-offered"))) \
         and bool(_CODE_WRITES.search(text))
 
 
@@ -3880,7 +4153,137 @@ def _is_release_check(words, tokens, cwd, user_home):
     return False
 
 
-def _home_write_decision(tool, tool_input, cwd=None, verifier=False, box=None):
+_CLI_TABLE = {}
+_CLI_READS = frozenset(("ledger show", "ledger list", "ledger top"))     # "project" entries that only read: allowed in the python form too
+
+
+def _cli_table():
+    """R-901: bin/budgit's CLI_WRITES, read from THIS plugin's own file by `ast` (nothing is run, no name in the file counts).
+    A missing or unreadable table is empty, so every subcommand reads as "home" (fail closed). Cached by size and mtime."""
+    import ast
+    path = _own_budgit()
+    try:
+        st = os.stat(path)
+        sig =(path, st.st_mtime_ns, st.st_size)
+        if _CLI_TABLE.get("sig") == sig:
+            return _CLI_TABLE["val"]
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        raw = {}
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "CLI_WRITES" for t in node.targets):
+                raw = ast.literal_eval(node.value)
+        val = {}
+        for k, v in raw.items():
+            ent = (v, (), ()) if isinstance(v, str) else (tuple(v) if isinstance(v, (tuple, list)) else ())
+            ok = len(ent) == 3 and ent[0] in ("none", "project", "home-fixed") and isinstance(ent[1], tuple) \
+                and isinstance(ent[2], tuple) and (bool(ent[1]) == (ent[0] == "home-fixed"))
+            val[k] = ent if ok else ("home", (), ())          # L3: a typo in a kind (or a malformed entry) fails closed
+    except (OSError, ValueError, SyntaxError, TypeError, RecursionError, MemoryError):
+        return {}
+    _CLI_TABLE.update(sig=sig, val=val)
+    return val
+
+
+def _canonical_word(word):
+    """L1: a path word with no symlinked folder in it (checked now, so nothing is swapped between the check and the run)."""
+    if os.sep not in word:
+        return True
+    try:
+        return os.path.isabs(word) and os.path.realpath(os.path.dirname(word)) == os.path.dirname(word)
+    except (OSError, ValueError):
+        return False
+
+
+_TEXT_READERS = frozenset(("cat", "grep", "rg", "head", "tail", "less", "wc", "git"))
+_OTHER_CLI_DENY = ("budgit guard: another checkout's budgit CLI is refused for a subagent. It is not queued; report it in your hand-back "
+                   "(a release export from a worktree waits for R-861).")
+
+
+def _budgit_word_denial(tokens, words, call, head):
+    """R-901 allow list for a subagent: a step with a word whose basename is `budgit` is allowed only when that word is the head of
+    the call `_cli_call` matched, or when the step's head is a text reader (cat, grep, rg, head, tail, less, wc, sed -n) or git.
+    Anything else (a wrapper, find -exec, xargs, script, an interpreter, another checkout's CLI) is refused.
+    Returns None (allowed), "other" (a path to another CLI) or "wrap"."""
+    h = os.path.basename(head or (tokens[0] if tokens else ""))
+    if h in _TEXT_READERS or (h == "sed" and "-n" in words):
+        return None
+    skip = (1 if call[3] else 0) if call else None
+    found = None
+    for seq in (tokens, words):
+        for i, w in enumerate(seq):
+            if i == skip:
+                continue
+            for piece in (w.split() or [w]):
+                if os.path.basename(piece) == "budgit":
+                    if os.sep in piece and not _is_own_budgit_name(piece):
+                        return "other"
+                    found = "wrap"
+    return found
+
+
+_AWAY_NOTE_HINT = " | `away note` is for the coordinator; put the question in your hand-back."
+
+
+def _cli_call(tokens, words, text="", cwd=None):
+    """R-901: (table key, entry, path values, python form) of a call to THIS plugin's own CLI, else None. Two shapes only: the
+    own `budgit` (absolute, or found on the hook's PATH, `_is_own_budgit`) and a pinned absolute python3 + the pinned CLI
+    (`_pinned_python`, `_pinned_cli`, realpath). No env prefix, no wrapper (words equal tokens). `--project V` values are paths."""
+    if not tokens or len(tokens) != len(words) or any("\0" in t for t in tokens):
+        return None
+    if "$" in text or "`" in text or any("$" in t for t in tokens):
+        return None                                      # L2: any variable or substitution: the general rules judge it
+    if cwd is not None and _in_home(cwd):
+        return None                                      # L2: the command's own folder is a Budgit home
+    if _is_own_budgit_name(tokens[0]) and _canonical_word(tokens[0]):
+        k, py = 0, False
+    elif len(tokens) > 1 and re.fullmatch(r"python[\d.]*", os.path.basename(tokens[0])) and _pinned_python(tokens[0]) \
+            and _pinned_cli(tokens[1]) and _canonical_word(tokens[1]):
+        k, py = 1, True
+    else:
+        return None
+    rest, paths, i = [], [], k + 1
+    while i < len(tokens):
+        t = tokens[i]
+        if t == "--project":
+            if i + 1 >= len(tokens):
+                return None
+            paths.append(tokens[i + 1])
+            i += 2
+            continue
+        if t.startswith("--project="):
+            paths.append(t.partition("=")[2])
+        else:
+            rest.append(t)
+        i += 1
+    if not rest or rest[0].startswith("-"):
+        return None
+    table = _cli_table()
+    key, args = rest[0], rest[1:]
+    if args and not args[0].startswith("-") and rest[0] + " " + args[0] in table:
+        key, args = rest[0] + " " + args[0], args[1:]
+    if key == "away" and not args:
+        key = "away status"                              # a bare `away` only shows the queue
+    if key == "away status" and args:
+        key = "away"                                     # home-fixed only with no further arg at all
+    if key == "away note":
+        key = "away"                                     # round 9: `away note` is coordinator-only; a word class cannot stop zsh qualifiers
+    entry = table.get(key) or ("home", (), ())
+    specs = entry[2]
+    if "@" in specs:
+        paths += [a for a in args if not a.startswith("-")]
+    for flag in [s for s in specs if s.startswith("--")]:
+        for j, a in enumerate(args):
+            if a == flag and j + 1 < len(args):
+                paths.append(args[j + 1])
+            elif a.startswith(flag + "="):
+                paths.append(a.partition("=")[2])
+    if _SUBST.search(text) or any("$(" in t or "`" in t or "<(" in t for t in tokens[k + 1:]) or any("$" in p for p in paths):
+        return None                                      # something the shell may evaluate: the general rules judge it
+    return key, entry, paths, py
+
+
+def _home_write_decision(tool, tool_input, cwd=None, verifier=False, box=None, subagent=False):
     """Deny a tool or a plain Bash write into a Budgit home candidate (realpath, symlinks followed, case-folded); deny
     running Budgit's hook or library by hand; ask when a writing command names a home through something the guard
     cannot read, or may land there (a folder that holds it, an unknown cwd). `box["keys"]` gets the memory keys of an ask
@@ -3938,7 +4341,18 @@ def _home_write_decision(tool, tool_input, cwd=None, verifier=False, box=None):
     for step in steps:
         words, redirs, tokens, head = step["words"], step["redirs"], step["tokens"], step["head"]
         dirs, unknown_cwd = step["dirs"], step["unknown_cwd"]
-        if _runs_forbidden(tokens, verifier):
+        call = _cli_call(tokens, words, text, dirs[-1])  # R-901: this plugin's own CLI; its arguments are the CLI's, not the interpreter's
+        if subagent:                                     # M1: an allow list, not a list of wrappers
+            if call and call[1][0] == "home":
+                if call[0] == "away" and "note" in tokens:
+                    return ("deny", deny[1] + _AWAY_NOTE_HINT)    # a note shape off the allow list: say how to reword it
+                return deny                              # a subcommand the table does not prove
+            bad = _budgit_word_denial(tokens, words, call, head)
+            if bad == "other":
+                return ("deny", _OTHER_CLI_DENY)
+            if bad:
+                return deny
+        if not call and _runs_forbidden(tokens, verifier):
             return deny
         risky = unknown_cwd or hint or any(d == user_real or _in_home(d) for d in dirs)
         for target in redirs:                            # every form: > >> >| &> 2> 1>| ...
@@ -3954,6 +4368,26 @@ def _home_write_decision(tool, tool_input, cwd=None, verifier=False, box=None):
         if len(steps) == 1 and not redirs and not re.search(r"[;|&<>`\n$\\]", text) \
                 and _is_release_check(words, tokens, dirs[-1], user_home):
             continue                                     # R-856: export / secrets release checks write no Budgit home
+        if call:                                         # R-901: judged by what the subcommand writes (CLI_WRITES), not by reading the CLI
+            key, entry, cli_paths, py = call
+            kind = entry[0]
+            if kind == "home":
+                if subagent:
+                    return deny                          # any form: the hook queues the need for the coordinator
+                if py:
+                    asks.add("cli")                      # the interpreter form of an unproven subcommand asks the coordinator
+                    continue
+                # a bare or absolute own-CLI call of the coordinator is judged exactly as before R-901 (the general rules below)
+            elif not py or kind in ("none", "home-fixed") or key in _CLI_READS:
+                bad = None
+                for p in cli_paths:                      # only real path arguments count; free text is not a path
+                    got = _home_word(p, dirs, unknown_cwd, risky)
+                    if got == "deny":
+                        return deny
+                    bad = bad or got
+                if bad:
+                    asks.add(bad[4:])
+                continue
         if names_a_home:
             if os.path.basename(words[0]) == "eval":
                 return deny                              # eval of a command line that names a home
@@ -3969,7 +4403,7 @@ def _home_write_decision(tool, tool_input, cwd=None, verifier=False, box=None):
             if not [t for t in tokens[1:] if not t.startswith("-") and t not in delims] and not any(t in _CODE_FLAGS for t in tokens[1:]):
                 files += [w for s in steps if not s["book"] for w in s["words"] + s["redirs"]]    # fed from a pipe or `<`: any file named in the line (Budgit's own CLI is not one)
             for path in files:
-                if _file_names_home(path, dirs[-1], named):
+                if _file_names_home(path, dirs[-1], named, cli_name=name_of(head) == "python" and os.path.basename(path) == "budgit"):
                     return deny                          # a script (or imported module) that names a home and writes
         reader = head in _HOME_READERS or (head == "find" and not any(t in _FIND_ACTIONS for t in tokens))
         if head == "git":
@@ -3983,7 +4417,7 @@ def _home_write_decision(tool, tool_input, cwd=None, verifier=False, box=None):
         if name in ("sh", "bash", "zsh", "dash", "ksh") and "-c" in tokens[1:]:
             k = tokens.index("-c")
             if k + 1 < len(tokens):                      # the string it runs is a command line of its own
-                got = _home_write_decision("Bash", {"command": tokens[k + 1]}, dirs[-1], verifier)
+                got = _home_write_decision("Bash", {"command": tokens[k + 1]}, dirs[-1], verifier, subagent=subagent)
                 if got:
                     return got
         elif name in _HOME_INTERP_NAMES or name in ("sqlite", "java", "groovy", "emacs", "r"):
@@ -4712,7 +5146,7 @@ def _verify_command_clean(command, cwd):
                 targets = list(words[1:])
                 if head in _TARGET_DIR_HEADS and any(_ATTACHED_T.match(t) for t in toks[1:]):
                     return False                   # `cp -t.budgit/verify x`: the value is stuck to the flag
-            elif head == "budgit" and _is_own_budgit(toks[0]) and _budgit_parse(toks) \
+            elif head == "budgit" and _is_own_budgit_name(toks[0]) and _budgit_parse(toks) \
                     and _budgit_parse(toks)[1][:1] != ["verify"] and _budgit_values_clean(toks) \
                     and not any("$(" in t or "`" in t or "<(" in t for t in toks[1:]):
                 targets = []                       # R-515: this plugin's bookkeeping CLI; a path in its quoted text is text, not a write
@@ -6684,6 +7118,17 @@ def _is_own_budgit(word):
     if not cand or not os.path.isabs(cand) or os.path.islink(cand):
         return False
     return os.path.join(os.path.realpath(os.path.dirname(cand)), "budgit") == _own_budgit() and os.path.isfile(cand)
+
+
+def _is_own_budgit_name(word):
+    """R-901: `_is_own_budgit`, or the bare name `budgit` when the hook's own PATH holds no `budgit` at all. The hook's PATH can
+    differ from the shell's (a GUI-launched app), so the name cannot be looked up there: the verify guard refused a plain
+    `budgit ledger done R-n --evidence "...verify/R-n.md..."` for that reason (deny eb0ef717). A `budgit` that IS found on the
+    hook's PATH must be this plugin's own file. Residual (named for the security review): a look-alike `budgit` only the
+    shell's PATH holds."""
+    if _is_own_budgit(word):
+        return True
+    return word == "budgit" and shutil.which(word, path=os.environ.get("PATH", os.defpath)) is None
 
 
 def _budgit_parse(toks):

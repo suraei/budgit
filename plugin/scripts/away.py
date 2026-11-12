@@ -21,12 +21,13 @@ import studiolib as sl
 
 STALE_S = 24 * 3600
 MAX_WORDS = 12                  # a longer message is a task, never a goodbye
-MAX_QUEUE = 500                 # lines kept; a runaway session cannot fill the disk
+NOTE_CAP_PER_SESSION = 20        # `away note` entries one session may queue (R-901 L4)
+MAX_QUEUE = 500                # lines kept; a runaway session cannot fill the disk
 FLAG_NAME = "away.json"
 QUEUE_NAME = "away-queue.jsonl"
 
-REASON = ("The user is away: do not wait for them. Take another path, or record the question with "
-          "`budgit away note \"<question>\"` and continue with other unblocked work.")
+REASON = ("The user is away: do not wait for them. Take another path, or continue with other unblocked work. "
+          "`away note` is for the coordinator; put the question in your hand-back.")
 
 # Normalised (lower case, no accents, no punctuation, apostrophes dropped) openings of a goodbye.
 PHRASES = ("me voy", "me marcho", "me piro", "me ausento", "vuelvo luego", "vuelvo en un rato", "luego vuelvo", "ahora vuelvo",
@@ -139,7 +140,7 @@ def _mask(text, kind):
     """Queued text is never raw: guard and permission text carries tool input, so it goes through the denylog scrubber (secret shapes,
     long tokens and digits masked); a question or note of the user or a session only loses known credential shapes."""
     text = " ".join(str(text or "").split())
-    if kind in ("guard", "permission"):
+    if kind in ("guard", "permission", "subagent-ask"):
         import denylog
         return denylog.scrub(text, 1500)
     return sl.redact(text)[:1500]
@@ -172,16 +173,38 @@ def project_key(project=None, cwd=None):
     return here
 
 
-def note(text, kind="note", session=None, home=None, project=None):
-    """Append one question or note to the away queue, tagged with the project and the session that wrote it."""
+def note(text, kind="note", session=None, home=None, project=None, fp=None):
+    """Append one question or note to the away queue, tagged with the project and the session that wrote it. With `fp` (a
+    fingerprint of the call, R-901 L4) the same kind + session + fp is queued once: a looping subagent cannot push the user's notes out."""
     text = _mask(text, kind)
     if not text:
         return False
     os.makedirs(_home(home), exist_ok=True)
     path = queue_path(home)
     lines = _queue_lines(home)
-    lines.append(json.dumps({"t": sl.now(), "kind": kind, "session": str(session or ""), "project": _proj(project), "text": text},
-                            ensure_ascii=False))
+    if kind == "note":                 # R-901 L4: one session cannot flood the queue with its own notes
+        mine = 0
+        for line in lines:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(e, dict) and e.get("kind") == "note" and e.get("session") == str(session or ""):
+                mine += 1
+        if mine >= NOTE_CAP_PER_SESSION:
+            return False
+    if fp:
+        for line in lines:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(e, dict) and e.get("kind") == kind and e.get("session") == str(session or "") and e.get("fp") == fp:
+                return False
+    entry = {"t": sl.now(), "kind": kind, "session": str(session or ""), "project": _proj(project), "text": text}
+    if fp:
+        entry["fp"] = fp
+    lines.append(json.dumps(entry, ensure_ascii=False))
     sl.atomic_write(path, "\n".join(lines[-MAX_QUEUE:]) + "\n")
     return True
 

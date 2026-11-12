@@ -183,13 +183,13 @@ def _away_now():
         return False
 
 
-def _away_note(text, kind, session=None, project=None, cwd=None):
+def _away_note(text, kind, session=None, project=None, cwd=None, fp=None):
     """R-641: queue a note for the user's return, under the same project key the CLI reads (`away.project_key`). A failed queue write
     (disk full, a directory planted at the queue path) is logged and swallowed: it must never stop the deny that goes with it
     from being printed (fail-open fix)."""
     try:
         import away
-        away.note(text, kind, session, project=away.project_key(project, cwd))
+        away.note(text, kind, session, project=away.project_key(project, cwd), fp=fp)
     except Exception:
         try:
             sl.log_error("away note")
@@ -315,6 +315,13 @@ def on_pre_tool_use(inp, project, defer=None):
                 return
         try:                            # bookkeeping and advice only; a failure here is logged, never a reason to skip the rest
             fill_agent_model(inp)
+            import agentcap                      # R-904: brief budget above the agent type's maxTurns
+            turns_note = agentcap.launch_warning(inp.get("tool_input"))
+            if turns_note:
+                _context("PreToolUse", turns_note)
+            example_note = agentcap.example_only_warning(inp.get("tool_input"))   # R-929
+            if example_note:
+                _context("PreToolUse", example_note)
             import admit
             advice = admit.advice()
             if advice:
@@ -342,7 +349,7 @@ def on_pre_tool_use(inp, project, defer=None):
 
     rd_keys = []
     def home_decision(*args):                    # R-473: an ask of a class the session said yes to passes; a deny never does
-        decision, keys = sl.home_write_check(*args, session=inp.get("session_id"))
+        decision, keys = sl.home_write_check(*args, session=inp.get("session_id"), subagent=bool(inp.get("agent_id")))
         rd_keys.extend(keys)
         return decision
 
@@ -354,6 +361,8 @@ def on_pre_tool_use(inp, project, defer=None):
         raw = raw_reason(inp)
         found.append(("raw-store", ("deny", raw) if raw else None))
         command = tool_input.get("command") or ""
+        import commitguard                       # R-900: a subagent commits only chained after a test run
+        found.append(("commit-chain", closed("deny", commitguard.decision, tool, tool_input, inp.get("agent_id"))))
         found.append(("commit-identity", closed("ask", sl.commit_identity_decision, command, cwd)))
         found.append(("approval", closed("ask", sl.approval_decision, command, project, cwd)))
         found.append(("hook-bypass", closed("ask", sl.hook_bypass_decision, command)))
@@ -372,6 +381,13 @@ def on_pre_tool_use(inp, project, defer=None):
                                           session=inp.get("session_id"))))
         found.append(("contract-lock", closed("ask", sl.contract_lock_decision, tool, tool_input, project, cwd=cwd)))
     result = _combine([d for _, d in found])
+    if result and result[0] == "ask" and inp.get("agent_id") and not _away_now():   # R-901 (while away, R-641 below does it): a subagent cannot answer a card: deny, and queue it for the coordinator
+        import denylog
+        _away_note("subagent-ask for %s: %s" % (tool, result[1][:300]), "subagent-ask", inp.get("session_id"), project, cwd,
+                   fp=denylog.fingerprint(tool, tool_input))      # L4: one entry per session and command
+        result = ("deny", "budgit guard: this call needs the user's yes, which a subagent cannot give. It is queued for your "
+                          "coordinator: report it in your hand-back, do not reword or retry it. | " + result[1][:200])
+        found = [(n, d) for n, d in found if not (d and d[0] == "ask")] + [("subagent-ask", result)]
     if result and result[0] == "ask" and _away_now():   # R-641: every guard ask becomes a deny while the user is away; a deny stays a deny
         import away
         _away_note("guard ask for %s: %s" % (tool, result[1][:300]), "guard", inp.get("session_id"), project, cwd)

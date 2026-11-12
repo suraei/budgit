@@ -2,6 +2,34 @@
 
 To update, ask Claude in any chat to update Budgit: it runs `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, and reports the version. Your next chat uses it. In a terminal session, `/reload-plugins` is an optional extra. The Release notes page of the wiki has the same notes.
 
+## 0.13.9.10
+
+- **`budgit asks`** lists every ask you made with its state (read-only), and flags asks that got lost, such as a message that never reached an answer.
+- **Away notes and helper commands are stricter.** Away notes are written by the coordinator only, and a helper agent's command is judged by what it writes, so a helper cannot change Budgit's own settings.
+- **Outside review skips a tool that hit its usage limit** and falls back to the next one until the limit returns. Protected projects never go to an outside reviewer.
+- **Done needs proof.** Marking an item done or verified needs a commit and a test name, and one verify folder serves ledger verify, the verifier and the guard.
+- **A brief that quotes only your example is warned** so the general rule is stated first.
+- Call caps in briefs also cover the verify-report write, and a warning shows above the turn limit.
+- **Brote in the terminal shows its one-line text form** while a smaller pet is built; the floating Brote is unchanged.
+- **Mentioning `BUDGIT_HOME` or `STUDIO_HOME` in a comment, or passing it to a child process, is allowed again.** The guard still blocks real reads of those folders.
+
+## 0.13.9.9
+
+- Slow tests now compare against a same-run ratio instead of a fixed second count, so they stop failing on a loaded computer.
+
+## 0.13.9.8
+
+- **The 5-hour gauge.** On Pro and Max the status line shows the 5-hour window next to the weekly one, and pacing levels (tight, critical) use both with hysteresis.
+- **The Brote build cache is shared and keyed** by source, compiler version and flags, keeps the newest 4, and a warm build compiles nothing.
+- **Test runs share one cache** and the pool halves on battery only under 30 % or in Low Power Mode.
+- **One busy rule** for every command: kernel CPU counters plus true free memory; the load-average reading is gone.
+- **Scheduled-task runs no longer count as your messages.** A prompt that starts with `<scheduled-task` is treated as automated text, so it gets no inbox entry and does not switch off away mode.
+
+## 0.13.9.7
+
+- **The ext-review busy rule is shared**, and a helper that is busy no longer starts a second suite.
+- **Pool home and test selection.** Shipped-file changes always select the leak, manifest and export tests.
+
 ## 0.13.9.6
 
 - **The export leak gate stops flagging code and our own README text.** It still refuses the real phrases a person wrote, so a release is no longer blocked by wording that only describes shipped code.

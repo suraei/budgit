@@ -1,13 +1,15 @@
 """R-381: `budgit admit` -- may this machine take one more suite or lane right now? go / wait / refuse with a one-line reason.
 
-No model, no network. It reads the busy CPU (median of short %CPU samples, in cores; never the load average, R-841), the core count, free
-memory and how many Claude sessions are busy this minute, and compares them with thresholds that live in the home config under
-`admit` (all optional; "load" below means busy cores):
+No model, no network. It reads the busy CPU (kernel counters, in cores; never the load average, R-841, R-889b), the core
+count, the memory signals of admission.mem_reading (pressure, swap-ins, compressor, truly free; never free plus inactive) and
+how many Claude sessions are busy this minute, and compares them with thresholds that live in the home config under `admit`
+(all optional; "load" below means busy cores):
 
     wait_load      cpu_load above this -> wait      (default: 85 % of the cores, admission.busy_cpu_cores)
     refuse_load    cpu_load above this -> refuse    (default: twice the core count)
-    min_free_mb    free memory under this -> refuse a lane   (default 1536)
     max_busy       this many busy sessions or more -> refuse a lane   (default 6: a PM, the TM and four lanes)
+
+A lane is refused when admission.busy_reason finds a memory signal (the same rule as `budgit busy`).
 
 R-402 adds the fair share across projects when a project is named (`budgit admit lane --project DIR`, see decide and
 fairshare.py). `budgit suite` asks with kind "suite" (load only); a PM or the TM asks with kind "lane" before start_session; the Agent
@@ -20,7 +22,7 @@ import studiolib as sl
 
 GO, WAIT, REFUSE = "go", "wait", "refuse"
 EXIT = {GO: 0, WAIT: 1, REFUSE: 2}
-DEFAULTS = {"min_free_mb": 1536, "max_busy": 6}
+DEFAULTS = {"max_busy": 6}
 KINDS = ("lane", "suite")
 
 
@@ -29,31 +31,15 @@ def cores():
 
 
 def cpu_load(sampler=None, sleep=None, window=1, step=0.5):
-    """R-841: how many cores' worth of CPU is busy now (median of short %CPU samples x cores / 100), or None when unreadable.
-    This replaces the 1-minute load average: no decision here depends on os.getloadavg."""
-    median = cpu_median(sampler or cpu_sample, sleep, window, step)
+    """R-841, R-889b: how many cores' worth of CPU is busy now (median of short kernel-counter samples x cores / 100), or None
+    when unreadable. The default sampler is admission.SystemCPU (kernel counters); the ps sum (cpu_sample) is only its named
+    fallback when the counters cannot be read. No decision here depends on os.getloadavg."""
+    if sampler is None:
+        import admission
+        import time
+        sampler = admission.SystemCPU(sleep=sleep or time.sleep, fallback=cpu_sample)
+    median = cpu_median(sampler, sleep, window, step)
     return None if median is None else median * cores() / 100.0
-
-def free_mb():
-    """Memory a new process could use now, in MB: free + inactive + speculative pages on macOS, MemAvailable on Linux."""
-    try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                if line.startswith("MemAvailable:"):
-                    return int(line.split()[1]) // 1024
-    except (OSError, ValueError, IndexError):
-        pass
-    try:
-        out = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=5).stdout
-        page, pages = 4096, 0
-        for line in out.splitlines():
-            if "page size of" in line:
-                page = int(line.split("page size of")[1].split()[0])
-            elif line.split(":")[0] in ("Pages free", "Pages inactive", "Pages speculative"):
-                pages += int(line.split(":")[1].strip().rstrip("."))
-        return pages * page // (1024 * 1024) if pages else None
-    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
-        return None
 
 
 def busy_sessions():
@@ -98,19 +84,35 @@ def cpu_median(sampler=cpu_sample, sleep=None, window=60, step=5):
     return statistics.median(got) if got else None
 
 
-def is_busy(sampler=cpu_sample, sleep=None, window=60, free=None):
-    """-> (busy, reason). Memory first (cheap, no waiting); then the CPU median. A reading that cannot be taken is skipped."""
+def is_busy(sampler=None, sleep=None, window=60, free=None, mem=None):
+    """-> (busy, reason). R-889b: memory first, instantly (kernel pressure, compressor, truly free memory); then the CPU
+    median over the window from kernel counters (admission.SystemCPU, the ps sum only as fallback), with the swap-in rate
+    measured across that same window. A reading that cannot be taken is skipped and the calm reason names it.
+    `mem` returns one admission.mem_reading picture; `free` returns TRULY free MB. A caller that injects `free` but not
+    `mem` supplies the whole memory picture itself, so no live memory reading is taken."""
+    import time
     import admission
-    free_now = free() if free else free_mb()
-    why = admission.busy_reason(free_now, None)
+    if mem is None:
+        mem = (lambda: {}) if free else admission.mem_reading
+    free_now = free() if free else None
+    first = mem()
+    why = admission.busy_reason(free_now, None, first)
     if why:
         return True, why
-    why = admission.busy_reason(None, cpu_median(sampler, sleep, window))
-    return (True, why) if why else (False, "free")
+    sampler = sampler or admission.SystemCPU(sleep=sleep or time.sleep, fallback=cpu_sample)
+    cpu = cpu_median(sampler, sleep, window)
+    signals = admission.mem_signals(first, mem())
+    why = admission.busy_reason(None, cpu, signals)
+    return (True, why) if why else (False, admission.calm_reason(signals, sampler))
 
 
 def measure():
-    return {"cpu_load": cpu_load(), "cores": cores(), "free_mb": free_mb(), "busy": busy_sessions()}
+    """The reading decide() judges. Memory comes from the ONE shared reader (admission.mem_reading); free_mb is the truly
+    free figure, shown in messages and judged only where the kernel gives no pressure reading."""
+    import admission
+    mem = admission.mem_reading()
+    return {"cpu_load": cpu_load(sampler=admission.SystemCPU(fallback=cpu_sample)), "cores": cores(),
+            "free_mb": mem.get("free_true_mb"), "mem": mem, "busy": busy_sessions()}
 
 
 def thresholds(m, config=None):
@@ -131,8 +133,7 @@ def thresholds(m, config=None):
             wait = refuse = value
     except ValueError:
         pass
-    return {"wait_load": wait, "refuse_load": max(refuse, wait), "min_free_mb": num("min_free_mb", DEFAULTS["min_free_mb"]),
-            "max_busy": num("max_busy", DEFAULTS["max_busy"])}
+    return {"wait_load": wait, "refuse_load": max(refuse, wait), "max_busy": num("max_busy", DEFAULTS["max_busy"])}
 
 
 def decide(m, kind="lane", config=None, share=None):
@@ -156,13 +157,15 @@ def decide(m, kind="lane", config=None, share=None):
         return "?" if cores_busy is None else "%.0f" % (cores_busy * 100.0 / n_cores)
     mem = _n(m.get("free_mb"))
     verdict, reason = GO, t("ad.r_go", cpu=pct(load), mem=mem, busy=_n(m.get("busy")))
-    short_of_memory = kind == "lane" and m.get("free_mb") is not None and m["free_mb"] < limits["min_free_mb"]
+    import admission                                      # R-889b: the lane refusal reads the same memory signals as busy
+    memory_why = admission.busy_reason(m.get("free_mb"), None, m.get("mem")) if kind == "lane" else None
+    short_of_memory = bool(memory_why)
     if lane and mine == 0 and not short_of_memory:
         reason = t("ad.r_floor", cpu=pct(load), mem=mem)
     elif load is not None and load > limits["refuse_load"]:
         verdict, reason = REFUSE, t("ad.r_load_refuse", cpu=pct(load), limit=pct(limits["refuse_load"]), mem=mem)
     elif short_of_memory:
-        verdict, reason = REFUSE, t("ad.r_memory", free=int(m["free_mb"]), limit=int(limits["min_free_mb"]))
+        verdict, reason = REFUSE, t("ad.r_memory", why=memory_why)
     elif kind == "lane" and m.get("busy") is not None and m["busy"] >= limits["max_busy"]:
         verdict, reason = REFUSE, t("ad.r_busy", busy=m["busy"], limit=int(limits["max_busy"]))
     elif load is not None and load > limits["wait_load"]:

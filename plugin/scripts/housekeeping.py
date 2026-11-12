@@ -23,7 +23,6 @@ import studiolib as sl
 
 IDLE_HOURS = 24
 CANDIDATE_DAYS = 3
-LOAD_LIMIT = 8.0
 KEEP_PATTERNS = ("backup/*",)
 GIT_TIMEOUT = 60
 LABEL = "com.budgit.housekeeping"
@@ -344,25 +343,25 @@ def leftovers(config=None):
     return out
 
 
-def load_now():
-    try:
-        return os.getloadavg()[0]
-    except (OSError, AttributeError):
-        return None
 
 
 EXIT_SKIPPED = 11          # --apply was skipped because the machine was busy (nothing to clean is success, exit 0; a dry run is always 0)
 
 
-def busy_now():
-    """R-864/I-1395: the SAME busy reading admit and `budgit busy` use (median CPU % of the cores, free memory; never the
-    load average) -> (busy, reason). One function, no second copy."""
+def busy_now(window=None):
+    """R-864/I-1395, R-889b: the SAME busy reading admit and `budgit busy` use (kernel CPU counters, memory pressure,
+    swap-ins; never the load average, never free plus inactive) -> (busy, reason). One function, no second copy.
+    `window`: seconds of CPU sampling; None reads the BUSY_WINDOW knob (default 15)."""
     import admit
-    try:
-        window = int(sl.env("BUSY_WINDOW") or 15)           # seconds of CPU sampling; a knob for slow or tiny machines
-    except ValueError:
-        window = 15
+    if window is None:
+        try:
+            window = int(sl.env("BUSY_WINDOW") or 15)       # seconds of CPU sampling; a knob for slow or tiny machines
+        except ValueError:
+            window = 15
     return admit.is_busy(window=max(1, window))
+
+
+DAILY_BUSY_WINDOW = 1      # the daily line runs at session start: one short sample, never a 15 s wait
 
 
 def exit_code(report):
@@ -415,13 +414,6 @@ def run(only=None, apply_changes=False, hours=IDLE_HOURS, now=None, busy=None, l
         report["projects"].append(row)
     report["leftovers"] = None if busy or only else leftovers(config)
     return report
-
-
-def _load_limit():
-    try:
-        return float(sl.env("HOUSEKEEPING_LOAD") or LOAD_LIMIT)
-    except ValueError:
-        return LOAD_LIMIT
 
 
 def render(report, lang=None):

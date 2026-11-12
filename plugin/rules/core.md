@@ -42,7 +42,7 @@ Short rules for every Budgit session. Each topic is its own file, so the user ca
 - Public commits go through a single publish command that applies the noreply identity and rejects every other name, email address or hostname.
 
 ## 7. Capacity, models, effort (core, read from the machine)
-- Busy: median 5-second CPU over a minute above 85 percent of the cores, or free and inactive memory together below 1 GB. Never raw load average. `budgit busy` reads it on macOS, Linux and Windows.
+- Busy: CPU above 85 percent of the usable cores (or container quota) from kernel counters over a minute; or kernel memory pressure warn or worse (macOS level 2 or more, Linux PSI some avg10 10 percent or more, Windows memory load 90 percent or more); or swap-ins of 1 MB/s or more over the window; or the macOS compressor at 30 percent of RAM or more; or truly free memory under the larger of 1 GB and 3 percent of RAM, only where no pressure reading exists. Never the load average, never free plus inactive memory, never one machine's figures. `budgit busy` reads it on macOS, Linux and Windows and names the signal that fired, or the ones it could not read.
 - Only CPU-heavy work (suites, builds, browser runs) waits when busy; reading, review, planning, research and writing never do.
 - Lanes: 1 always; a 2nd when not busy; a 3rd only if every project with pending work has one. When busy, the project of lowest priority that has a lane it can park gives that lane up.
 - CPU-heavy work below the top project runs at lower priority.

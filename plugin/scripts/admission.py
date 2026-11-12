@@ -18,7 +18,7 @@ import time
 
 PER_WORKER_MB = {"test": 300, "build": 1500}      # estimates per kind; a caller may pass its own per_worker_mb
 BUSY_CPU_PCT = 85                                  # R-532 busy rule: median CPU over 85 % of cores ...
-BUSY_FREE_MB = 1024                                # ... or reclaimable memory (free plus inactive) below 1024 MB
+BUSY_FREE_MB = 1024                                # ... or memory pressure/swap-ins/compressor; truly free (never inactive) under 1024 MB only where the OS gives no pressure reading
 RESERVE_MB = 1024                                  # memory always left for the OS
 ENV_SLOTS = "BUDGIT_ADMIT_SLOTS"
 
@@ -160,23 +160,294 @@ def cpu_median(sampler, sleep=time.sleep, samples=3, step=0.5):
     return statistics.median(got) if got else None
 
 
+# ---------------------------------------------------------------- R-889b: kernel CPU counters and memory pressure
+# Why: on 9 Nov 16:25 a Mac was at 91-95 % CPU with 158 MB free, a 5.6 GB compressor and swap-ins, and busy said "not busy".
+# The ps sum misses kernel_task (compressor and swap time) and processes that already exited; free + inactive hides pressure.
+
+BUSY_PRESSURE_LEVEL = 2                # macOS kern.memorystatus_vm_pressure_level 1 normal, 2 warn, 4 critical: warn is busy
+BUSY_PSI_SOME_AVG10 = 10.0             # Linux PSI: some task stalled on memory 10 % of the last 10 s is lag a user feels
+BUSY_WIN_MEMLOAD_PCT = 90              # Windows dwMemoryLoad: under 10 % of RAM available (standby counted) means paging
+BUSY_SWAPIN_MB_S = 1.0                 # swap-ins averaged over the whole window: the working set no longer fits in RAM
+BUSY_COMPRESSOR_RAM_FRACTION = 0.30    # macOS compressor holding 30 % of RAM: the kernel is already squeezing live memory
+BUSY_FREE_RAM_FRACTION = 0.03          # the truly-free floor scales with RAM (3 %), never under BUSY_FREE_MB
+FREE_TRUE_ONLY_WITHOUT_PRESSURE = True # free pages stay low by design beside a file cache (a calm Mac, 9 Nov 16:49: 432 MB
+                                       # free, pressure normal, 21-34 % CPU), so where the kernel reports pressure it decides
+PRESSURE_NAMES = {1: "normal", 2: "warn", 4: "critical"}
+PRIME_S = 0.5                          # the first CPU sample reads the counters twice this far apart
+MB = 1024 * 1024
+
+
+def _mac_ticks():
+    import ctypes
+    lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+    lib.mach_host_self.restype = ctypes.c_uint32
+    if not _HOST:
+        _HOST.append(lib.mach_host_self())             # one send right, kept for the process
+    info, count = (ctypes.c_uint32 * 4)(), ctypes.c_uint32(4)
+    if lib.host_statistics(_HOST[0], 3, info, ctypes.byref(count)) != 0:     # 3 = HOST_CPU_LOAD_INFO
+        return None
+    user, system, idle, nice = info
+    return user + system + nice, idle, 2 ** 32        # uint32 tick counters wrap; deltas are taken modulo 2**32
+
+
+_HOST = []
+
+
+def _win_ticks():
+    import ctypes
+    from ctypes import wintypes
+    idle, kernel, user = wintypes.FILETIME(), wintypes.FILETIME(), wintypes.FILETIME()
+    if not ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):
+        return None
+
+    def n(t):
+        return (t.dwHighDateTime << 32) | t.dwLowDateTime
+    return n(kernel) + n(user) - n(idle), n(idle), None   # kernel time includes idle time
+
+
+def cpu_ticks(platform=sys.platform, readfile=None, quota=None, now=time.monotonic):
+    """Cumulative CPU counters of the whole machine, or of this container when it has a quota: (busy, idle, wrap) or None.
+    macOS host_statistics, Linux cgroup cpu.stat (quota) else /proc/stat, Windows GetSystemTimes. Never raises."""
+    rd = readfile or _read
+    try:
+        if platform == "darwin":
+            return _mac_ticks()
+        if platform.startswith("linux"):
+            if quota:
+                try:
+                    for line in rd("/sys/fs/cgroup/cpu.stat").splitlines():
+                        if line.startswith("usage_usec "):
+                            used = int(line.split()[1])
+                            return used, now() * 1e6 * quota - used, None
+                except OSError:
+                    pass
+            f = [int(x) for x in rd("/proc/stat").splitlines()[0].split()[1:9]]
+            f += [0] * (8 - len(f))
+            return f[0] + f[1] + f[2] + f[5] + f[6] + f[7], f[3] + f[4], None     # idle + iowait are not busy
+        if platform.startswith("win"):
+            return _win_ticks()
+    except Exception:                                  # no ctypes, no file, odd text: unknown, never a crash
+        return None
+    return None
+
+
+class SystemCPU:
+    """Sampler for cpu_median: % of all (usable) cores busy since the previous call, from kernel counters, so kernel time
+    and processes that already exited count. The first call primes over PRIME_S. No counters: `fallback` (the old ps sum)
+    and .source becomes "ps". One instance per check, so the median covers the whole window."""
+
+    def __init__(self, ticks=None, sleep=time.sleep, fallback=None):
+        if ticks is None:
+            q = cgroup_quota() if sys.platform.startswith("linux") else None
+            ticks = lambda: cpu_ticks(quota=q)
+        self.ticks, self.sleep, self.fallback, self.last, self.source = ticks, sleep, fallback, None, "kernel"
+
+    def __call__(self):
+        now = self.ticks()
+        if now is not None and self.last is None:
+            self.last = now
+            self.sleep(PRIME_S)
+            now = self.ticks()
+        if now is None:
+            self.source = "ps"
+            return self.fallback() if self.fallback else None
+        a, self.last = self.last, now
+        db, di = now[0] - a[0], now[1] - a[1]
+        if now[2]:
+            db, di = db % now[2], di % now[2]
+        total = db + di
+        return None if total <= 0 else max(0.0, min(100.0, 100.0 * db / total))
+
+
+def _num(text):
+    try:
+        return int(str(text).strip().rstrip("."))
+    except (ValueError, TypeError):
+        return None
+
+
+def _kv(text):
+    """'Key: 123 kB' or 'key 123' lines -> {key: 123}."""
+    out = {}
+    for line in (text or "").splitlines():
+        parts = line.replace(":", " ").split()
+        if len(parts) >= 2:
+            n = _num(parts[1])
+            if n is not None:
+                out[parts[0]] = n
+    return out
+
+
+def vm_stat_pages(text):
+    """vm_stat text -> {counter name: pages} plus "page" (bytes per page)."""
+    out = {"page": 4096}
+    for line in (text or "").splitlines():
+        if "page size of" in line:
+            out["page"] = _num(line.split("page size of")[1].split()[0]) or 4096
+        elif ":" in line:
+            k, v = line.split(":", 1)
+            n = _num(v)
+            if n is not None:
+                out[k.strip().strip('"')] = n
+    return out
+
+
+def psi_some_avg10(text):
+    """PSI text (/proc/pressure/memory or a cgroup memory.pressure) -> the `some avg10` percent, or None."""
+    for line in (text or "").splitlines():
+        if line.startswith("some "):
+            for tok in line.split():
+                if tok.startswith("avg10="):
+                    try:
+                        return float(tok[6:])
+                    except ValueError:
+                        return None
+    return None
+
+
+def _win_mem(m):
+    import ctypes
+    u64 = ctypes.c_ulonglong
+
+    class Status(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong), ("ullTotalPhys", u64),
+                    ("ullAvailPhys", u64), ("ullTotalPageFile", u64), ("ullAvailPageFile", u64), ("ullTotalVirtual", u64),
+                    ("ullAvailVirtual", u64), ("ullAvailExtendedVirtual", u64)]
+    s = Status()
+    s.dwLength = ctypes.sizeof(Status)
+    if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(s)):
+        m["winload"], m["total_mb"] = int(s.dwMemoryLoad), int(s.ullTotalPhys) // MB
+
+
+MEM_KEYS = {"darwin": ("pressure", "free_true_mb", "compressor_mb", "swapins_bytes", "total_mb"),
+            "linux": ("psi", "free_true_mb", "swapins_bytes", "total_mb"), "win": ("winload", "total_mb")}
+
+
+def mem_reading(platform=sys.platform, run=_run, readfile=None, now=time.monotonic, page=None):
+    """One instant memory picture read from the kernel. Keys may be None (unknown, that signal is skipped): pressure (macOS
+    level), psi (Linux some avg10), winload (Windows %), free_true_mb (free pages only, never inactive), total_mb,
+    compressor_mb, swapins_bytes (cumulative), page; "unknown" lists the signals this OS should give and did not. Never raises."""
+    m = dict.fromkeys(("pressure", "psi", "winload", "free_true_mb", "total_mb", "compressor_mb", "swapins_bytes"))
+    m["t"], m["page"] = now(), 4096
+    kind = "darwin" if platform == "darwin" else "linux" if platform.startswith("linux") else "win" if platform.startswith("win") else None
+    try:
+        if kind == "darwin":
+            m["pressure"] = _num(run(["sysctl", "-n", "kern.memorystatus_vm_pressure_level"]))
+            total = _num(run(["sysctl", "-n", "hw.memsize"]))
+            m["total_mb"] = total // MB if total else None
+            v = vm_stat_pages(run(["vm_stat"]))
+            m["page"] = v["page"]
+            for key, name in (("free_true_mb", "Pages free"), ("compressor_mb", "Pages occupied by compressor")):
+                if name in v:
+                    m[key] = v[name] * v["page"] // MB
+            if "Swapins" in v:
+                m["swapins_bytes"] = v["Swapins"] * v["page"]
+        elif kind == "linux":
+            rd = readfile or _read
+
+            def get(path):
+                try:
+                    return rd(path)
+                except OSError:
+                    return None
+            for path in ("/sys/fs/cgroup/memory.pressure", "/proc/pressure/memory"):    # the container's own first
+                m["psi"] = psi_some_avg10(get(path))
+                if m["psi"] is not None:
+                    break
+            info = _kv(get("/proc/meminfo"))
+            avail = info.get("MemAvailable", info.get("MemFree"))      # MemFree stays low next to the page cache: MemAvailable first
+            m["free_true_mb"] = avail // 1024 if avail is not None else None
+            m["total_mb"] = info["MemTotal"] // 1024 if "MemTotal" in info else None
+            m["page"] = page or (os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096)
+            vm = _kv(get("/proc/vmstat"))
+            if "pswpin" in vm:
+                m["swapins_bytes"] = vm["pswpin"] * m["page"]
+        elif kind == "win":
+            _win_mem(m)
+    except Exception:                                  # no ctypes, odd text: what was read stays, the rest is unknown
+        pass
+    m["unknown"] = [k for k in MEM_KEYS.get(kind, ()) if m.get(k) is None]
+    if kind == "win":
+        m["unknown"].append("swapins_bytes")           # Windows gives no swap-in counter here
+    return m
+
+
+def mem_signals(first, last):
+    """Two mem_readings (start and end of the CPU window) -> the last picture plus swapin_mb_s and swapin_pages_s, the
+    average over the whole window (sustained by construction), or None when either counter is unknown."""
+    sig = dict(last or {})
+    a, b = (first or {}).get("swapins_bytes"), sig.get("swapins_bytes")
+    dt = (sig.get("t") or 0) - ((first or {}).get("t") or 0)
+    if a is not None and b is not None and dt > 0:
+        rate = max(0, b - a) / dt
+        sig["swapin_mb_s"], sig["swapin_pages_s"] = rate / MB, rate / (sig.get("page") or 4096)
+    return sig
+
+
+def free_true_limit(total_mb):
+    """The truly-free floor: BUSY_FREE_RAM_FRACTION of RAM, never under BUSY_FREE_MB."""
+    return max(BUSY_FREE_MB, int((total_mb or 0) * BUSY_FREE_RAM_FRACTION))
+
+
+def memory_reason(mem):
+    """Busy text from a memory picture (mem_reading or mem_signals), else None. Unknown readings are skipped."""
+    if not mem:
+        return None
+    level = mem.get("pressure")
+    if level is not None and level >= BUSY_PRESSURE_LEVEL:
+        return "memory pressure %s" % PRESSURE_NAMES.get(level, level)
+    psi = mem.get("psi")
+    if psi is not None and psi >= BUSY_PSI_SOME_AVG10:
+        return "memory pressure: some avg10 %.1f %% (limit %.0f %%)" % (psi, BUSY_PSI_SOME_AVG10)
+    load = mem.get("winload")
+    if load is not None and load >= BUSY_WIN_MEMLOAD_PCT:
+        return "memory load %d %% (limit %d %%)" % (load, BUSY_WIN_MEMLOAD_PCT)
+    rate = mem.get("swapin_mb_s")
+    if rate is not None and rate >= BUSY_SWAPIN_MB_S:
+        return "swap-in %.0f pages/s (%.1f MB/s, limit %.1f MB/s)" % (mem.get("swapin_pages_s") or 0, rate, BUSY_SWAPIN_MB_S)
+    comp, total = mem.get("compressor_mb"), mem.get("total_mb")
+    if comp is not None and total and comp >= total * BUSY_COMPRESSOR_RAM_FRACTION:
+        return "compressor %.1f GB of %.0f GB RAM (limit %.0f %%)" % (comp / 1024.0, total / 1024.0, BUSY_COMPRESSOR_RAM_FRACTION * 100)
+    known = any(mem.get(k) is not None for k in ("pressure", "psi", "winload"))
+    free = mem.get("free_true_mb")
+    if free is not None and not (known and FREE_TRUE_ONLY_WITHOUT_PRESSURE) and free < free_true_limit(total):
+        return "truly free memory %d MB is under %d MB" % (free, free_true_limit(total))
+    return None
+
+
+def calm_reason(mem=None, sampler=None):
+    """The not-busy text: "free", plus the signals that could not be read (they were skipped, never guessed)."""
+    names = {"pressure": "memory pressure", "psi": "memory pressure", "winload": "memory load", "free_true_mb": "free memory",
+             "compressor_mb": "compressor", "swapins_bytes": "swap-in", "total_mb": "RAM size"}
+    unknown = sorted(set(names[k] for k in (mem or {}).get("unknown", ()) if k in names))
+    if getattr(sampler, "source", None) == "ps":
+        unknown.append("kernel CPU counters (ps sum used)")
+    return "free" + ("; unknown: " + ", ".join(unknown) if unknown else "")
+
+
 def read_machine(per_worker_mb=None, sample=None, sampler=None, sleep=time.sleep):
-    """-> dict of the readings now. `sample` replaces the CPU reading; else the median of 3 short `sampler` readings."""
+    """-> dict of the readings now. `sample` replaces the CPU reading; else the median of 3 short `sampler` readings
+    (default: kernel counters, SystemCPU, with the ps sum as fallback)."""
     cores_all = os.cpu_count() or 1
     q = cgroup_quota() if sys.platform.startswith("linux") else None
     cores = usable_cores(quota=q)
     if sample is None:
-        sample = cpu_median(sampler or (lambda: cpu_pct(cores=cores_all)), sleep)
-    return {"cores": cores, "quota": q, "free_mb": free_mb(), "battery": on_battery(), "cpu_pct": sample}
+        sample = cpu_median(sampler or SystemCPU(sleep=sleep, fallback=lambda: cpu_pct(cores=cores_all)), sleep)
+    return {"cores": cores, "quota": q, "free_mb": free_mb(), "battery": on_battery(), "cpu_pct": sample, "mem": mem_reading()}
 
 
 # ---------------------------------------------------------------- the one busy rule (admit.py calls these too)
 
-def busy_reason(free, cpu):
-    """The R-532 busy rule, defined ONCE. free: free+inactive MB or None; cpu: median CPU as % of all cores or None.
-    -> the reason text when busy, else None. A reading that is None is skipped. Memory is judged first."""
-    if free is not None and free < BUSY_FREE_MB:
-        return "free memory %d MB is under %d MB" % (free, BUSY_FREE_MB)
+def busy_reason(free_true, cpu, mem=None):
+    """The busy rule, defined ONCE (R-532, R-889b). free_true: TRULY free MB (free pages, never inactive) or None, judged
+    like mem's free_true_mb (only where no kernel pressure reading exists); cpu: median CPU as % of all usable cores or None;
+    mem: a mem_reading or mem_signals picture or None. Free plus inactive memory is never a busy signal (R-889b round 2).
+    -> the reason text naming the signal that fired, else None. A reading that is None is skipped. Memory is judged first."""
+    if free_true is not None and (mem or {}).get("free_true_mb") is None:
+        mem = dict(mem or {}, free_true_mb=free_true)
+    why = memory_reason(mem)
+    if why:
+        return why
     if cpu is not None and cpu > BUSY_CPU_PCT:
         return "median CPU %.0f %% is above %d %%" % (cpu, BUSY_CPU_PCT)
     return None
@@ -206,7 +477,7 @@ def budget(m, per_worker_mb=300):
     if m.get("battery"):
         n = max(1, n // 2)
         why.append("battery: halved")
-    if busy_reason(free, m.get("cpu_pct")):
+    if busy_reason(None, m.get("cpu_pct"), m.get("mem")):  # free_mb here is reclaimable: it sizes slots, never decides busy
         n = 1
         why.append("busy")
     return max(1, min(n, ceiling)), ", ".join(why)

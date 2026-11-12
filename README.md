@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.13.9.6-7d68c4?style=flat-square" alt="Version 0.13.9.6">
+  <img src="https://img.shields.io/badge/version-0.13.9.10-7d68c4?style=flat-square" alt="Version 0.13.9.10">
   <img src="https://img.shields.io/badge/Claude_Code-2.1.292%2B-D97757?style=flat-square&logo=claude&logoColor=white" alt="Claude Code 2.1.292 or newer">
   <img src="https://img.shields.io/badge/Python-3-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3">
   <img src="https://img.shields.io/badge/macOS-tested-000000?style=flat-square&logo=apple&logoColor=white" alt="Tested on macOS">
@@ -305,7 +305,8 @@ Tap a question to open the answer. The short answer is already next to it.
 
 <details><summary><b>Does it cost extra?</b> → <b>No.</b></summary><p>Budgit is free and MIT licensed. The helper agents use your Claude plan, and the budget level decides how many run at once.<br><sub>Depth: <a href="../../wiki/FAQ">FAQ</a></sub></p></details>
 <details><summary><b>Do I need ChatGPT?</b> → <b>No.</b></summary><p>The ChatGPT lane ships off.<br><sub>Depth: <a href="../../wiki/How-Budgit-works">How Budgit works</a></sub></p></details>
-<details><summary><b>What if I run over my limit?</b> → <b>It slows down first.</b></summary><p>Budgit slows down before that. It cannot raise your plan's limit.<br><sub>Depth: <a href="../../wiki/FAQ">FAQ</a></sub></p></details>
+<details><summary><b>What if I run over my limit?</b> → <b>It slows down first.</b></summary><p>Budgit slows down before that. It cannot raise your plan's limit. On Pro and Max plans the status line also shows the 5-hour window next to the weekly one.<br><sub>Depth: <a href="../../wiki/FAQ">FAQ</a></sub></p></details>
+<details><summary><b>Does it know the 5-hour limit?</b> → <b>Yes, on Pro and Max.</b></summary><p>Those plans cap each 5-hour window. Budgit compares your use with the time gone in that window and in the week: above 1.5 times the sustainable pace it goes tight (two helpers, cheaper judgement model), above 2.5 times critical (no new helpers). Plans with no 5-hour window use the weekly pace alone.<br><sub>Depth: <a href="../../wiki/FAQ">FAQ</a></sub></p></details>
 
 ### Control and updates
 

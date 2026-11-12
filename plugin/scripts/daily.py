@@ -269,9 +269,10 @@ class _Clean:
     """What housekeeping would remove or delete (the same plan() and the same live-session rule as `budgit housekeeping`),
     counted behind one deadline. Every doubt is "not checked", never 0."""
 
-    def __init__(self, enabled, load, now):
+    def __init__(self, enabled, busy, now):
         self.enabled, self.now = enabled, now
-        self.load = housekeeping.load_now() if load is None else load
+        self.busy = busy or (lambda: housekeeping.busy_now(housekeeping.DAILY_BUSY_WINDOW))   # R-889b: shared check;
+        self._busy = None                                        # a callable -> (busy, reason), read once when first needed
         self.deadline = None
         self.live = False
         self.before = None
@@ -288,7 +289,11 @@ class _Clean:
             housekeeping._deadline = self.before
 
     def count(self, path):
-        if not self.enabled or (self.load is not None and self.load > housekeeping._load_limit()):
+        if not self.enabled:
+            return None
+        if self._busy is None:
+            self._busy = bool(self.busy()[0])
+        if self._busy:
             return None
         try:
             if not os.path.exists(os.path.join(path, ".git")) or housekeeping.top_level(path) != os.path.realpath(path):
@@ -376,9 +381,10 @@ def _avoid(names):
     return parts
 
 
-def collect(project=None, all_projects=False, target=None, now=None, git=True, load=None):
+def collect(project=None, all_projects=False, target=None, now=None, git=True, busy=None):
     """The daily as data. `project`: the current folder; `target`: a project of the portfolio list by name; `all_projects`:
-    every project of the list. A protected project is counts only; a failing one carries an `error` code."""
+    every project of the list. A protected project is counts only; a failing one carries an `error` code. `busy`: a callable
+    -> (busy, reason), injected by tests; None reads housekeeping.busy_now (the shared busy check) once."""
     now = now if now is not None else time.time()
     if not _config_ok():                               # `protected_dirs` cannot be read: no folder can be called plain
         return {"projects": [], "no_project": False, "error": "config", "_names": frozenset()}
@@ -407,7 +413,7 @@ def collect(project=None, all_projects=False, target=None, now=None, git=True, l
             else:
                 ids[real] = os.path.basename(real.rstrip(os.sep))
     rows, found = [], {}
-    with _Clean(git, load, now) as clean:
+    with _Clean(git, busy, now) as clean:
         for e in chosen:
             path = e["path"]
             is_priv = path in private

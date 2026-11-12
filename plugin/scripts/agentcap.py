@@ -8,6 +8,7 @@ import re
 import studiolib as sl
 
 SOFT_MARGIN, HARD_MARGIN = 5, 20
+WARN_PERCENT = 80                           # R-750: one "report soon" note per round at this share of the brief's budget
 MAX_STATED = 500
 
 
@@ -56,14 +57,17 @@ def _bump(agent_id, suffix=""):
 
 
 def reset(agent_id):
-    for suffix in ("", ".waits", ".budget", ".round"):
+    for suffix in ("", ".waits", ".budget", ".round", ".reports"):
         try:
             os.remove(_path(agent_id) + suffix)
         except OSError:
             pass
 
 
-_BRIEF_BUDGET = re.compile(r"(?im)^\W*call budget\W{0,3}\s*(\d{1,4})\b")
+# R-750: a line `Budget: N`, `Call budget: N`, optionally followed by `tool calls`, `calls` or `more` (a resume's
+# `Budget: N more` is a round of N). The colon is required: `Budget 2026 notes` and `Budget: 2 hours` set nothing.
+# MAX_STATED is the ceiling.
+_BRIEF_BUDGET = re.compile(r"(?im)^\W*(?:call )?budget(?:\*\*)?:(?:\*\*)?[ \t]*(\d{1,4})(?:[ \t]+more)?(?:[ \t]+(?:tool calls?|calls?))?(?:[ \t]*[.;,(].*)?[ \t]*$")
 
 
 def _transcript(inp):
@@ -192,6 +196,55 @@ def _read_round(inp):
     return min(b, MAX_STATED) if b else None
 
 
+AGENTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "agents")
+
+
+def max_turns(kind, agents_dir=None):
+    """maxTurns from plugin/agents/<name>.md frontmatter for a subagent_type like `studio:security-reviewer`, else None."""
+    name = str(kind or "").split(":")[-1]
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        return None
+    try:
+        with open(os.path.join(agents_dir or AGENTS_DIR, name + ".md"), encoding="utf-8") as f:
+            head = f.read(2000)
+    except OSError:
+        return None
+    m = re.search(r"(?m)^maxTurns:\s*(\d+)\s*$", head)
+    return int(m.group(1)) if m else None
+
+
+def launch_warning(tool_input, agents_dir=None):
+    """R-904: one line when the brief's budget is larger than the agent type's own maxTurns, else None."""
+    if not isinstance(tool_input, dict):
+        return None
+    m = _BRIEF_BUDGET.search(str(tool_input.get("prompt") or ""))
+    limit = max_turns(tool_input.get("subagent_type"), agents_dir)
+    if m and limit and int(m.group(1)) > limit:
+        return ("budgit: %s has maxTurns %d but the brief budgets %d calls; it will stop at %d turns. Lower the budget "
+                "or split the work." % (tool_input.get("subagent_type"), limit, int(m.group(1)), limit))
+    return None
+
+
+EXAMPLE_MARKERS = ("por ejemplo", "es un ejemplo", "ejemplo", "p. ej.", "e.g.", "for example", "such as")
+RULE_PREFIXES = ("rule:", "general case:", "regla:", "caso general:")
+_QUOTED = re.compile("«([^«»]*)»")          # R-929 r2: never crosses a second «, so the scan stays linear
+
+
+def example_only_warning(tool_input, markers=None, prefixes=RULE_PREFIXES):
+    """R-929: one line when the brief quotes the user's words («...») with an example marker inside the quote but has
+    no `Rule:`/`Regla:`/`General case:`/`Caso general:` line. A marker outside the quotes does not count. Else None."""
+    if not isinstance(tool_input, dict):
+        return None
+    markers = EXAMPLE_MARKERS if markers is None else markers
+    text = str(tool_input.get("prompt") or "")
+    if not any(m in q.lower() for q in _QUOTED.findall(text) for m in markers):
+        return None
+    if any(ln.strip().lstrip("-*> \t").lower().startswith(prefixes) for ln in text.splitlines()):
+        return None
+    return ("R-929: the brief quotes the user's example but has no Rule:/Regla: line — state the general case, "
+            "not only that example.")
+
+
 def _inside(path, root):
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
@@ -237,11 +290,67 @@ def protected_write(inp):
             or (mine is not None and t == os.path.realpath(mine)))
 
 
+REPORT_MARGIN = 10                           # R-908: a verifier is told to write its report at cap - 10
+_VERIFY_NAME = re.compile(r"R-\d+\.md|(?:RELEASE|RC)-[A-Za-z0-9_.-]*\.md")
+
+
+def is_verifier(inp):
+    return sl.canon_agent(inp.get("agent_type")) == sl.VERIFIER
+
+
+def verify_report_write(inp):
+    """R-908: the ONE call a verifier may still make past its limit: Write or Edit of <project>/.budgit/verify/<NAME>.md
+    (or .studio). Only the verifier may write there, so refusing it would lose the verdict for good."""
+    if inp.get("tool_name") not in ("Write", "Edit") or not is_verifier(inp) or protected_write(inp):
+        return False
+    t, cwd = _target(inp), inp.get("cwd")
+    root = main_root(cwd) if isinstance(cwd, str) and cwd else None
+    if not t or not root:
+        return False
+    d, name = os.path.split(t)
+    d2, last = os.path.split(d)
+    return (last == "verify" and os.path.basename(d2) in sl.DATA_NAMES and os.path.realpath(os.path.dirname(d2)) == root
+            and _VERIFY_NAME.fullmatch(name) is not None and name != sl.SEALS_FILE)
+
+
+MAX_REPORT_WRITES = 3                         # Write/Edit calls of a verify report allowed past the limit, per agent
+
+
+def main_root(cwd):
+    """The main checkout root of the project holding cwd: the nearest ancestor with a .git folder, or, for a linked
+    worktree (.git file), the checkout its gitdir belongs to. No git call. None when cwd is in no repository."""
+    d = os.path.realpath(cwd)
+    while True:
+        g = os.path.join(d, ".git")
+        if os.path.isdir(g):
+            return d
+        if os.path.isfile(g):
+            try:
+                with open(g) as f:
+                    line = f.read().strip()
+            except OSError:
+                return None
+            gitdir = os.path.realpath(line[len("gitdir:"):].strip()) if line.startswith("gitdir:") else ""
+            marker = os.sep + ".git" + os.sep + "worktrees" + os.sep
+            return gitdir.split(marker)[0] if marker in gitdir + os.sep else None
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def _report_note(n, limit):
+    return ("budgit: %d calls of %d: write your verdict now to <project>/.budgit/verify/<item>.md (Write), then hand back. "
+            "Past the limit only that write is allowed." % (n, limit))
+
+
 def _allowed_past_limit(inp):
-    """Past the limit only the final message and Write/Edit of <cwd>/progress*.md pass, and only when the cwd is a
-    linked worktree root on a branch other than main or master. No git call: the caller commits."""
+    """Past the limit only the final message, Write/Edit of <cwd>/progress*.md (linked worktree root on a branch other
+    than main or master; no git call, the caller commits) and a verifier's own verify report pass."""
     if inp.get("tool_name") == "SubagentHandback":
         return True
+    if verify_report_write(inp):                # a few writes only: a bounded count, never an open door
+        return _bump(inp.get("agent_id"), ".reports") <= MAX_REPORT_WRITES
     if inp.get("tool_name") in ("Write", "Edit"):
         t, cwd = _target(inp), inp.get("cwd")
         if not (t and isinstance(cwd, str) and cwd):
@@ -309,8 +418,17 @@ def _check(inp, cap):
             return ("note", "budgit: call budget %d reached (%d calls, work only): report now. Commit green work now as a "
                             "checkpoint (git add, then commit) and hand back. Refused from call %d."
                     % (stated, n, hard + 1))
-        return None
+        notes = ["budgit: budget read: %d" % stated] if n == 1 else []     # R-750: the agent sees which number applies
+        if n == (stated * WARN_PERCENT) // 100 and n < stated:      # R-750: once per round, every subagent
+            notes.append("budgit: report soon: %d of %d calls used." % (n, stated))
+        if is_verifier(inp) and n == stated - REPORT_MARGIN:
+            notes.append(_report_note(n, stated))
+        return ("note", " ".join(notes)) if notes else None
     soft, hard = cap - SOFT_MARGIN, cap + HARD_MARGIN
+    if n == 1:
+        return ("note", "budgit: budget read: none, brief default %d" % cap)
+    if is_verifier(inp) and n == cap - REPORT_MARGIN:
+        return ("note", _report_note(n, cap))
     if n > hard and not _allowed_past_limit(inp):
         return ("deny", "budgit: tool-call ceiling reached (%d calls, budget ~%d): %s; then send your final report "
                         "(done, evidence, what is left) as your last message." % (n - 1, cap, _LIMIT_TEXT))

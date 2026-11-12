@@ -291,6 +291,8 @@ def record(seven_day=None, five_hour=None, extra=None, now=None, authoritative=F
         if not limits:
             data.pop("limits")
         data["seen"] = seen
+        if extra is None and extra_enabled is False:      # R-862: "disabled" with no figures still replaces an older enabled reading
+            extra = (0.0, (data.get("extra") or {}).get("limit") or 0.0)
         if extra is not None and all(math.isfinite(float(x)) and float(x) >= 0 for x in extra):
             was = data.get("extra") if isinstance(data.get("extra"), dict) else {}
             flag = extra_enabled if isinstance(extra_enabled, bool) else was.get("enabled")      # a reading that does not say keeps what we knew
@@ -376,10 +378,23 @@ def clear_override():
 
 
 # --- classification ------------------------------------------------------------------------------
-def _level_for(u7, pace, u5, m):
-    if u7 >= 90 - m or u5 >= 90 - m or pace >= 25 - m:
+TIGHT_RATIO = 1.5        # R-865: burning faster than this many times the sustainable pace is tight
+CRITICAL_RATIO = 2.5      # ... and this many times is critical
+MIN_WEEK_DAYS = 0.25       # a weekly reading in the first 6 h is too small a sample for a rate
+MIN_FIVE_SHARE = 0.10      # likewise the first 10 % of the 5-hour window
+FIVE_HOUR = 5 * 3600
+
+
+def _ratio(used, elapsed_share, floor):
+    """Used % over the share of its window already gone (1.0 = exactly the pace that lasts the window)."""
+    return used / max(elapsed_share, floor) / 100.0 if used > 0 else 0.0
+
+
+def _level_for(u7, pace, u5, m, r7=0.0, r5=0.0):
+    k = 1 - m / 25.0       # hysteresis also relaxes the ratio thresholds (m is 0 or HYSTERESIS)
+    if u7 >= 90 - m or u5 >= 90 - m or pace >= 25 - m or max(r7, r5) > CRITICAL_RATIO * k:
         return "critical"
-    if pace >= 10 - m or u5 >= 70 - m or u7 >= 80 - m:
+    if pace >= 10 - m or u5 >= 70 - m or u7 >= 80 - m or max(r7, r5) > TIGHT_RATIO * k:
         return "tight"
     if pace <= -15 and u5 < 40 and u7 < 60:
         return "ample"
@@ -394,24 +409,35 @@ def classify(limits, prev=None, now=None):
     loose = (limits or {}).get("seven_day")      # R-522: a weekly figure with no reset time still counts (no pace; the ceilings apply)
     if "seven_day" not in live and isinstance(loose, dict) and loose.get("resets_at") is None and loose.get("used") is not None:
         live["seven_day"] = loose
+    loose5 = (limits or {}).get("five_hour")     # R-525: likewise a 5-hour figure with no reset time: no pace, the % ceilings apply
+    if "five_hour" not in live and isinstance(loose5, dict) and loose5.get("resets_at") is None and loose5.get("used") is not None:
+        live["five_hour"] = loose5
     if not live:
         return "normal", "no budget data (no live 5-hour/weekly snapshot)"
     u7 = live["seven_day"]["used"] if "seven_day" in live else 0.0
     u5 = live["five_hour"]["used"] if "five_hour" in live else 0.0
-    pace, bits = 0.0, []
+    pace, bits, r7, r5 = 0.0, [], 0.0, 0.0
     if "seven_day" in live and live["seven_day"].get("resets_at") is None:
         bits.append("weekly %d%% used (no reset time given)" % u7)
     elif "seven_day" in live:
         elapsed = 100.0 * (1 - (live["seven_day"]["resets_at"] - now) / WEEK)
         pace = u7 - elapsed
         bits.append("weekly %d%% used with %d%% of the week elapsed (pace %+d)" % (u7, max(elapsed, 0), pace))
+        days = max(WEEK * max(elapsed, 0) / 100.0 / 86400, MIN_WEEK_DAYS)
+        r7 = _ratio(u7, max(elapsed, 0) / 100.0, MIN_WEEK_DAYS * 86400 / WEEK)       # R-865: x the sustainable pace (100/7 % a day)
+        bits.append("%d%% a day so far against %d%% a day that keeps you inside the week (%.1fx)" % (u7 / days, 100 / 7.0, r7))
         if "five_hour" not in live:       # R-522: no 5-hour window (Ultra): a fast weekly burn has nothing else to stop it
-            days = max(WEEK * max(elapsed, 0) / 100.0 / 86400, 0.25)
-            bits.append("no 5-hour window, so the daily pace off the weekly is the guard (%d%% a day so far; %d%% a day keeps you inside the week)" % (u7 / days, 100 / 7.0))
+            bits.append("no 5-hour window, so the daily pace off the weekly is the guard")
     if "five_hour" in live:
-        bits.append("5-hour window %d%% used" % u5)
-    raw = _level_for(u7, pace, u5, 0)
-    strict = _level_for(u7, pace, u5, HYSTERESIS)
+        five_at = live["five_hour"].get("resets_at")
+        if five_at is None:               # R-525: no reset time, so no pace: the % alone decides
+            bits.append("5-hour window %d%% used (no reset time given)" % u5)
+        else:
+            share = min(max(1 - (five_at - now) / FIVE_HOUR, 0.0), 1.0)
+            r5 = _ratio(u5, share, MIN_FIVE_SHARE)
+            bits.append("5-hour window %d%% used with %d%% of it elapsed (%.1fx the pace that lasts it)" % (u5, share * 100, r5))
+    raw = _level_for(u7, pace, u5, 0, r7, r5)
+    strict = _level_for(u7, pace, u5, HYSTERESIS, r7, r5)
     rank = LEVELS.index
     level = raw
     if prev in LEVELS:
@@ -494,7 +520,10 @@ def current(now=None):
             fresh["level"] = level
             save(fresh)
     extra = data.get("extra")
-    if extra and level in ("tight", "critical") and extra.get("enabled") is not False:
+    # R-862: the limit is a ceiling, never spend. Nothing is claimed for a switched-off account, and with the flag unknown only
+    # an amount actually spent (> 0) against a real limit is worth a line.
+    if extra and level in ("tight", "critical") and extra.get("enabled") is not False \
+            and (extra.get("enabled") is True or (extra["spent"] > 0 and extra["limit"] > 0)):
         # real money only when the account is known to have extra usage on; without the flag we do not claim it
         tail = "real money once the plan limit is hit" if extra.get("enabled") is True \
             else "billed as real money only if extra usage is enabled on your account"

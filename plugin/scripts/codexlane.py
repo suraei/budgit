@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tempfile
 
+import codexlimit
 import studiolib as sl
 
 MAX_INPUT = 200_000
@@ -112,11 +113,19 @@ def _codex_bin():
     return sl.codex_bin()
 
 
-def run(project, kind, text, model=None, timeout=TIMEOUT):
+def _limit_error(until):
+    raise sl.StudioError("Codex usage limit reached; it returns %s. Use `budgit ext-review --tool auto --diff <file> "
+                         "--prompt <text> --out <file>` (it goes to Gemini meanwhile)." % codexlimit.when(until))
+
+
+def run(project, kind, text, model=None, timeout=TIMEOUT, now=None):
     """Send text to Codex read-only; return the path of the saved, UNTRUSTED report."""
     if kind not in KINDS:
         raise sl.StudioError("unknown Codex lane kind %r (use: %s)" % (kind, ", ".join(KINDS)))
     check(project, text)
+    until = codexlimit.blocked_until(now)
+    if until:
+        _limit_error(until)
     model = model or KINDS[kind][0]
     codex = _codex_bin()
     scratch = tempfile.mkdtemp(prefix="budgit-codex-")
@@ -141,6 +150,8 @@ def run(project, kind, text, model=None, timeout=TIMEOUT):
             except subprocess.TimeoutExpired:
                 raise sl.StudioError("Codex timed out after %ds (usage limit backoff?)" % timeout)
         answer = sl.read_text(out).strip() if os.path.isfile(out) else ""
+        if not answer and codexlimit.is_limit(r.stderr):
+            _limit_error(codexlimit.record(r.stderr, now))
         if not answer:
             tail = sl.redact((r.stderr or "").strip())[-400:]
             raise sl.StudioError("Codex gave no answer (exit %d): %s" % (r.returncode, tail or "no stderr"))
@@ -152,7 +163,7 @@ def run(project, kind, text, model=None, timeout=TIMEOUT):
 REVIEW_FRESH_S = 2 * 3600
 
 
-def review_first_note(project, subagent_type):
+def review_first_note(project, subagent_type, now=None):
     """R-63: a judgement agent (verifier, critic, reviewer) costs Opus; the ChatGPT lane's review costs the user's ChatGPT
     login, not Claude quota (only when the lane is on). Nudge (never block) when no codex review report is fresh in this project."""
     import budget
@@ -165,8 +176,20 @@ def review_first_note(project, subagent_type):
              if time.time() - os.path.getmtime(p) < REVIEW_FRESH_S]
     if fresh:
         return None
+    until = codexlimit.blocked_until(now)
+    if until and codexlimit.protected(project):       # code of a protected project never goes to another outside model
+        return ("budgit: Codex is at its usage limit until %s. This is a protected project: do not use `budgit ext-review` "
+                "on its diff. After that date run `budgit codex review --clean-copy`; until then use a fresh-context "
+                "reviewer on another tier with raw evidence only, and flag its weaker independence (this %s)."
+                % (codexlimit.when(until), subagent_type or "agent"))
+    if until:       # R-853: Codex said its usage limit is hit; do not ask for it before it returns
+        return ("budgit: Codex is at its usage limit until %s. Run `budgit ext-review --tool auto --diff <file> --prompt "
+                "<text> --out <file>` on the diff instead (it skips Codex and uses Gemini; it times out and closes its "
+                "child; never call `gemini` or `codex exec` by hand) and hand the saved verdict to this %s as untrusted "
+                "input. With no external tool, use a fresh-context reviewer on another tier and flag its weaker "
+                "independence. Skip only when there is no diff." % (codexlimit.when(until), subagent_type or "agent"))
     return ("budgit: no `budgit codex review` in the last 2 h — run it first on the diff (ChatGPT login, not Claude "
             "quota), fix what it finds, and hand its report path to this %s as untrusted input. For any other external "
             "model use `budgit ext-review --tool auto --diff <file> --prompt <text> --out <file>` (codex, else gemini; "
             "it times out and closes its child; never call `gemini` or `codex exec` by hand). Skip only when "
-            "there is no diff (e.g. a spec or research review). (R-853 overlaps this hint.)" % (subagent_type or "agent"))
+            "there is no diff (e.g. a spec or research review)." % (subagent_type or "agent"))

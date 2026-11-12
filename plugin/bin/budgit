@@ -98,7 +98,10 @@ def _load_refused(exc):
 
 
 def _load_text(load):
-    return "%s %s %s" % tuple(load) if load else "?"
+    """R-889b: the busy snapshot string (suitequeue.busy_snapshot); a list from an older record (load average) still prints."""
+    if not load:
+        return "?"
+    return load if isinstance(load, str) else " ".join(str(x) for x in load)
 
 
 def cmd_admit(args):
@@ -545,8 +548,11 @@ def _status_line(args):
                 at_home = general.eligible(args.project or os.getcwd())      # R-373: this folder gets the general notebook
             except Exception:
                 at_home = False
+            five0 = limits.get("five_hour")
+            live0 = isinstance(five0, dict) and five0.get("used") is not None and (five0.get("resets_at") is None or (five0.get("resets_at") or 0) > now)
             sit = {"noproject": True, "general": at_home, "week": o["used"] if o else None, "forecast": forecast,
-                   "out_day": i18n.day_abbr(out.tm_wday, lang) if out else "", "out_hour": out.tm_hour if out else 0}
+                   "out_day": i18n.day_abbr(out.tm_wday, lang) if out else "", "out_hour": out.tm_hour if out else 0,
+                   "h5_pct": five0["used"] if live0 else None, "h5_reset": five0.get("resets_at") if live0 else None}
             print(_fit_line(sit, lang, args, False, _update_tails(args, lang), _subcap_text(o["used"] if o else None, lang, now)))
             return
         project, data = opened
@@ -555,6 +561,8 @@ def _status_line(args):
         out = time.localtime(o["runs_out"]) if o and o["runs_out"] else None
         five = limits.get("five_hour")
         live5 = isinstance(five, dict) and (five.get("resets_at") or 0) > now and five.get("used") is not None
+        # R-878/R-525: the gauge also shows for a five_hour figure the host sent with no resets_at (no time then)
+        gauge5 = isinstance(five, dict) and five.get("used") is not None and (five.get("resets_at") is None or live5)
         forecast = None if not o or o["projected"] is None else "out" if out else "ok"
         try:
             import portfolio
@@ -566,6 +574,7 @@ def _status_line(args):
                "out_day": i18n.day_abbr(out.tm_wday, lang) if out else "",
                "out_hour": out.tm_hour if out else 0,
                "stale": len(sl.stale_doing(data, at=now)), "h5": five["used"] if live5 else 0,
+               "h5_pct": five["used"] if gauge5 else None, "h5_reset": five.get("resets_at") if gauge5 else None,
                "waiting": _waiting_count(project, data, now)}
         print(_fit_line(sit, lang, args, args.extras, _update_tails(args, lang), _subcap_text(o["used"] if o else None, lang, now)))
     except Exception:
@@ -731,7 +740,8 @@ def cmd_setup_answer(args):
 
 
 def cmd_busy(args):
-    """R-788: busy when the median CPU over the window is above 85 % of the cores, or free + inactive memory is under 1 GB. Exit 0 free, 10 busy."""
+    """R-788, R-889b: the one busy rule (admission.busy_reason via admit.is_busy): CPU from kernel counters, memory pressure,
+    swap-ins, compressor, free memory. Exit 0 free, 10 busy; the line names the signal that fired."""
     import admit
     busy, why = admit.is_busy(window=args.window)
     print("busy: " + why if busy else "not busy")
@@ -1164,6 +1174,14 @@ def cmd_reorganize(args):
     else:
         print(roles.reorganize(dry_run=args.dry_run))
     return 0
+
+
+def cmd_asks(args):
+    """R-891 slice 1, R-910: the asks list (read-only; writes nothing)."""
+    import asks
+    text, code = asks.run(sl.resolve_project(args.project), state=args.state, as_json=args.json, t=_t, gate=args.gate)
+    print(text)
+    return code
 
 
 def cmd_release_check(args):
@@ -1621,14 +1639,19 @@ def cmd_ledger(args):
                 if warn:
                     sys.stderr.write(warn + "\n")
             elif args.op == "set":
+                if args.status in ("done", "verified"):
+                    raise sl.StudioError("set %s is refused: use `budgit ledger done R-n --evidence` "
+                                         "(%s)" % (args.status, sl.DONE_PROOF_MSG))
                 it = sl.set_status(project, data, args.id, args.status)
                 warn = sl.drift_warning(data, args.id) if args.status == "doing" else None
                 if warn:
                     sys.stderr.write(warn + "\n")
             elif args.op == "done":
+                sl.check_done_proof(args.evidence)
                 it = sl.set_status(project, data, args.id, "done", evidence=args.evidence or "")
             elif args.op == "verify":
-                it = sl.set_status(project, data, args.id, "verified")
+                sl.check_done_proof(args.evidence)
+                it = sl.set_status(project, data, args.id, "verified", evidence=args.evidence)
             else:  # drop
                 it = sl.set_status(project, data, args.id, "dropped", by_user=args.by_user)
             result = "%s -> %s" % (it["id"], it["status"])
@@ -2291,7 +2314,8 @@ def cmd_away(args):
     elif args.action == "note":
         text = " ".join(args.text)
         if not away.note(text, "note", SESSION, project=mine):
-            print("budgit away note: give the question as text", file=sys.stderr)
+            print("budgit away note: give the question as text (or this session already queued %d notes)" % away.NOTE_CAP_PER_SESSION,
+                  file=sys.stderr)
             return 1
         print("noted for the user's return; continue with other unblocked work")
     else:
@@ -2468,6 +2492,76 @@ def _plugin_version():
         return "unknown"
 
 
+# R-901: what each subcommand WRITES, read by the Budgit-home guard (studiolib._cli_call) instead of reading this file. One entry
+# per parser leaf ("cmd" or "cmd op"); a test fails when a leaf has none. Value: (kind, home_files, path_args).
+#   kind "none"       writes nothing outside the process (a read-only report).
+#   kind "project"    writes only inside the project / the folders named by path_args (never the Budgit home).
+#   kind "home-fixed" also writes the NAMED files of the Budgit home (home_files, relative to it) and no other; no argument
+#                     can move that write (a test records the home before and after).
+#   kind "home"       may write the Budgit home, or was not proven not to: the guard asks the coordinator, denies a subagent.
+#                     Anything not listed here is "home" too (fail closed).
+# path_args: "@" = every non-flag word after the subcommand is a path (checked against the home); "--flag" = that flag's value.
+# `--project VALUE` is a path for every entry. Free text (--text, --evidence, --note, a ledger match text) is never a path.
+# Proven read-only here: busy (admit.is_busy samples counters, no writes), export / secrets / denies / ledger (see R-901 spec).
+CLI_WRITES = {
+    "busy": ("none", (), ()),
+    "asks": ("none", (), ()),                           # R-891: read-only list (spec: "writes nothing"); a recorded run proves it
+    "denies": ("project", (), ()),                      # --fp appends to the project's audit log
+    "secrets": ("project", (), ("@",)),                 # --install-hook writes <path>/.git/hooks
+    "export": ("project", (), ("@",)),                  # writes OUT, and share-published.json in the hub's own data folder
+    "away": ("home", (), ()),                           # on / off / --clear set the flag or erase a project's queue: never for a subagent
+    "away note": ("home-fixed", ("away.json", "away-queue.jsonl"), ()),    # appends to the queue; round 9: coordinator-only, a subagent is denied (see the "away" row)
+    "away status": ("home-fixed", ("away.json", "away-queue.jsonl"), ()),  # bare `away`: shows the queue
+    "ledger match": ("home-fixed", ("triggers.json", "triggers.lock"), ()),    # a parked-item hit is noted in the home
+    "ledger show": ("project", (), ()),                 # holds the project lock only
+    "ledger list": ("project", (), ()),
+    "ledger top": ("project", (), ()),
+    "ledger add": ("project", (), ()),                  # R-355: bookkeeping in <project>/.budgit
+    "ledger link": ("project", (), ()),
+    "ledger set": ("project", (), ()),
+    "ledger phase": ("project", (), ()),
+    "ledger done": ("project", (), ()),
+    "ledger ack": ("project", (), ()),
+    "ledger verify": ("project", (), ()),
+    "ledger drop": ("project", (), ()),
+    "ledger accept-edit": ("project", (), ()),
+    "ledger repair-done-at": ("project", (), ()),
+    "ledger start": ("home", (), ()),                   # may write the session pointer in the home; the guard's bookkeeping path covers its plain use
+    "ledger handover": ("home", (), ()),
+    "ledger block": ("home", (), ()),
+    "ledger unblock": ("home", (), ()),
+    "ledger apply-defaults": ("home", (), ()),
+    "ledger appetite": ("project", (), ()),             # R-901 round 4: each non-home entry has a recorded run in the test
+    "ledger fold": ("project", (), ()),
+    "ledger unfold": ("project", (), ()),
+    "ledger flag": ("project", (), ()),
+    "ledger rank": ("project", (), ()),
+    "budget": ("home", (), ()),                         # bare = show, but the recorded run wrote budget.json / budget.lock in the home
+    "budget set": ("home", (), ()), "budget auto": ("home", (), ()), "budget record": ("home", (), ()),
+    "status": ("project", (), ()),
+    # not proven read-only (a bare string is ("home", (), ())): fail closed
+    "activate": "home", "migrate": "home", "import-md": "home", "prepare": "home", "idea": "home", "new": "home",
+    "image": "home", "inbox-backfill": "home", "comply": "home", "retro-mine": "home", "lint": "home",
+    "humanize-lint": "home", "skills": "home", "security": "home", "hypotheses": "home", "audit-mcp": "home",
+    "varies": "home", "vendor": "home", "merge-close": "home", "scout": "home", "setup": "home", "ext-review": "home",
+    "job": "home", "jobs": "home", "layout": "home", "hub": "home", "watermark": "home", "main-check": "home",
+    "suite": "home", "test": "home", "admit": "home", "tm": "home", "rules": "home", "housekeeping": "home",
+    "main-gate": "home", "relocate": "home", "lang": "home", "trace": "home", "brote": "home", "checkpoint": "home",
+    "float": "home", "update": "home", "release-check": "home", "chat-link": "home", "migrate-install": "home",
+    "reorganize": "home", "colour": "home", "trust": "home", "renew": "home", "upgrade": "home", "sweep": "home",
+    "daily": "home", "capacity": "home", "triggers": "home", "triggers shown": "home",
+    "triggers answered": "home", "portfolio": "home", "portfolio add": "home", "portfolio pm": "home",
+    "portfolio off": "home", "portfolio on": "home", "portfolio protect": "home", "portfolio tm": "home",
+    "portfolio inbox": "home", "portfolio route": "home", "portfolio priority": "home", "relay handoff": "home",
+    "relay echo": "home", "relay done": "home", "relay fail": "home", "relay reset": "home", "relay status": "home",
+    "codex review": "home", "codex clean-copy-offer": "home", "codex draft": "home", "design-check tokens": "home",
+    "design-check diff": "home", "design-check docs": "home", "design-check shots": "home", "design-check motion": "home",
+    "design-check approve": "home", "design-check detect": "home", "brain lint": "home", "brain current": "home",
+    "brain impact": "home", "brain backlinks": "home", "brain index": "home", "handoff write": "home",
+    "handoff check": "home",
+}
+
+
 def build_parser():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--project", default=argparse.SUPPRESS,
@@ -2521,7 +2615,7 @@ def build_parser():
     o = bops.add_parser("set", parents=[common], help="your word overrides the automatic level"); o.add_argument("level")
     bops.add_parser("auto", parents=[common], help="release the override; follow the limits again")
     o = bops.add_parser("record", parents=[common], help="store a snapshot of the plan limits (from /usage or get_usage)")
-    o.add_argument("--extra-spent", type=float, help="USD spent on extra usage this month")
+    o.add_argument("--extra-spent", type=float, help="USD actually spent on extra usage this month (0 when none; never the limit)")
     o.add_argument("--extra-limit", type=float, help="monthly extra-usage limit in USD")
     o.add_argument("--extra-enabled", choices=("yes", "no"), help="whether extra usage is switched on for the account (omit when unknown)")
     for flag in ("seven-day", "five-hour"):
@@ -2713,7 +2807,7 @@ def build_parser():
     s.add_argument("--at", help="with --answer standup=yes (or cleanup): the time of day, HH:MM")
     s.add_argument("--every", help="with --answer keepalive=yes: the period, e.g. 2h, 90m (at least 10m)")
     s.set_defaults(func=cmd_setup)
-    s = sub.add_parser("busy", parents=[common], help="is the machine busy? median CPU over a minute above 85 %% or memory under 1 GB: exit 10, else 0")
+    s = sub.add_parser("busy", parents=[common], help="is the machine busy? CPU over 85 %% of cores (kernel counters), memory pressure, sustained swap-ins, a full compressor or too little free memory: exit 10, else 0")
     s.add_argument("--window", type=int, default=60, help="seconds of CPU sampling (default 60)")
     s.set_defaults(func=cmd_busy)
     s = sub.add_parser("ext-review", parents=[common],
@@ -2834,6 +2928,11 @@ def build_parser():
     s.add_argument("--since", metavar="REF", help="also check the commits since this git ref for ones that name no item (advice only)")
     s.add_argument("--version", help="the release being cut (default: plugin.json); items in this phase that carry the user's words must be built or deferred")
     s.set_defaults(func=cmd_release_check)
+    s = sub.add_parser("asks", parents=[common], help="R-891: every ask of the user in every phase with its state (lost, not started, in progress, built, verified, shipped); read-only")
+    s.add_argument("--state", help="only the rows in this state")
+    s.add_argument("--json", action="store_true", help="the same rows as JSON")
+    s.add_argument("--gate", action="store_true", help="exit 1 when an open bug item with the user's words has had no branch or worktree for 24 h (R-919, for the stand-up)")
+    s.set_defaults(func=cmd_asks)
     s = sub.add_parser("chat-link", parents=[common], help="print the desktop-app link of the chat whose session id starts with PREFIX (read-only)")
     s.add_argument("prefix", help="the first characters of the session id (at least 8)")
     s.set_defaults(func=cmd_chat_link)
@@ -2938,7 +3037,7 @@ def build_parser():
     s = sub.add_parser("status", parents=[common])
     s.add_argument("--colour", choices=("on", "off", "auto"), help="with --line: colour on or off; auto follows `budgit colour` (coloured by default)")
     s.add_argument("--ansi", action="store_true", help="with --line: colour each segment (24-bit ANSI); plain without it")
-    s.add_argument("--extras", action="store_true", help="with --line: also the stalled count and the 5 h window (off by default, R-209)")
+    s.add_argument("--extras", action="store_true", help="with --line: also the stalled count (the 5-hour gauge is always on when the host sends the window) (off by default, R-209)")
     s.add_argument("--line", action="store_true", help="one short line for the Claude Code mod (empty outside a project)")
     s.add_argument("--brote", action="store_true", help="JSON for the Brote module and its notebook (empty outside a project)")
     s.add_argument("--waiting", action="store_true", help="what waits on the user, oldest first: questions and chats waiting on the user's prompts")
@@ -2982,7 +3081,7 @@ def build_parser():
     o.add_argument("phase"); o.add_argument("ids", nargs="+")
     o.add_argument("--reason", help="with `later`: why the item is parked; a parked item with a reason is not drift (R-362)")
     o = ops.add_parser("done", parents=[common]); o.add_argument("id"); o.add_argument("--evidence")
-    o = ops.add_parser("verify", parents=[common]); o.add_argument("id")
+    o = ops.add_parser("verify", parents=[common]); o.add_argument("id"); o.add_argument("--evidence")
     o = ops.add_parser("drop", parents=[common]); o.add_argument("id"); o.add_argument("--by-user", required=True)
     o = ops.add_parser("list", parents=[common]); o.add_argument("--open", action="store_true")
     o.add_argument("--status", choices=sl.STATUSES); o.add_argument("--json", action="store_true")

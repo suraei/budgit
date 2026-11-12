@@ -500,6 +500,7 @@ function registerLine(on) {
 const PANE = 'brote-notebook'
 const KEY = 'data:'            // + cwd: the last `status --brote` answer of that project
 const MIN_ROWS = 15            // the Client's height (14 rows of pet + his line); below that the band draws the one-line text form
+const BIG_PET_IN_TERMINAL = false  // R-976: text line until the compact family ships (I-1525)
 let broteTimer = null
 let failed = ''                // a Client fault: draw the text form until the plugin reloads
 
@@ -606,7 +607,7 @@ async function bandBody($, e, next) {
   if (!d) return next(e)
   const { Box, Text, Button, Client } = $.ui.resolve(e)
   const line = say(d)
-  if (!Client || failed || (e.props.maxRows || 0) < MIN_ROWS) {
+  if ((e.surface === 'terminal' && !BIG_PET_IN_TERMINAL) || !Client || failed || (e.props.maxRows || 0) < MIN_ROWS) {
     return (
       <Box>
         <Text dimColor>{line} </Text>

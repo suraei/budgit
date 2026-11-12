@@ -17,13 +17,15 @@ import sys
 import tempfile
 import time
 
+import codexlimit
 import procclose
 
 DEFAULT_TIMEOUT_S = 600         # a review that has not answered in 10 minutes is not coming
 HARD_CAP_S = 1800                # --timeout may lower the default, never raise it past this
 KILL_GRACE_S = 3.0               # between TERM to the group and KILL
 EXIT_OK, EXIT_USAGE, EXIT_NO_TOOL, EXIT_TIMEOUT, EXIT_UNAVAILABLE, EXIT_FAILED = 0, 2, 3, 4, 5, 6
-TOOLS = ("codex", "gemini")      # the order `auto` tries
+EXIT_PROTECTED = 7
+TOOLS = ("codex", "gemini")     # the order `auto` tries
 UNAVAILABLE_RE = re.compile(r"quota|\b429\b|\b50[0-4]\b|rate.?limit|resource.?exhausted|too many requests|overloaded", re.I)
 WINDOWS = os.name == "nt"
 
@@ -92,7 +94,7 @@ def stop_group(proc, grace=KILL_GRACE_S):
         pass
 
 
-def run_tool(tool, path, diff_path, prompt, timeout_s, environ=None, grace=KILL_GRACE_S):
+def run_tool(tool, path, diff_path, prompt, timeout_s, environ=None, grace=KILL_GRACE_S, now=None):
     """Run one tool. -> (status, text, detail) with status ok | timeout | unavailable | failed."""
     with tempfile.TemporaryDirectory(prefix="budgit-extreview-") as tmp:
         out_tmp = os.path.join(tmp, "answer.txt")
@@ -131,6 +133,9 @@ def run_tool(tool, path, diff_path, prompt, timeout_s, environ=None, grace=KILL_
         if not text.strip():
             text = _read(raw_path)
         err = _read(err_path)
+        if tool == "codex" and codexlimit.is_limit(err + "\n" + text) and (rc != 0 or not text.strip()):
+            until = codexlimit.record(err + "\n" + text, now)       # R-853: remember it; nothing asks for Codex before then
+            return "unavailable", "", "no verdict: codex usage limit reached, back %s" % codexlimit.when(until)
         if UNAVAILABLE_RE.search(err + "\n" + text) and (rc != 0 or not text.strip()):
             return "unavailable", "", "no verdict: %s unavailable" % tool
         if rc != 0:
@@ -158,8 +163,14 @@ def write_out(out, text):
     os.replace(tmp, out)
 
 
-def review(tool, diff_path, prompt, out, timeout=None, which=shutil.which, environ=None, grace=KILL_GRACE_S, say=print):
-    """-> exit code. Lines go through `say` (stdout); a stale --out is removed first so no old text passes as a verdict."""
+def review(tool, diff_path, prompt, out, timeout=None, which=shutil.which, environ=None, grace=KILL_GRACE_S, say=print, now=None, cwd=None):
+    """-> exit code. Lines go through `say` (stdout); a stale --out is removed first so no old text passes as a verdict.
+    R-853: `auto` skips Codex until the date it reported its usage limit will end (`now` is the clock, a parameter).
+    The protected-project refusal is the first thing here, so every caller (CLI, main, any other) passes through it."""
+    line = refuse_protected(diff_path, cwd or os.getcwd())
+    if line:
+        say(line)
+        return EXIT_PROTECTED
     timeout_s = effective_timeout(timeout)
     try:
         if os.path.exists(out):
@@ -167,14 +178,21 @@ def review(tool, diff_path, prompt, out, timeout=None, which=shutil.which, envir
     except OSError:
         pass
     wanted = TOOLS if tool == "auto" else (tool,)
+    if tool == "auto":
+        until = codexlimit.blocked_until(now)
+        if until:
+            say("codex skipped: its usage limit ends %s" % codexlimit.when(until))
+            wanted = tuple(t for t in wanted if t != "codex")
     found = [(t, which(t)) for t in wanted]
     found = [(t, p) for t, p in found if p]
     if not found:
         say("no external reviewer available (looked for: %s; install one or use a Claude reviewer)" % ", ".join(wanted))
+        if tool == "auto":
+            say(codexlimit.FALLBACK_LINE)
         return EXIT_NO_TOOL
     last = EXIT_UNAVAILABLE
     for t, p in found:
-        status, text, detail = run_tool(t, p, diff_path, prompt, timeout_s, environ=environ, grace=grace)
+        status, text, detail = run_tool(t, p, diff_path, prompt, timeout_s, environ=environ, grace=grace, now=now)
         if status == "ok":
             write_out(out, text)
             say("%s verdict saved: %s" % (t, out))
@@ -185,10 +203,21 @@ def review(tool, diff_path, prompt, out, timeout=None, which=shutil.which, envir
         if status == "failed":
             return EXIT_FAILED
         last = EXIT_UNAVAILABLE
+    if tool == "auto":
+        say(codexlimit.FALLBACK_LINE)
     return last
 
 
-def main(argv=None):
+def refuse_protected(diff, cwd):
+    """-> a refusal line when the working folder or the diff's folder is protected, else None."""
+    for where in (cwd, os.path.dirname(os.path.abspath(diff))):
+        if codexlimit.protected(where):
+            return ("ext-review refuses inside a protected project (%s): use `budgit codex review --clean-copy` or a "
+                    "fresh-context reviewer" % where)
+    return None
+
+
+def main(argv=None, cwd=None):
     ap = argparse.ArgumentParser(prog="budgit ext-review", description="one timed, tagged wrapper for external-model reviews")
     ap.add_argument("--tool", choices=("auto",) + TOOLS, default="auto")
     ap.add_argument("--diff", required=True)
@@ -199,7 +228,7 @@ def main(argv=None):
     if not os.path.isfile(a.diff):
         print("diff file not found: %s" % a.diff)
         return EXIT_USAGE
-    return review(a.tool, a.diff, a.prompt, a.out, a.timeout)
+    return review(a.tool, a.diff, a.prompt, a.out, a.timeout, cwd=cwd)
 
 
 if __name__ == "__main__":

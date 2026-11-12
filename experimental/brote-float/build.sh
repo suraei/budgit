@@ -12,6 +12,7 @@ out="${BROTE_OUT:-$HOME/Library/Application Support/BroteWindow}"
 case "$out" in /*) ;; *) echo "BROTE_OUT must be an absolute path" >&2; exit 1 ;; esac
 # the only thing removed is "$out/Brote.app" (the next lines); nothing else under $out is touched
 app="$out/Brote.app"
+if [ "${1:-}" != "--print-only" ]; then   # --print-only (R-896): print the run lines below without building or touching $out; tests use it
 rm -rf -- "$app" && mkdir -p -- "$app/Contents/MacOS" "$app/Contents/Resources" build/ModuleCache
 swiftc -O -swift-version 5 -module-cache-path build/ModuleCache brote.swift -o "$app/Contents/MacOS/Brote" \
   -framework AppKit -framework QuartzCore -framework JavaScriptCore
@@ -21,6 +22,7 @@ shasum -a 256 brote.swift | cut -c1-12 > "$app/Contents/Resources/build.txt"   #
 codesign --force --sign - "$app"
 codesign --verify --strict "$app"
 echo "built $app"
+fi
 echo "run (stage 1, data line off): \"$app/Contents/MacOS/Brote\" --no-data"
 if [ -n "$hub" ]; then echo "run (stage 2, data line on):  \"$app/Contents/MacOS/Brote\" --hub \"$hub\""
 else echo "data line: pass --hub <a clone of the Budgit repo> (no plugin/bin/budgit within 3 folders above here)"; fi
