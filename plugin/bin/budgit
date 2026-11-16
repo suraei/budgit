@@ -882,7 +882,7 @@ def cmd_setup(args):
     default = args.default_account or (next(iter(accounts)) if len(accounts) == 1 else None)
     path, created = sl.setup(accounts, default, args.hub, args.projects_root, args.codex, args.force,
                              push_after_commit=args.push_after_commit)
-    print("budgit setup: %s written; hub %s (%s)" % (path, sl.hub_path(), ", ".join(created) or "already complete"))
+    print(_t("r1160.setup_written", path=path, hub=sl.hub_path(), created=", ".join(created) or _t("r1160.setup_complete")))
     if sl.load_config().get("codex") == "on":        # R-546: offer only; Budgit never edits the host's settings
         import i18n
         print(i18n.t("cc.setup_pointer"))
@@ -1486,9 +1486,9 @@ def cmd_status(args):
     data = sl.load_ledger(project)
     bound = sl.project_for_session(SESSION) == project
     counts = _counts(data)
-    print("project: %s" % project)
-    print("this session: %s" % ("bound" if bound else "unbound"))
-    print("items: %d (%d open/doing)" % (len(data["items"]), counts["doing"] + counts["next"] + counts["later"]))
+    print(_t("r1160.status_project", project=project))
+    print(_t("r1160.status_bound" if bound else "r1160.status_unbound"))
+    print(_t("r1160.status_items", total=len(data["items"]), open=counts["doing"] + counts["next"] + counts["later"]))
     if not data["items"]:
         print(_t("ledger.empty"))
     pending = sl.untracked(project, data)
@@ -1502,7 +1502,7 @@ def cmd_status(args):
     for line in sl.verify_status_lines(project, data):      # R-1136: verify state and the outcome claim, one function
         print(line)
     _published_line(project)
-    print("untracked inputs (all sessions): %d" % len(pending))
+    print(_t("r1160.status_untracked", n=len(pending)))
     for e in pending:
         print("  %s [%s] %s" % (e["id"], (e.get("session") or "?")[:8],
                                 e["text"][:100].replace("\n", " ")))
@@ -1882,8 +1882,8 @@ def cmd_idea(args):
 
 def cmd_new(args):
     project, card = sl.new_project(args.slug, rigor=args.rigor, session_id=SESSION)
-    print("budgit: project %s created (git with noreply identity, .budgit/, CLAUDE.md)" % project)
-    print("hub card: %s%s" % (card, "" if SESSION else "  — run `budgit activate %s` in the session" % project))
+    print(_t("r1160.new_created", project=project))
+    print(_t("r1160.new_card", card=card) if SESSION else _t("r1160.new_card_run", card=card, project=project))
     _auto_watermark(project)
     _audit_hint(project)
     import checksdetect
@@ -1912,8 +1912,10 @@ def cmd_budget(args):
                       extra=pair(args.extra_spent, args.extra_limit), authoritative=True,
                       extra_enabled={"yes": True, "no": False}.get(args.extra_enabled))
     cur = budget.current()
-    print("budget: %s (%s) — %s" % (cur["level"], cur["source"], cur["reason"]))
-    print(budget.policy_text(cur["level"]))
+    import i18n
+    reason = _t("r1160.budget_nodata") if cur["reason"] == i18n.CATALOG["en"]["r1160.budget_nodata"] else cur["reason"]
+    print(_t("r1160.budget_line", level=cur["level"], source=cur["source"], reason=reason))
+    print(budget.policy_text(cur["level"], i18n.detect()))
 
 
 def cmd_relay(args):
@@ -2110,8 +2112,7 @@ def cmd_comply(args):
     print(comply.table(rows))
     if registry:
         print(comply.skills_table(rows))
-    print("level used for limits: %s · rules: reference/budget.md · 0 model tokens" % (
-        rows[0]["level"] if rows else args.level or "current"))
+    print(_t("r1160.comply_level", level=rows[0]["level"] if rows else args.level or "current"))
 
 
 def cmd_msgshape(args):

@@ -3130,7 +3130,8 @@ def resolve_project(explicit=None):
             return here
         parent = os.path.dirname(here)
         if parent == here:
-            raise StudioError("no Budgit project here — run: budgit activate <project dir>")
+            import i18n
+            raise StudioError(i18n.t("r1160.no_project"))
         here = parent
 
 
@@ -10172,7 +10173,8 @@ def hub_research_move(hub=None, apply=False, config=None):
 def hub_path(config=None):
     hub = (config or load_config()).get("hub")
     if not hub:
-        raise StudioError(SETUP_HINT)
+        import i18n
+        raise StudioError(i18n.t("r1160.setup_hint"))
     return os.path.realpath(os.path.expanduser(hub))
 
 
@@ -10201,7 +10203,8 @@ def new_project(slug, rigor="standard", session_id=None, config=None):
     if rigor not in ("mini", "standard"):
         raise StudioError("rigor must be mini or standard")
     if not config.get("projects_root"):
-        raise StudioError(SETUP_HINT)
+        import i18n
+        raise StudioError(i18n.t("r1160.setup_hint"))
     root = os.path.realpath(os.path.expanduser(config["projects_root"]))
     project = os.path.join(root, slug)
     if os.path.lexists(project):

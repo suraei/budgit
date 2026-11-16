@@ -231,7 +231,8 @@ def table(rows):
     quiet = [r for r in rows if not r["agents"] and not violations(r)]
     rows = [r for r in rows if r not in quiet]
     if not rows:
-        return "no sessions with agents or violations in range (%d quiet)" % len(quiet)
+        import i18n
+        return i18n.t("r1160.comply_quiet", n=len(quiet))
     out = ["session   dir                              agents  " + "  ".join(LABELS[k] for k in COUNTERS)]
     totals = dict.fromkeys(COUNTERS, 0)
     for r in rows:

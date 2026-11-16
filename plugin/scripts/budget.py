@@ -208,7 +208,23 @@ def models_text(level):
             "one line: put `ESCALATE: <why>` in that call's prompt, otherwise the hook lowers a dearer model= to the role's." % (brain, m["judgement"], m["work"], m["mechanical"], ROLES))
 
 
-def policy_text(level):
+def _policy_text_in(level, lang):
+    """R-1160: the `budgit budget` text from the catalog (the same words as policy_text, in the user's language)."""
+    import i18n
+    p = POLICY[level]
+    m = p["models"]
+    main = i18n.t("r1160.budget_main", lang, brain=p["brain"], note=i18n.t("r1160.budget_note", lang))
+    models = i18n.t("r1160.budget_models", lang, main=main, j=m["judgement"], w=m["work"], m=m["mechanical"],
+                    roles=i18n.t("r1160.budget_roles", lang))
+    policy = i18n.t("r1160.budget_policy", lang, level=level, subagents=p["subagents"], calls=p["agent_calls"],
+                    research=i18n.t("r1160.research." + level, lang), defer=i18n.t("r1160.defer." + level, lang),
+                    other=i18n.t("r1160.other." + level, lang), pct=round(p["checkpoint_at"] * 100))
+    return models + "\n" + policy + "\n" + i18n.t("r1160.budget_invariants", lang)
+
+
+def policy_text(level, lang=None):
+    if lang == "es":
+        return _policy_text_in(level, lang)
     p = POLICY[level]
     return (models_text(level) + "\n" + "budgit budget: %s. Subagents: at most %d in parallel, ~%d tool calls each; research: %s; "
             "heavy work: %s; other LLM: %s; checkpoint at %d%% of the window.\n%s"

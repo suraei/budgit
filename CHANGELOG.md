@@ -19,6 +19,7 @@ This release also carries the 0.13.9.11 changes listed below, which were never p
 - **A damaged ledger.json no longer turns Budgit's protections off.** You get one line naming the file and how to restore it.
 - **If a Budgit guard crashes, or its library cannot load,** only a short list of read-only commands runs without asking: `git status`, `log`, `diff` and `show`, `ls`, `pwd`, and `cat`, `head` and `tail` inside the project. Everything else asks. You see a one-line warning each time.
 - **Status shows whether each item's proof still holds:** PASS, FAIL, none, or superseded.
+- With the language set to Spanish, the first-run commands (setup, new, status, budget, comply) now print in Spanish.
 
 ### Changed
 
