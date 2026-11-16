@@ -211,7 +211,7 @@ def stop_reason(state, session, problems):
     hints = []
     if any(" untracked" in p for p in new):
         hints.append("Triage each untracked input in one line, then finish your reply: do it now (a small fix in files already open), "
-                     "fold it into an existing item (`budgit ledger link R-n --src I-n`), file it (`budgit ledger add --src I-n`, with a "
+                     "fold it into an existing item (`budgit ledger link R-n --src I-n`), file it (`budgit ledger add --src I-n --appetite small|medium|large`, with a "
                      "version and a score) or drop it (`budgit ledger ack I-n --note \"covered by R-n\"`).")
     if any(" untracked" not in p for p in new):
         hints.append("Fix the others with the `budgit ledger` CLI.")
@@ -274,7 +274,7 @@ _TECH_NEXT = re.compile(r"(?:\s+(?:server|servers|client|queue|parser|library|mo
 # the sentence before the request is about fixing or building code ("fix the bug where the reply message is empty")
 _CODE_BEFORE = re.compile(r"(?<!\w)(?:fix|fixes|debug|refactor|implement|patch|arregla|corrige|depura|repara|implementa)(?!\w)|%s" % _CODE_WORDS.pattern, re.I)
 HUMANIZE_ROUTE = ("budgit: this prompt asks for text meant for a person. Draft it, then humanize it before you show it: use the "
-                  "stop-slop skill (Skill tool, skill `stop-slop`), keep the user's language, and show only the final text. A check "
+                  "stop-slop skill if it is installed (Skill tool, skill `stop-slop`; if it is not, tighten the wording yourself), keep the user's language, and show only the final text. A check "
                   "at the end of this turn lints the draft once.")
 FLAG_MAX_AGE_S = 6 * 3600
 MIN_WORDS = 25
@@ -285,9 +285,13 @@ MAX_LISTED = 8
 _CLAUSE_END = re.compile(r"[.;:!?,\n]|(?<!\w)(?:and|then|also|after that|y|e|et|und|puis|luego|despues|depois|poi|dann|ahora|now)(?!\w)", re.I)
 
 
+# R-987: a prompt that STARTS with one of these wrappers is an agent's or a peer's message, not the user's words
+_NOT_USER = re.compile(r"\s*<(?:agent-message|cross-session-message|task-notification)(?=[\s>/])", re.I)
+
+
 def wants_person_text(prompt):
     """True when the prompt asks for an email, message, post or reply (any of en/es/fr/pt/de/it). A regex: no model, no file."""
-    if not isinstance(prompt, str) or len(prompt) > 8000:
+    if not isinstance(prompt, str) or len(prompt) > 8000 or _NOT_USER.match(prompt):
         return False
     text = _plain(prompt)
     m = _INTENT.search(text)
@@ -304,7 +308,7 @@ _CLIENT = re.compile(r"(?<!\w)(?:clients?(?![\s-]+(?:librar|side|app\b|sdk|code|
 _LIFE = re.compile(r"(?<!\w)(?:eol|end[- ]of[- ]life|end[- ]of[- ]support|fin de vida|support(?:ed|s)?|soporte|soportad[oa]s?|lifecycle|"
                    r"life cycle|ciclo de vida|cves?|vulnerab\w*|rhsa|advisor(?:y|ies)|patch\w*|parche\w*|compatib\w*|compatible)(?!\w)", re.I)
 _VERSION = re.compile(r"(?<!\w)(?:versions?|versiones|versao|versoes|ubi|rhel|jdk|jre|python|java|node(?:\.?js)?|\w+\s?v?\d+(?:\.\d+)+|\w{2,}\s\d{1,2})(?!\w)", re.I)
-CLIENT_ROUTE = ("budgit: this text goes to a client or another third party, so it passes a gate before delivery: stop-slop, every date "
+CLIENT_ROUTE = ("budgit: this text goes to a client or another third party, so it passes a gate before delivery: stop-slop (if installed), every date "
                 "and figure checked at its primary source in this session, and a fresh-context verifier. The check at the end of the "
                 "turn tells you exactly what it needs; do not skip the verifier and do not deliver from memory.")
 LENS_ROUTE = ("budgit versions/EOL lens: an assessment of versions or support covers dates AND vulnerabilities (latest quarterly patch, "
@@ -532,7 +536,7 @@ def humanize_stop(inp, info=None):
         pass
     more = "" if len(rows) <= MAX_LISTED else "\n(+%d more)" % (len(rows) - MAX_LISTED)
     return ("budgit humanize check: the text you drafted for a person has %d writing finding(s):\n%s%s\n"
-            "Revise the draft with the stop-slop skill and show only the final text. This check runs once; do not mention it."
+            "Revise the draft with the stop-slop skill if it is installed (otherwise fix these findings yourself) and show only the final text. This check runs once; do not mention it."
             % (len(rows), "\n".join(rows[:MAX_LISTED]), more))
 
 
@@ -552,7 +556,7 @@ _ADVISORY = re.compile(r"RH[SBE]A-\d{4}:\d+|GHSA(?:-[a-z0-9]{4}){3}|USN-\d+-\d+|
 _FLAGGED = re.compile(r"^[ \t>*_#-]*(?:flagged|partial|unconfirmed)[ \t*_]*:[ \t]*(\S.*)$", re.I | re.M)
 GATE_INSTRUCTIONS = (
     "budgit client-text gate: this answer is text for a client or another third party. Before it goes out:\n"
-    "1. stop-slop has run on it (the humanize check).\n"
+    "1. stop-slop has run on it if it is installed (the humanize check); if it is not, the draft was tightened by hand.\n"
     "2. Every date, version and figure is checked at its primary source in this session (the vendor's lifecycle page or advisory), never "
     "from memory. A lifecycle table is cited by exact section and row, with a warning when the same version has another date in another "
     "variant (RHEL 8/9/10, Red Hat vs Oracle JDK, portable vs package). Each cited date is visible at the link and the text says where "
@@ -757,7 +761,20 @@ def stop_checks(inp, project=None):
     guard = _output_guard(inp, info)
     if guard:
         reason = (reason + "\n\n" + guard) if reason else guard
-    return reason, (None if reason else note)
+    ready, ready_note = _ready_guard(inp, project)
+    if ready:
+        reason = (reason + "\n\n" + ready) if reason else ready
+    return reason, (None if reason else ("\n".join(n for n in (note, ready_note) if n) or None))
+
+
+def _ready_guard(inp, project):
+    """A ready or completeness claim in a marked project needs an independent check from today. -> (block reason, note). Fails open."""
+    try:
+        import outguard
+        return outguard.ready_claim(project, inp.get("last_assistant_message"), inp.get("session_id"),
+                                    active=bool(inp.get("stop_hook_active")), turn=lambda: outguard.turn_key(inp))
+    except Exception:
+        return None, None
 
 
 def _output_guard(inp, info):

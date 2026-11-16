@@ -40,6 +40,41 @@ def _dir(project):
     return os.path.join(sl.studio_dir(project), "private", "handoff")
 
 
+RESUME_WINDOW_S = 6 * 3600
+
+
+def resume_line(project, now=None):
+    """R-930 (R-834): after a clear the chat is empty and would sit idle. The newest handoff written in the last
+    RESUME_WINDOW_S and not yet resumed gives the prompt to start the turn by itself; it is marked resumed so one handoff
+    resumes once. -> text, or None when no handoff is pending."""
+    folder = _dir(project)
+    try:
+        names = sorted(n for n in os.listdir(folder) if n.endswith(".facts.json"))
+    except OSError:
+        return None
+    now = now if now is not None else __import__("time").time()
+    best = None
+    for n in names:
+        stem = n[:-len(".facts.json")]
+        if os.path.exists(os.path.join(folder, stem + ".resumed")) or not os.path.isfile(os.path.join(folder, stem + ".md")):
+            continue
+        try:
+            at = sl._epoch(json.loads(sl.read_text(os.path.join(folder, n))).get("written_at"))
+        except (OSError, ValueError, AttributeError):
+            continue
+        if at is not None and 0 <= now - at <= RESUME_WINDOW_S and (best is None or at > best[0]):
+            best = (at, stem)
+    if not best:
+        return None
+    path = os.path.join(folder, best[1] + ".md")
+    try:
+        sl.atomic_write(os.path.join(folder, best[1] + ".resumed"), sl.now() + "\n")
+    except (OSError, sl.StudioError):
+        pass
+    return ("budgit: this session was just cleared to renew it. Start now, without waiting for the user: read the handoff "
+            "file %s and resume its Next steps." % path)
+
+
 def _git(project, *args):
     try:
         out = subprocess.run(["git", "--no-optional-locks", "-C", project, *args], capture_output=True, text=True,

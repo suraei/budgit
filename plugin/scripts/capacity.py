@@ -157,7 +157,9 @@ def budget_inputs(now=None):
     import budget
     now = now or time.time()
     cur = budget.current(now)
-    limits = budget.load().get("limits") or {}
+    # R-1104: with `five_hour_window` off, plan_limits drops five_hour, so h5 is None and the start gate never refuses on it
+    # (the host enforces any real limit anyway).
+    limits = budget.plan_limits(budget.load().get("limits") or {})
     week = limits.get("seven_day")
     pace = None
     if isinstance(week, dict) and week.get("used") is not None and (week.get("resets_at") or 0) > now:
@@ -175,18 +177,62 @@ def _aged(item, now):
     return days is not None and since is not None and now - since > AGE_FACTOR * days * 86400
 
 
+def _live(item, now):
+    """True when the item's claim is held by a session that is live now (a fresh claim record). Only that is work in flight."""
+    return sl.claim_state(item, now) == "live"
+
+
+def parallel_ready(projects):
+    """{slug: [ready item ids]}: per project, ready items that fit the free slots and do not compete: no file in common
+    with one already picked, and at most one that takes the suite lock. Paused and protected projects list nothing."""
+    out = {}
+    for slug, row in projects.items():
+        if row.get("paused") or row.get("private"):
+            continue
+        taken, suite, picked = set(), False, []
+        for item in row.get("ready_items") or ():
+            if len(picked) >= (row.get("free") or 0):
+                break
+            if item.get("files") is None:                  # no declared files: overlap unknown, never listed as fitting
+                continue
+            files = set(item["files"])
+            if files & taken or (item.get("suite") and suite):
+                continue
+            taken |= files
+            suite = suite or bool(item.get("suite"))
+            picked.append(item["id"])
+        if picked:
+            out[slug] = picked
+    return out
+
+
+def overlap_unknown(projects):
+    """{slug: [ready item ids]} for ready items with no `files` field: whether they compete is unknown, so they are
+    reported apart and never counted as fitting. Only projects with a free slot; paused and protected ones list nothing."""
+    out = {}
+    for slug, row in projects.items():
+        if row.get("paused") or row.get("private") or not row.get("free"):
+            continue
+        ids = [i["id"] for i in row.get("ready_items") or () if i.get("files") is None]
+        if ids:
+            out[slug] = ids
+    return out
+
+
 def _project_row(slug, entry, items, now, private):
     live = [i for i in items if i["status"] in ("open", "doing")]
     parked = lambda i: i["status"] == "open" and i.get("phase") == "later"
     committed = [i for i in live if not parked(i)]
     ready = [i for i in committed if i["status"] == "open" and not i.get("blocked")]
-    doing = [i for i in live if i["status"] == "doing"]
-    stuck = sum(1 for i in live if i.get("blocked")) + sum(1 for i in doing if not i.get("blocked") and _aged(i, now))
+    doing = [i for i in live if i["status"] == "doing" and _live(i, now)]       # a doing item nobody holds is not in flight
+    stuck = sum(1 for i in doing if i.get("blocked") or _aged(i, now))          # stuck is a doing item only, never a blocked open one
     starts = [sl._epoch(i.get("started_at")) for i in items]
     starts = [s for s in starts if s is not None]
+    ready_items = [{"id": i["id"], "files": [str(f) for f in i["files"]] if isinstance(i.get("files"), list) else None,
+                    "suite": bool(i.get("suite"))} for i in ready]
     return {"slug": slug, "path": entry["path"], "priority": entry.get("priority"), "paused": entry.get("channel") == "off",
             "committed": len(committed), "ready": len(ready), "in_flight": len(doing), "stuck": stuck,
-            "waited_s": (now - max(starts)) if starts else None, "private": private}
+            "waited_s": (now - max(starts)) if starts else None, "private": private, "ready_items": ready_items}
 
 
 def portfolio_snapshot(now=None, current=None):
@@ -229,7 +275,7 @@ def compute(now=None, current=None, inputs=None, write=True):
     inputs = inputs or budget_inputs(now)
     rows, skipped = portfolio_snapshot(now, current)
     state = load_state()
-    in_use = sum(r["in_flight"] for r in rows)
+    in_use = sum(r["in_flight"] for r in rows if not r["paused"])         # a paused project holds no slot and counts for nothing
     T, reason = total(state.get("T"), inputs["level"], inputs.get("pace"), in_use, inputs.get("projected"),
                       state.get("last_raise"), _today(now))
     shares = split(T, rows)
@@ -237,7 +283,8 @@ def compute(now=None, current=None, inputs=None, write=True):
     for r in rows:
         s = shares[r["slug"]]
         n, why = free(s["slots"], r["in_flight"], r["stuck"])
-        projects[r["slug"]] = {"slots": s["slots"], "used": r["in_flight"], "free": n, "stuck": r["stuck"], "floor": s["floor"],
+        projects[r["slug"]] = {"ready_items": r.get("ready_items") or [],
+                               "slots": s["slots"], "used": r["in_flight"], "free": n, "stuck": r["stuck"], "floor": s["floor"],
                                "cap": s["cap"], "weight": s["weight"], "layer": s["reason"], "free_reason": why,
                                "paused": r["paused"], "private": r["private"], "path": r["path"]}
     out = {"T": T, "reason": reason, "level": inputs["level"], "nodata": inputs["nodata"], "h5": inputs.get("h5"),

@@ -53,7 +53,9 @@ def ranked(data, at=None):
         parts = _parts(it, cited_by, at)
         rows.append({"id": it["id"], "status": it["status"], "title": it.get("title") or sl.oneline(it["text"], 60),
                      "score": sum(parts.values()), "parts": parts, "rank": it.get("rank"), "_n": n})
-    out = sorted((r for r in rows if not r["rank"]), key=lambda r: (-r["score"], r["_n"]))
+        rows[-1]["due_kind"], rows[-1]["due_days"] = sl.due_state(it)      # R-925: late S/M first, large without a date flagged
+    out = sorted((r for r in rows if not r["rank"]),
+                 key=lambda r: (0 if r["due_kind"] == "late" else 1, -r["due_days"], -r["score"], r["_n"]))
     for r in sorted((r for r in rows if r["rank"]), key=lambda r: (r["rank"]["pos"], r["_n"])):
         out.insert(min(r["rank"]["pos"] - 1, len(out)), r)
     for r in out:
@@ -106,8 +108,14 @@ def flag(data, item_id, name, on=True):
 
 
 def _why(row):
+    import i18n
     p = row["parts"]
-    words = [k for k in ("waiting", "bug") if p[k]]
+    words = []
+    if row.get("due_kind") == "late":
+        words.append(i18n.t("rank.late", days=row["due_days"]))
+    elif row.get("due_kind") == "plan":
+        words.append(i18n.t("rank.needs_plan"))
+    words += [k for k in ("waiting", "bug") if p[k]]
     if p["unblocks"]:
         words.append("unblocks %d" % (p["unblocks"] // WEIGHTS["unblocks"] if WEIGHTS["unblocks"] else 0))
     if p["age"]:

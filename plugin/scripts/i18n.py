@@ -173,6 +173,10 @@ CATALOG = {
                            "message for the user: only the result or the answer, no narration of tool steps, no talk about reminders, rules, "
                            "CLAUDE.md, other sessions or internal roles, no internal ids or paths, and written in the user's language. "
                            "This check runs once; do not mention it.",
+        "ready.reason": "budgit check: to say the work is ready, complete or correct you need an independent verification from today with N of M "
+                        "(N equal to M, M counted from the full source list, no open finding). Ask the verifier, or say what is missing. "
+                        "This check runs once; do not mention it.",
+        "ready.note": "budgit: the last message called the work ready without an independent verification from today; do not treat it as ready.",
         "outguard.kind.token": "internal id or path",
         "outguard.kind.narration": "tool narration",
         "outguard.kind.rules": "talk about reminders or rules",
@@ -303,7 +307,13 @@ CATALOG = {
         "brote.update_menu": "Update Budgit to {v}\u2026",
         "book.button": "Notebook",
         "cmd.status_unavailable": "budgit: status unavailable",
-        "ledger.empty": "Nothing in the ledger yet. Add the first item: budgit ledger add --phase mvp --text \"what you want built\"",
+        "rank.late": "{days} days late",
+        "rank.needs_plan": "needs a dated plan",
+        "ledger.outcome_missing": "{id}: done needs an outcome line (what the user will see when it works). Add it with: budgit ledger outcome {id} \"<one line>\"",
+        "ledger.outcome_draft": "{id}: no --outcome given. Draft from the linked words: \"{draft}\" (set it with: budgit ledger outcome {id} \"<one line>\")",
+        "ledger.outcome_none": "{id}: no --outcome given (set it with: budgit ledger outcome {id} \"<one line>\"); done needs it",
+        "ledger.guess": "no --appetite given: guessed {size} (change it with: budgit ledger appetite R-n small|medium|large)",
+        "ledger.empty": "Nothing in the ledger yet. Add the first item: budgit ledger add --phase mvp --appetite small --text \"what you want built\"",
         "triage.none": "No matches: this looks like new work.",
         "triage.parked": "parked",
         "triage.owner": "tell session {owner} ({claim}): {id} changed - {what}",
@@ -477,6 +487,7 @@ CATALOG = {
         "daily.more": "... and {n} more (`--json` has them all)",
         "daily.clean": "  housekeeping would remove {remove} worktree(s) and delete {delete} branch(es) (nothing is changed here)",
         "daily.clean_unchecked": "  housekeeping preview: not checked (busy machine, no git or too slow)",
+        "daily.suite_slow": "  gate suite took {secs} s (limit {limit} s); slowest: {slowest}",
         "daily.error": "{project}: could not be read (code {code})",
         "daily.session": "budgit daily: {b} batches, {d} probable duplicates - tell the user and offer to run `budgit daily`",
         "daily.session_clean": "budgit daily: {b} batches, {d} probable duplicates, {c} to clean - tell the user and offer to run `budgit daily`",
@@ -544,6 +555,17 @@ CATALOG = {
         "cmd.migrate_failed": "budgit: this step failed: {step}. Your old plugin is still enabled unless the disable step ran. To go back: {undo}",
         "cmd.migrate_done": "Done. Reopen your chats so they load the new plugin.",
         "cmd.desc_colour": "Show or set the colour of the line under the prompt (on, off, auto)",
+        "norm.refuse": "Never rm. Move it to the Trash instead (mv <path> {trash}, or the trash command) or archive it.",
+        "norm.refuse_other": "Never rm. Move it to your Trash (the trash command) or archive it instead.",
+        "cmd.five_hour_auto": "shown when the host sends it (auto)",
+        "cmd.five_hour_off": "never shown, never gates (off)",
+        "cmd.five_hour_show": "5-hour usage window: {state}. Change it with: budgit five-hour auto|off",
+        "cmd.rm_guard_on": "refused (on)",
+        "cmd.rm_guard_off": "allowed (off)",
+        "cmd.rm_guard_show": "rm, unlink, rmdir and find -delete: {state}. Change it with: budgit rm-guard on|off",
+        "cmd.attribution_on": "refused (on)",
+        "cmd.attribution_off": "allowed (off)",
+        "cmd.attribution_show": "Claude attribution lines in commits and PRs: {state}. Change it with: budgit attribution on|off",
         "cmd.colour_on": "on",
         "cmd.colour_off": "off",
         "cmd.colour_show": "Line colour: {state}. Change it with: budgit colour on|off|auto",
@@ -597,7 +619,7 @@ CATALOG = {
         "rc.v_no_lsof": "skip: cannot tell what is open (lsof unavailable)",
         "rc.v_busy": "skip: {n} process(es) have it open",
         "rc.v_sessions": "skip: {n} live session(s) are bound to it",
-        "rc.v_dirty": "skip: {n} uncommitted change(s)",
+        "rc.dirty_info": "{n} uncommitted entries, kept by the rename (nothing is committed, stashed or reset)",
         "rc.v_volume": "skip: another volume (a move would be a copy)",
         "rc.v_duplicate": "skip: another project has the same folder name and goes to the same target",
         "rc.v_git_file": "skip: its .git is a file (a linked worktree or submodule), not a repository of its own",
@@ -637,6 +659,10 @@ CATALOG = {
         "trust.revoked": "Trust removed for {project}: Budgit asks again as before.",
         "trust.revoked_none": "There was no trust to remove for {project}.",
         "guard.home_write": "budgit guard: Budgit's own folder ({home}) holds your settings and your yes answers; tools and commands may not write there. Budgit stops accidental and plain attempts; a program running as you can always edit your files.",
+        "guard.transcript_write": "budgit guard: {path} is a session transcript, the record Budgit checks your messages against; tools and commands may not write there. Reading it is fine.",
+        "guard.verify_unresolved_ask": "budgit guard: this command writes to a place that cannot be known in advance (it depends on a value computed or read while it runs). It might be the report folder, which only the reviewer writes. Check where it writes before allowing.",
+        "guard.subagent_ask_read": "budgit guard: this read-only call was not allowed here and a subagent cannot get the user's yes. Do not give up: if you only need to read a file, use the Read tool with the absolute path of the same file, with no cd. It is queued for your coordinator: report it in your hand-back.",
+        "guard.add_dir_prompt": "budgit: in this `claude` launch the prompt ({word}) comes right after --add-dir, so the CLI reads it as one more folder and starts with an EMPTY prompt. Put the prompt first, before --add-dir: claude \"<prompt>\" --add-dir <dir>.",
         "guard.home_ask": "budgit guard: this command writes with a word the guard cannot read (a variable or a pattern) next to Budgit's own settings folder. Approve only if you know what it does.",
         "cmd.lang_bad": "unknown language {value} (use en, es or auto)",
         "wm.installed": "commit hook installed: it removes Claude's co-author and \"Generated with\" lines and adds one "
@@ -710,6 +736,10 @@ CATALOG = {
         "jh.failed": "{name} (last exit {code})",
         "jh.missed": "{name} (no run for {age}; expected every {every})",
         "jh.never": "{name} (scheduled, never ran)",
+        "jh.noprompt": "{name} (its instruction file is missing, so it cannot work; update or reinstall Budgit)",
+        "jh.blocked": "{name} (cannot run: macOS blocks access to the folder where Budgit or the project sits)",
+        "jh.blocked_steps": "To fix {name}, in this order: (1) move the Budgit plugin or the project out of Documents, Desktop, Downloads and iCloud Drive; (2) or switch the job off with `budgit job off {name}` and use a Claude app scheduled task instead; (3) last option, and risky: give Full Disk Access to python, which lets every python script on this Mac read all your files.",
+        "jh.warn_folder": "Warning: {where} sits in a folder that macOS may block for scheduled jobs (Documents, Desktop, Downloads or iCloud Drive), so {name} may not run. If it fails, in this order: (1) move it out of that folder; (2) or switch the job off with `budgit job off {name}` and use a Claude app scheduled task instead; (3) last option, and risky: give Full Disk Access to python, which lets every python script on this Mac read all your files.",
         "hk.sched_set": "daily housekeeping set for {at}: {path}",
         "hk.sched_removed": "daily housekeeping removed",
         "hk.sched_off": "daily housekeeping is not set up (budgit housekeeping --schedule on)",
@@ -734,6 +764,12 @@ CATALOG = {
         "ad.r_load_refuse": "CPU {cpu} % busy is above the refusal limit {limit} % ({mem} MB free)",
         "ad.r_load_wait": "CPU {cpu} % busy is above the waiting limit {limit} % ({mem} MB free)",
         "ad.r_memory": "memory is short: {why}",
+        "ad.r_go_blind": "CPU {cpu} % busy, memory unknown (could not be read), {busy} busy session(s)",
+        "capacity.parallel": "Ready work that does not compete for files or the suite lock: {items}",
+        "capacity.overlap_unknown": "Ready work with overlap unknown (no files listed): {items}",
+        "start.unbound_protected": "this session is not bound to a project, and a protected project is never bound on its own: run `budgit activate {dir}` in this session, then start again",
+        "guard.failed": "budgit: the guard {name} failed and only the basic protections are on for this step (see ~/.budgit/hooks.log)",
+        "start.no_protected": "this project has ledgers but no protected folder is set, so no folder is guarded as real data: set one with `budgit portfolio add <folder> --protected`",
         "ad.r_busy": "{busy} sessions are busy, the limit is {limit}",
         "ad.r_floor": "this project holds no lane yet, so its first one always runs (CPU {cpu} %, {mem} MB free)",
         "ad.r_yield": "CPU {cpu} % busy is above the waiting limit {limit} % ({mem} MB free) and this project holds the most lanes ({lanes}), so it yields first",
@@ -754,6 +790,7 @@ CATALOG = {
         "budget.level.critical": "CRITICAL",
         "ctx.renew": "context ~{k}k tokens: time to renew this chat. Write the handoff (`budgit handoff write`), open a new "
                      "chat and have it restate it (`budgit handoff check <lane> --echo <file>`); then the old one can be archived.",
+        "verify.stale_report": "ignored a stale verify report in {folder} (it is for sha {sha}, not the one in --evidence).",
         "ctx.notask": "this session has no task: `budgit ledger start R-n` (add one first with `budgit ledger add` if it has none).",
         "handoff.written": "handoff written to {path}: fill the marked blanks (next steps, traps); the facts it must carry: {facts}",
         "handoff.ok": "the echo says every fact of the handoff: the old chat may be archived.",
@@ -768,6 +805,13 @@ CATALOG = {
         "ctx.nudge": "context ~{k}k tokens: every message re-reads all of it (≈{x}× a 100k session). If the "
                      "topic changed or a phase closed: /compact <what to keep> or start a new session "
                      "(.budgit/progress.md holds the state).",
+        "agentgate.legal": "budgit legal guard: this brief names a tax or legal word ({word}) and has no LEGAL line. Add the "
+                           "line `LEGAL: legal-eu-es-fr panel checker` (use the legal-eu-es-fr skill in panel mode with its "
+                           "checker), or `LEGAL: none - <reason>` when the brief is not about tax or law (the reason is "
+                           "logged), then spawn again.",
+        "legal.prompt_note": "budgit: this prompt touches tax or law. Answer it with the legal-eu-es-fr skill in panel mode with "
+                             "its checker, whoever asks and in any language; if the question needs figures (amounts, rates, a "
+                             "declaration to fill), also use the fiscal-es-fr skill. This is advice only.",
     },
     "es": {
         "hub.research_none": "El hub no tiene una carpeta research/ que mover.",
@@ -921,6 +965,10 @@ CATALOG = {
                            "por UN solo mensaje limpio para el usuario: solo el resultado o la respuesta, sin narrar pasos de herramientas, "
                            "sin hablar de recordatorios, reglas, CLAUDE.md, otras sesiones ni roles internos, sin ids ni rutas internas, y "
                            "escrito en español. Esta comprobación se ejecuta una vez; no la menciones.",
+        "ready.reason": "Para decir que está listo hace falta una verificación independiente de hoy con N de M (N igual a M, M contado de la "
+                        "lista completa de la fuente, sin hallazgos abiertos). Pide al verificador, o di lo que falta. "
+                        "Esta comprobación se hace una vez; no la menciones.",
+        "ready.note": "budgit: el último mensaje dijo que el trabajo estaba listo sin una verificación independiente de hoy; no lo des por listo.",
         "outguard.kind.token": "id o ruta interna",
         "outguard.kind.narration": "narración de pasos de herramientas",
         "outguard.kind.rules": "habla de recordatorios o reglas",
@@ -1052,7 +1100,13 @@ CATALOG = {
         "brote.update_menu": "Actualizar Budgit a {v}\u2026",
         "book.button": "Libreta",
         "cmd.status_unavailable": "budgit: estado no disponible",
-        "ledger.empty": "Todavía no hay nada en el registro. Añade el primer elemento: budgit ledger add --phase mvp --text \"lo que quieres construir\"",
+        "rank.late": "{days} días de retraso",
+        "rank.needs_plan": "necesita un plan con fecha",
+        "ledger.outcome_missing": "{id}: para cerrar hace falta una línea de resultado (lo que verá la persona cuando funcione). Añádela con: budgit ledger outcome {id} \"<una línea>\"",
+        "ledger.outcome_draft": "{id}: sin --outcome. Borrador de sus palabras enlazadas: \"{draft}\" (fíjalo con: budgit ledger outcome {id} \"<una línea>\")",
+        "ledger.outcome_none": "{id}: sin --outcome (fíjalo con: budgit ledger outcome {id} \"<una línea>\"); cerrar lo necesita",
+        "ledger.guess": "sin --appetite: se estimó {size} (cámbialo con: budgit ledger appetite R-n small|medium|large)",
+        "ledger.empty": "Todavía no hay nada en el registro. Añade el primer elemento: budgit ledger add --phase mvp --appetite small --text \"lo que quieres construir\"",
         "triage.none": "Sin coincidencias: parece trabajo nuevo.",
         "triage.parked": "aparcado",
         "triage.owner": "avisa a la sesi\u00f3n {owner} ({claim}): {id} cambia - {what}",
@@ -1231,6 +1285,7 @@ CATALOG = {
         "daily.more": "... y {n} más (`--json` los trae todos)",
         "daily.clean": "  el mantenimiento quitaría {remove} worktree(s) y borraría {delete} rama(s) (aquí no se cambia nada)",
         "daily.clean_unchecked": "  vista previa del mantenimiento: sin comprobar (máquina ocupada, sin git o demasiado lento)",
+        "daily.suite_slow": "  la suite de puerta tardó {secs} s (límite {limit} s); más lentos: {slowest}",
         "daily.error": "{project}: no se pudo leer (código {code})",
         "daily.session": "budgit daily: {b} lotes, {d} duplicados probables - díselo al usuario y ofrécele ejecutar `budgit daily`",
         "daily.session_clean": "budgit daily: {b} lotes, {d} duplicados probables, {c} por limpiar - díselo al usuario y ofrécele ejecutar `budgit daily`",
@@ -1293,6 +1348,17 @@ CATALOG = {
         "cmd.migrate_failed": "budgit: este paso fall\u00f3: {step}. Tu plugin antiguo sigue activado salvo que el paso de desactivar ya se haya ejecutado. Para volver: {undo}",
         "cmd.migrate_done": "Hecho. Vuelve a abrir tus chats para que carguen el plugin nuevo.",
         "cmd.desc_colour": "Muestra o cambia el color de la l\u00ednea bajo el prompt (on, off, auto)",
+        "norm.refuse": "Nunca rm. Mueve el archivo a la papelera (mv <ruta> {trash}, o el comando trash) o archívalo.",
+        "norm.refuse_other": "Nunca rm. Mueve el archivo a la papelera (comando trash) o archívalo.",
+        "cmd.five_hour_auto": "se muestra si el host la envía (auto)",
+        "cmd.five_hour_off": "nunca se muestra ni frena (off)",
+        "cmd.five_hour_show": "Ventana de uso de 5 horas: {state}. Cámbialo con: budgit five-hour auto|off",
+        "cmd.rm_guard_on": "se rechazan (activado)",
+        "cmd.rm_guard_off": "se permiten (desactivado)",
+        "cmd.rm_guard_show": "rm, unlink, rmdir y find -delete: {state}. Cámbialo con: budgit rm-guard on|off",
+        "cmd.attribution_on": "se rechazan (activado)",
+        "cmd.attribution_off": "se permiten (desactivado)",
+        "cmd.attribution_show": "Líneas de atribución a Claude en commits y PR: {state}. Cámbialo con: budgit attribution on|off",
         "cmd.colour_on": "activado",
         "cmd.colour_off": "desactivado",
         "cmd.colour_show": "Color de la l\u00ednea: {state}. C\u00e1mbialo con: budgit colour on|off|auto",
@@ -1346,7 +1412,7 @@ CATALOG = {
         "rc.v_no_lsof": "se salta: no se puede saber qué está abierto (lsof no disponible)",
         "rc.v_busy": "se salta: {n} proceso(s) lo tienen abierto",
         "rc.v_sessions": "se salta: {n} sesión(es) viva(s) ligadas a él",
-        "rc.v_dirty": "se salta: {n} cambio(s) sin guardar",
+        "rc.dirty_info": "{n} entradas sin guardar, se conservan con el renombrado (no se hace commit, stash ni reset)",
         "rc.v_volume": "se salta: otro volumen (mover sería copiar)",
         "rc.v_duplicate": "se salta: otro proyecto tiene el mismo nombre de carpeta y va al mismo destino",
         "rc.v_git_file": "se salta: su .git es un fichero (worktree enlazado o submódulo), no un repositorio propio",
@@ -1386,6 +1452,10 @@ CATALOG = {
         "trust.revoked": "Confianza quitada en {project}: Budgit vuelve a preguntar como antes.",
         "trust.revoked_none": "No había confianza que quitar en {project}.",
         "guard.home_write": "budgit guard: la carpeta propia de Budgit ({home}) guarda tus ajustes y tus síes; las herramientas y los comandos no pueden escribir ahí. Budgit frena los intentos accidentales y sencillos; un programa que corra como tú siempre puede editar tus archivos.",
+        "guard.transcript_write": "budgit guard: {path} es una transcripción de sesión, el registro con el que Budgit comprueba tus mensajes; las herramientas y los comandos no pueden escribir ahí. Leerla sí se puede.",
+        "guard.verify_unresolved_ask": "budgit guard: este comando escribe en un lugar que no se puede saber de antemano (depende de un valor que se calcula o se lee mientras corre). Podría ser la carpeta de informes, que solo escribe el revisor. Comprueba dónde escribe antes de permitirlo.",
+        "guard.subagent_ask_read": "budgit guard: esta llamada de solo lectura no se permitió aquí y un subagente no puede recibir el sí del usuario. No te rindas: si solo necesitas leer un archivo, usa la herramienta Read con la ruta absoluta del mismo archivo, sin cd. Queda en cola para tu coordinador: cuéntalo en tu informe final.",
+        "guard.add_dir_prompt": "budgit: en este lanzamiento de `claude` el prompt ({word}) va justo después de --add-dir, así que la CLI lo lee como una carpeta más y arranca con el prompt VACIO. Pon el prompt primero, antes de --add-dir: claude \"<prompt>\" --add-dir <carpeta>.",
         "guard.home_ask": "budgit guard: este comando escribe con una palabra que el guardián no sabe leer (una variable o un patrón) junto a la carpeta de ajustes de Budgit. Aprueba solo si sabes lo que hace.",
         "cmd.lang_bad": "idioma desconocido {value} (usa en, es o auto)",
         "wm.installed": "hook de commit instalado: quita las líneas de coautor y \"Generated with\" de Claude y añade una "
@@ -1459,6 +1529,10 @@ CATALOG = {
         "jh.failed": "{name} (última salida {code})",
         "jh.missed": "{name} (sin ejecutarse desde hace {age}; se esperaba cada {every})",
         "jh.never": "{name} (programada, nunca se ejecutó)",
+        "jh.noprompt": "{name} (falta su archivo de instrucciones, así que no puede funcionar; actualiza o reinstala Budgit)",
+        "jh.blocked": "{name} (no puede ejecutarse: macOS bloquea el acceso a la carpeta donde están Budgit o el proyecto)",
+        "jh.blocked_steps": "Para arreglar {name}, en este orden: (1) saca el plugin de Budgit o el proyecto de Documentos, Escritorio, Descargas y iCloud Drive; (2) o desactiva la tarea con `budgit job off {name}` y usa una tarea programada de la app de Claude; (3) última opción, y con riesgo: dar Acceso total al disco a python, lo que deja a cualquier script de python de este Mac leer todos tus archivos.",
+        "jh.warn_folder": "Aviso: {where} está en una carpeta que macOS puede bloquear para las tareas programadas (Documentos, Escritorio, Descargas o iCloud Drive), así que {name} puede no ejecutarse. Si falla, en este orden: (1) sácalo de esa carpeta; (2) o desactiva la tarea con `budgit job off {name}` y usa una tarea programada de la app de Claude; (3) última opción, y con riesgo: dar Acceso total al disco a python, lo que deja a cualquier script de python de este Mac leer todos tus archivos.",
         "hk.sched_set": "limpieza diaria programada a las {at}: {path}",
         "hk.sched_removed": "limpieza diaria quitada",
         "hk.sched_off": "la limpieza diaria no está programada (budgit housekeeping --schedule on)",
@@ -1483,6 +1557,12 @@ CATALOG = {
         "ad.r_load_refuse": "la CPU al {cpu} % supera el límite de rechazo {limit} % ({mem} MB libres)",
         "ad.r_load_wait": "la CPU al {cpu} % supera el límite de espera {limit} % ({mem} MB libres)",
         "ad.r_memory": "falta memoria: {why}",
+        "ad.r_go_blind": "CPU al {cpu} %, memoria desconocida (no se pudo leer), {busy} sesión(es) ocupada(s)",
+        "capacity.parallel": "Trabajo listo que no compite por archivos ni por el cerrojo de la suite: {items}",
+        "capacity.overlap_unknown": "Trabajo listo con solapamiento desconocido (sin archivos indicados): {items}",
+        "start.unbound_protected": "esta sesión no está vinculada a ningún proyecto, y un proyecto protegido nunca se vincula solo: ejecuta `budgit activate {dir}` en esta sesión y vuelve a empezar",
+        "guard.failed": "budgit: el guardián {name} falló y en este paso solo están activas las protecciones básicas (mira ~/.budgit/hooks.log)",
+        "start.no_protected": "este proyecto tiene libros de tareas pero ninguna carpeta protegida definida, así que ninguna carpeta se guarda como datos reales: defínela con `budgit portfolio add <carpeta> --protected`",
         "ad.r_busy": "hay {busy} sesiones ocupadas, el límite es {limit}",
         "ad.r_floor": "este proyecto aún no tiene ningún carril, así que el primero siempre arranca (CPU al {cpu} %, {mem} MB libres)",
         "ad.r_yield": "la CPU al {cpu} % supera el límite de espera {limit} % ({mem} MB libres) y este proyecto tiene más carriles ({lanes}), así que cede primero",
@@ -1503,6 +1583,7 @@ CATALOG = {
         "budget.level.critical": "CRÍTICO",
         "ctx.renew": "contexto ~{k}k tokens: toca renovar este chat. Escribe el traspaso (`budgit handoff write`), abre un chat "
                      "nuevo y que lo repita (`budgit handoff check <lane> --echo <archivo>`); entonces el viejo se puede archivar.",
+        "verify.stale_report": "ignorado un informe de verificación viejo en {folder} (es del sha {sha}, no del de --evidence).",
         "ctx.notask": "esta sesión no tiene tarea: `budgit ledger start R-n` (si no hay, antes `budgit ledger add`).",
         "handoff.written": "traspaso escrito en {path}: rellena los huecos marcados (siguientes pasos, trampas); hechos que debe llevar: {facts}",
         "handoff.ok": "el eco dice todos los hechos del traspaso: el chat viejo se puede archivar.",
@@ -1517,6 +1598,13 @@ CATALOG = {
         "ctx.nudge": "contexto ~{k}k tokens: cada mensaje relee todo (≈{x}× lo de una sesión de 100k). "
                      "Si el tema cambió o cerraste una fase: /compact <qué conservar> o sesión nueva "
                      "(.budgit/progress.md lleva el estado).",
+        "agentgate.legal": "guarda legal de budgit: este encargo nombra una palabra fiscal o legal ({word}) y no tiene línea "
+                           "LEGAL. Añade la línea `LEGAL: legal-eu-es-fr panel checker` (usa la skill legal-eu-es-fr en modo "
+                           "panel con su checker), o `LEGAL: none - <motivo>` si el encargo no trata de impuestos ni de "
+                           "leyes (el motivo queda anotado), y lanza de nuevo.",
+        "legal.prompt_note": "budgit: este mensaje toca impuestos o leyes. Respóndelo con la skill legal-eu-es-fr en modo panel "
+                             "con su checker, quien pregunte y en cualquier idioma; si la pregunta necesita cifras (importes, "
+                             "tipos, una declaración que rellenar), usa también la skill fiscal-es-fr. Es solo un consejo.",
     },
 }
 

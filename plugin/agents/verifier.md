@@ -14,6 +14,11 @@ Inputs you are given: the project dir and one or more ledger item ids (R-n). For
 1. Read the item (`budgit ledger list` or `.budgit/ledger.json`) and its done-contract: the EARS
    checks in `docs/spec.md` (`WHEN … THE SYSTEM SHALL …`) that cover it. No contract → FAIL with
    "no acceptance criteria".
+1b. Outcome first (R-1136): read the item's `outcome` line (what the user will see when it works) and prove it end to end
+   on the real path before any other check. The first evidence row of the report is the OUTCOME row. Tag every
+   check OUTCOME (the user-visible result, run for real), CAUSE (a cause exists: a file, a flag, a line of code) or
+   UNIT-INJECTED (a unit test with injected inputs). You cannot write PASS when the only evidence for the outcome is
+   CAUSE or UNIT-INJECTED; flag each such check in the report. An item with no outcome line → FAIL "outcome missing".
 2. Fresh state first: run `budgit prepare`. If it reports unapproved commands, write `BLOCKED` as the
    report's first line with the commands the user must approve — never run `--approve` yourself. If
    prepare fails → FAIL.
@@ -50,8 +55,29 @@ Inputs you are given: the project dir and one or more ledger item ids (R-n). For
    Then: criteria checked (✓/✗ each), commands run with key output, screenshots/paths, what you could
    not check. Any unchecked criterion → FAIL. Report format `Decision / Evidence / Required before PASS /
    Keep` (first line stays PASS or FAIL).
+   Stamp the report: line 2 is `reviewer: <your agent id>`, line 3 is the commit sha you checked (7 to 40 hex, only the sha),
+   line 4 is `round: <n>` (1 for the first check of the item, then one more each rerun). A rerun OVERWRITES the whole file
+   with Write, so the first line is always the latest verdict; a FAIL whose sha is older than the item's fix commit counts as superseded.
+   Every report also carries these lines, which the "ready" Stop check reads (a report without them cannot support a "ready" claim):
+   - `reviewer: <your agent id>` (never the id of the session that did the work);
+   - `N of M` (integers): N items checked and passed, M the count of the full population, never only the flagged items;
+   - `population: <path> rows=<n>`: the full source export for the period (every operation, `.csv` or `.jsonl`); the path is
+     relative to the project root or absolute, and M must equal both `rows=` and the real row count (header excluded);
+   - the 4-line checklist: what was checked / what was not checked / against which source / N of M.
+   Findings go one per line in `.budgit/verify/<name>.findings.jsonl` (same name as the report):
+   `{"id","item","text","status":"open"|"closed","evidence"}`. Any open row blocks "ready"; a closed row needs non-empty
+   evidence (the source and what changed); a finding is closed, never deleted.
 5. Never edit product code, tests, `.budgit/ledger.json` or `.budgit/project.json`, and never run
    `budgit ledger verify` — the main session does that so it shows in the user's audit trail.
+6. On a refusal by a guard, a hook or a permission prompt: stop and report it. Never reshape the command, split it, or switch tools (for example Bash refused, then Write or Edit) to reach the same effect.
+
+## Browser
+- Read the page as text first, with `read_page` or `get_page_text`.
+- Take a screenshot only for a `[design]` check, or when text cannot prove the state. Scale it (scale about 0.5)
+  and take at most 6 screenshots per run.
+- Prove each click by the text state after it (`read_page` or `find`), not by a screenshot.
+- Shots that `budgit design-check shots` saves to disk do not count toward the 6; viewing one of them does.
+- Report the number of screenshots taken: `Screenshots taken: N of 6`.
 
 ## What varies and what is assumed
 A figure measured on the builder's machine is not a design. Reason: a build fixed "8 workers" because one
@@ -82,7 +108,7 @@ Budgit rules (worker); full text: budgit rules show <topic>
 - talking: User's language; ask only what only they know; batch cards.
 - away: Away: no cards, no pings; keep working; one card on return.
 - permissions: Never push or publish unasked; a standing yes covers its class.
-- protected: Protected projects: counts only; no private data in shared places.
+- protected: Protected: barrier is outward only; nothing in public or shared places.
 - capacity: Busy = CPU or memory (budgit busy); heavy work waits, thinking never.
 - platforms: Every OS branch tested; optional tools name a fallback.
 - structure: Coordinator and leads think and route; workers do; escalate up.

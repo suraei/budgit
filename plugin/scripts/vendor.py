@@ -24,7 +24,7 @@ MARK = ".claude/budgit/scripts/hook.py"           # a hook command containing th
 OLD_MARKS = (".claude/studio/scripts/hook.py",)    # R-120: copies vendored before 0.12 (replaced on re-vendor)
 OLD_RUNTIME, OLD_SKILL = "studio", "studio-kickoff"
 GUARD = '[ "$CLAUDE_CODE_REMOTE" = "true" ] || exit 0; '
-RUN = 'env -u PYTHONDONTWRITEBYTECODE python3 "$CLAUDE_PROJECT_DIR/' + MARK + '" '
+RUN = 'env -u PYTHONDONTWRITEBYTECODE python3 -I -S "$CLAUDE_PROJECT_DIR/' + MARK + '" '
 SKILL = "budgit-kickoff"
 _PLUGIN_ARG = re.compile(r'/scripts/hook\.py"\s+(\S+)\s*$')
 _TEXT_EXTS = {".md", ".txt", ".json"}
@@ -174,11 +174,11 @@ def _owner_config(stage_dir, project):
 
 
 def scan_staged(stage_dir):
-    """`budgit secrets` over what is about to be written; any finding or tool failure aborts."""
+    """`budgit secrets` over what is about to be written; any finding, tool failure or skipped tool (exit 3, never clean) aborts."""
     import secretscan
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        rc = secretscan.scan(stage_dir)
+        rc = secretscan.scan(stage_dir, strict=True)      # the release gate never counts a skipped tool as clean
     if rc:
         tail = "\n".join(buf.getvalue().strip().splitlines()[-12:])
         raise sl.StudioError("secret scan of the files to vendor failed (exit %s) — nothing was written:\n%s" % (rc, tail))

@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 
 import studiolib as sl
 
@@ -13,12 +14,16 @@ LOCKFILES = {"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock
              "Cargo.lock", "Gemfile.lock", "composer.lock", "pubspec.lock", "mix.lock"}
 _SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".studio", ".budgit", "dist", "build"}
 _MAX_LINES = 60
+SKIPPED_EXIT = 3          # R-1128: a scan that skipped a tool (not installed) exits 3: neither clean (0) nor a finding (1) nor a failure (2)
 HOOK_MARK = "budgit secrets pre-commit"
 CHAIN_LINE = "budgit secrets --staged || exit 1"
 
 
 def _git(path, *args):
-    r = subprocess.run(["git", "-C", path] + list(args), capture_output=True, text=True)
+    try:
+        r = subprocess.run(["git", "-C", path] + list(args), capture_output=True, text=True, errors="replace")
+    except Exception:
+        return None
     return r.stdout.strip() if r.returncode == 0 else None
 
 
@@ -32,9 +37,11 @@ def lockfiles(path):
 
 def _run(argv, cwd):
     try:
-        r = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=900)
+        r = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, errors="replace", timeout=900)
     except subprocess.TimeoutExpired:
         return 124, "timed out after 900 s"
+    except Exception as e:      # R-1065: a scanner that cannot run is a FAILED gate, never a traceback or a pass
+        return 125, "scanner could not run: %s: %s" % (type(e).__name__, e)
     return r.returncode, sl.redact((r.stdout or "") + (r.stderr or ""))
 
 
@@ -51,7 +58,8 @@ def _gitleaks(path, staged, in_git):
         argv = ["gitleaks", "git", "--pre-commit", "--staged"]
     else:
         argv = ["gitleaks", "git" if in_git else "dir"]
-    code, out = _run(argv + ["--redact", "--no-banner", "--verbose", path], path)
+    cwd = path if os.path.isdir(path) else os.path.dirname(path)    # R-1036: a single file is scanned as that file
+    code, out = _run(argv + ["--redact", "--no-banner", "--verbose", path], cwd)
     if code == 0:
         print("gitleaks: no leaks")
         return 0
@@ -86,20 +94,32 @@ def _osv(path):
     return 2
 
 
-def scan(path, staged=False):
-    """Returns 0 clean or skipped, 1 findings, 2 a tool failed. Missing tools never fail the run."""
+def scan(path, staged=False, strict=False):
+    """Returns 0 clean, 1 findings, 2 a tool failed, 3 (SKIPPED_EXIT) a tool was skipped so the scan is NOT clean.
+    `staged` (the pre-commit line) without gitleaks never blocks a commit: it says so, prints the one install line and returns 0,
+    unless `strict` (Budgit's own release gate), which counts it as skipped (3) like a full scan."""
     path = os.path.realpath(path)
-    in_git = _git(path, "rev-parse", "--show-toplevel") is not None
-    print("budgit secrets: %s (%s)" % (path, "staged changes" if staged else ("git history" if in_git else "directory")))
+    if not os.path.exists(path):
+        print("budgit secrets: %s does not exist (give a file or a folder)" % path, file=sys.stderr)
+        return 2
+    is_file = os.path.isfile(path)
+    in_git = not is_file and _git(path, "rev-parse", "--show-toplevel") is not None
+    print("budgit secrets: %s (%s)" % (path, "staged changes" if staged else (
+        "file" if is_file else ("git history" if in_git else "directory"))))
     missing, results, skipped = [], [], []
     if shutil.which("gitleaks"):
         results.append(_gitleaks(path, staged, in_git))
+    elif staged and not strict:
+        print("staged: NOT scanned (gitleaks missing)")
+        print("install yourself (nothing was installed): brew install gitleaks")
+        return 0
     else:
         print("gitleaks: skipped (not installed)")
         missing.append("gitleaks")
         skipped.append("gitleaks (not installed)")
     if staged:
-        print("osv-scanner: skipped with --staged (run: budgit secrets)")
+        if results and results[0] == 0:
+            print("staged: clean (dependency scan not part of --staged)")
         skipped.append("osv-scanner (--staged)")
     elif not lockfiles(path):
         print("osv-scanner: skipped (no lockfiles)")
@@ -114,7 +134,23 @@ def scan(path, staged=False):
         print("skipped: %s \u2014 that part was NOT scanned" % ", ".join(skipped))
     if missing:
         print("install yourself (nothing was installed): brew install %s" % " ".join(missing))
-    return max(results or [0])
+    code = max(results or [0])
+    if code == 0:
+        # a scan that skipped a tool never says clean; "no lockfiles" is nothing to scan, not a skipped tool
+        unscanned = [s for s in skipped if "no lockfiles" not in s]
+        print("result: skipped: %s - NOT clean, that part was not checked" % ", ".join(unscanned) if unscanned
+              else "result: clean")
+        # R-1128: a skipped tool exits SKIPPED_EXIT, never 0, so a caller reading the exit code cannot take it for clean;
+        # osv-scanner skipped by --staged is the documented design of the pre-commit hook and does not count
+        if [s for s in unscanned if "(--staged)" not in s]:
+            return SKIPPED_EXIT
+    return code
+
+
+def inside_project(path, project):
+    """True when path is the project folder or below it (symlinks resolved)."""
+    path, project = os.path.realpath(path), os.path.realpath(project)
+    return path == project or path.startswith(project.rstrip(os.sep) + os.sep)
 
 
 def _hook_text():

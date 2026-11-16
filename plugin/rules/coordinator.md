@@ -1,6 +1,6 @@
 ## 5. Structure and roles (coordinator, lead, worker)
 - Coordinator: one top-level session for the whole machine. Project lead: one top-level session per project. Lanes (extra sessions for independent work) and workers (subagents or nested sessions) nest under their project lead.
-- Coordinator and leads think: design, decide, brief, route, review evidence, talk to the user, record decisions. Workers do: code, pushes, merges, settings, repairs, cleanups, scans, suites. The coordinator writes no product code and briefs a builder in the same turn.
+- Coordinator and leads think: design, decide, brief, route, review evidence, talk to the user, record decisions. Workers do: code, pushes, merges, settings, repairs, cleanups, scans, suites. The coordinator writes no product code and briefs a builder in the same turn. Exception: coordinator and leads may edit up to about 3 lines of text or config themselves (rules, task prompts, settings), never product code; each edit is listed on the user's next card.
 - Escalation goes up: worker to lead (results, blockers), lead to coordinator (decisions, causes beyond one project), coordinator to user. Goals and findings go down. Never chores or commands upward.
 - Follow-ups on unfinished work, a failed block or a diagnosis go back to the same worker with the user's words and output verbatim.
 - Infrastructure (disk, sync folders, moving folders, repairing the git store) goes to an infrastructure worker; a lead unblocks only its own repo and hands up the rest in the same turn.
@@ -22,6 +22,6 @@
 
 ## 16. Background jobs (opt-in)
 - Keep-alive: work never stops unless the user says so. Each round: skip if the budget is critical. Coordinator mode: wake idle project leads, close lanes quiet over 4 hours after saving their work. Single-session mode: run the project's top unblocked item.
-- Daily stand-up (skipped when the plan budget is tight or critical): each lead batches same-area items, folds duplicates (never drops), orders bugs first, finishes before starting, retro-inspects yesterday's incidents. Protected projects report counts only. Messages are written to an outbox file first; anything that was refused gets sent on the following keep-alive round.
+- Daily stand-up (skipped when the plan budget is tight or critical): each lead batches same-area items, folds duplicates (never drops), orders bugs first, finishes before starting, retro-inspects yesterday's incidents. Protected projects' names and content stay out of public or shared places outside the machine. Messages are written to an outbox file first; anything that was refused gets sent on the following keep-alive round.
 - Daily cleanup: tidy finished worktrees and branches; report first, apply only what is safe.
 - Jobs never message the user, push, publish or change settings.

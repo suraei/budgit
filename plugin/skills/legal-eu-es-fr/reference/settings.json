@@ -1,0 +1,121 @@
+{
+  "_note": "R-1125 #9. Settings that drift live here, not in scripts/legalcheck.py: official hosts (the only hosts the check fetches or accepts as verified), hosts that need a person (manual), the weekly freshness window, the panel cap, the person types a rule row may name in applies_to, and the regime suggestions per country. Data, not instructions. registry-entry.json requires.network must list the same hosts as official_hosts (a test checks it).",
+  "official_hosts": [
+    "eur-lex.europa.eu", "curia.europa.eu", "edpb.europa.eu", "ec.europa.eu", "publications.europa.eu",
+    "europarl.europa.eu", "consilium.europa.eu",
+    "boe.es", "aepd.es", "agenciatributaria.gob.es", "hacienda.gob.es", "seg-social.es", "abogacia.es",
+    "mjusticia.gob.es",
+    "legifrance.gouv.fr", "cnil.fr", "impots.gouv.fr", "economie.gouv.fr", "urssaf.fr", "service-public.fr",
+    "service-public.gouv.fr", "entreprendre.service-public.gouv.fr", "justice.fr", "justice.gouv.fr", "conseil-constitutionnel.fr",
+    "gnu.org", "opensource.org", "creativecommons.org", "apache.org"
+  ],
+  "manual_hosts": {
+    "legifrance.gouv.fr": "manual: Légifrance blocks scripts; open it in a browser or use a PISTE account"
+  },
+  "stale_days": 7,
+  "panel_cap": 3,
+  "person_types": ["employee", "micro", "bnc_reel", "autonomo_directa", "autonomo_objetiva", "company", "cross_border"],
+  "escalation": {
+    "_note": "R-1125 #11. SKILL.md section 2 as data. A VERDE draft that hits a trigger is refused (code escalation-trigger); ÁMBAR and ROJO are not. Each trigger has 'skill' (its wording in section 2, a test keeps both in agreement) and phrases in es, fr and en, matched as whole words, ignoring case and accents, in the whole draft (its Pregunta line included). 'rows' lists rule rows that are a trigger by nature: a draft that cites one cannot be VERDE. A phrase list errs toward ÁMBAR: a false hit costs a professional's look, a missed hit costs the user.",
+    "triggers": {
+      "contract": {
+        "skill": "signed or about-to-sign contract",
+        "es": ["contrato firmado", "firm* un contrato", "firm* el contrato", "firm* mi contrato", "voy a firmar", "he firmado", "hemos firmado", "!firmé", "!firmó", "firmamos", "a punto de firmar"],
+        "fr": ["contrat signé", "sign* un contrat", "sign* le contrat", "sign* mon contrat", "je vais signer", "j'ai signé", "nous avons signé", "sur le point de signer"],
+        "en": ["signed contract", "sign* a contract", "sign* the contract", "sign* my contract", "about to sign", "i signed", "i have signed", "we signed"]
+      },
+      "authority": {
+        "skill": "letter, inspection or claim from an authority",
+        "es": ["requerimiento de", "carta de hacienda", "carta de la agencia tributaria", "carta de la aeat", "carta de la aepd", "carta de la cnil",
+               "carta del juzgado", "notificación de hacienda", "notificación de la aeat", "inspección de hacienda", "inspección tributaria",
+               "reclamación de", "citación judicial", "demanda judicial", "burofax", "carta de una empresa", "reclamación de una empresa"],
+        "fr": ["mise en demeure", "courrier de l'urssaf", "lettre de l'urssaf", "courrier de la dgfip", "lettre de la dgfip", "courrier des impôts",
+               "lettre des impôts", "lettre de la cnil", "courrier de la cnil", "notification de l'urssaf", "notification de la dgfip", "notification de la cnil",
+               "notification des impôts", "contrôle fiscal", "avis de vérification", "avis de contrôle",
+               "assignation", "convocation du tribunal", "courrier d'une entreprise", "réclamation d'une entreprise"],
+        "en": ["letter from the tax office", "letter from the tax authority", "letter from a tax authority", "letter from a court",
+               "letter from the court", "letter from the cnil", "letter from the aepd", "letter from a company", "tax inspection", "tax audit",
+               "formal notice", "demand letter", "summons", "claim from a company", "cease and desist"]
+      },
+      "filing": {
+        "skill": "a filing with money at stake",
+        "es": ["declaración de la renta", "present* la declaración", "present* mi declaración", "present* el modelo", "present* un modelo",
+               "declaración trimestral", "modelo 303", "modelo 130", "modelo 100", "autoliquidación"],
+        "fr": ["déclaration de revenus", "dépos* la déclaration", "dépos* ma déclaration", "fai* ma déclaration", "déclaration 2035",
+               "déclaration de tva", "formulaire 3916", "télédéclaration", "déclaration d'impôts"],
+        "en": ["tax return", "file* my taxes", "file* the return", "file* a return", "filing the return", "vat return", "tax filing",
+               "file* the declaration", "file* my declaration"]
+      },
+      "criminal": {
+        "skill": "possible criminal exposure",
+        "es": ["delito", "delito fiscal", "responsabilidad penal", "denuncia penal", "querella", "antecedentes penales", "pena de prisión", "cárcel",
+               "penal", "derecho penal", "fraude fiscal", "fraude penal", "evasión fiscal", "blanqueo"],
+        "fr": ["délit", "responsabilité pénale", "plainte pénale", "poursuites pénales", "peine de prison", "casier judiciaire",
+               "pénal", "pénale", "pénaux", "droit pénal", "fraude fiscale", "évasion fiscale", "blanchiment"],
+        "en": ["criminal", "crime", "prosecution", "imprisonment", "prison sentence", "jail",
+               "criminal law", "tax fraud", "tax evasion", "money laundering"]
+      },
+      "personal_data": {
+        "skill": "other people's personal data",
+        "es": ["datos personales de terceros", "datos de terceros", "datos de otras personas", "datos personales de otras personas",
+               "datos de clientes", "datos de usuarios", "datos personales de usuarios", "datos personales de clientes"],
+        "fr": ["données personnelles de tiers", "données de tiers", "données d'autres personnes", "données personnelles d'autres personnes",
+               "données de clients", "données d'utilisateurs", "données personnelles d'utilisateurs", "données personnelles de clients"],
+        "en": ["other people's personal data", "other people's data", "third parties' personal data", "third party personal data",
+               "personal data of third parties", "customer data", "users' personal data", "personal data of users", "personal data of customers"]
+      },
+      "breach": {
+        "skill": "breach or leaked data",
+        "es": ["brecha de datos", "brecha de seguridad", "filtración", "datos filtrados", "fuga de datos", "datos robados"],
+        "fr": ["violation de données", "fuite de données", "données divulguées", "données piratées", "données volées"],
+        "en": ["data breach", "breach data", "breached data", "leaked data", "data leak", "stolen data"]
+      },
+      "publish": {
+        "skill": "something the user will sell or publish for strangers",
+        "es": ["para desconocidos", "para extraños", "para el público", "voy a vend*", "voy a public*", "public* para", "vend* para", "lanzamiento público", "a la venta"],
+        "fr": ["pour des inconnus", "pour le public", "je vais vendre", "je vais publi*", "publi* pour", "lancement public", "mettre en vente", "en vente"],
+        "en": ["for strangers", "for the public", "will publish", "will sell", "publish* for", "sell* for", "to sell it", "for sale", "public release", "public launch"]
+      }
+    },
+    "covered_elsewhere": {
+      "a split verdict": "green-split",
+      "a source that cannot be verified": "green-unverified"
+    },
+    "rows": {
+      "EU-GDPR-BREACH-72H": "breach",
+      "EU-GDPR-LEGIT-INTEREST": "personal_data", "FR-CNIL-SCRAPING-ROBOTS": "personal_data",
+      "FR-3916BIS-DUTY": "filing", "FR-3916BIS-FINE": "filing", "FR-3916-FINE-BANK": "filing", "FR-BNC-2035": "filing", "FR-VAT-CA3": "filing",
+      "FR-CGI-CRYPTO-GAINS": "filing", "ES-IRPF-RESIDENCE": "filing", "ES-IRPF-PERMUTA": "filing", "ES-IRPF-FIFO": "filing",
+      "ES-IRPF-TWO-MONTHS": "filing", "FR-CGI-RESIDENCE": "filing", "XB-ES-FR-TREATY": "filing",
+      "FR-CGI-DAC8-PROVIDERS": "filing", "EU-DAC8-APPLIES": "filing",
+      "EU-GDPR-CHILD-AGE": "personal_data", "FR-IL-MINOR-AGE15": "personal_data", "ES-LOPDGDD-AGE14": "personal_data",
+      "ES-CP-403": "criminal", "FR-CP-433-17": "criminal", "FR-TITLE-AVOCAT": "criminal", "FR-CONSULT-ART54": "criminal",
+      "ES-TITLE-ABOGADO": "criminal", "ES-EGAE-DENOMINATION": "criminal",
+      "FR-BNC-COST-NECESSARY": "filing", "FR-BNC-COST-PAID": "filing", "FR-BNC-COST-SPLIT": "filing", "FR-BNC-PHONE-INTERNET-SPLIT": "filing",
+      "FR-BNC-PREMISES-SURFACE": "filing", "FR-BNC-PREMISES-ENERGY": "filing", "FR-BNC-CAR-SCALE-OPTION": "filing",
+      "FR-BNC-CAR-SCALE-COVERS": "filing", "FR-BNC-CAR-SCALE-VALUES": "filing", "FR-BNC-CAR-DEPR-CAP": "filing", "FR-BNC-EXPENSE-500": "filing",
+      "FR-BNC-MICRO-ALLOWANCE": "filing", "FR-BNC-MICRO-ALLOWANCE-MIN": "filing", "FR-BNC-REEL-OPTION": "filing",
+      "FR-BNC-REEL-OPTION-TERM": "filing", "FR-BNC-CGA-REDUCTION-GONE": "filing", "FR-BNC-CGA-FEES-COST": "filing",
+      "FR-VAT-DED-COEFFICIENT": "filing", "FR-VAT-DED-MIXED": "filing", "FR-VAT-DED-CAR": "filing", "FR-VAT-DED-HOUSING": "filing",
+      "FR-VAT-DED-FRANCHISE": "filing",
+      "FR-URSSAF-MICRO-RATE-BNC": "filing", "FR-URSSAF-MICRO-RATE-CIPAV": "filing", "FR-URSSAF-VL": "filing",
+      "FR-URSSAF-VL-DEADLINE": "filing", "FR-URSSAF-ACRE-2026": "filing", "FR-URSSAF-ACRE-BNC-RATES": "filing",
+      "ES-IRPF-SAVINGS-STATE-2025": "filing", "ES-IRPF-SAVINGS-REGIONAL-2025": "filing", "ES-IRPF-SAVINGS-COMBINED-2025": "filing",
+      "ES-IRPF-SAVINGS-TOP-RATE-CHANGE": "filing", "ES-IRPF-GENERAL-STATE-2025": "filing", "ES-IRPF-GENERAL-MINIMUM": "filing",
+      "ES-IRPF-GENERAL-REGIONAL": "filing", "ES-IRPF-HOME-SUPPLIES": "filing", "ES-IRPF-HOME-OWNERSHIP-SHARE": "filing",
+      "ES-IRPF-MEALS": "filing", "ES-IRPF-HARD-TO-JUSTIFY": "filing", "ES-IRPF-M130-WHO": "filing", "ES-IRPF-M130-RATE": "filing",
+      "ES-IRPF-M130-DEADLINES": "filing", "ES-IRPF-M130-EXEMPT-70": "filing", "ES-IRPF-CRYPTO-SAVINGS-BASE": "filing",
+      "ES-IRPF-CRYPTO-FIFO": "filing", "ES-IVA-M303-DEADLINES": "filing", "ES-IVA-GENERAL-RATE": "filing", "ES-IVA-REDUCED-RATES": "filing",
+      "ES-IVA-MIXED-USE": "filing", "ES-IVA-CAR-50": "filing", "ES-RETA-REDUCED-TABLE-2026": "filing", "ES-RETA-GENERAL-TABLE-2026": "filing",
+      "ES-RETA-RATE-2026": "filing", "ES-RETA-MAX-BASE-2026": "filing", "ES-RETA-TARIFA-PLANA": "filing", "ES-RETA-REGULARISATION": "filing",
+      "ES-M721-THRESHOLD": "filing", "ES-M721-DEADLINE": "filing",
+      "LIC-APACHE-S4": "publish", "LIC-AGPL-S13": "publish", "LIC-CC-NC": "publish", "LIC-CC-SA": "publish"
+    }
+  },
+  "regimes": {
+    "es": ["asalariado (retenciones)", "autónomo, estimación directa simplificada", "autónomo, estimación directa normal",
+           "autónomo, estimación objetiva (módulos)", "sociedad (impuesto de sociedades)"],
+    "fr": ["salarié", "micro-BNC", "micro-BIC", "BNC réel (déclaration contrôlée 2035)", "BIC réel",
+           "société (impôt sur les sociétés)"]
+  }
+}

@@ -8,6 +8,7 @@ tools: Read, Grep, Glob, Bash
 
 You review a plan you did not write. Inputs: paths to the plan, the spec/brief, and the ledger.
 Bash only for read-only commands.
+On a refusal by a guard, a hook or a permission prompt: stop and report it. Never reshape the command, split it, or switch tools (for example Bash refused, then Write or Edit) to reach the same effect.
 
 Check, citing file:line:
 1. Every ledger item and EARS criterion in scope maps to a plan task with a verification step.
@@ -52,7 +53,7 @@ Budgit rules (worker); full text: budgit rules show <topic>
 - talking: User's language; ask only what only they know; batch cards.
 - away: Away: no cards, no pings; keep working; one card on return.
 - permissions: Never push or publish unasked; a standing yes covers its class.
-- protected: Protected projects: counts only; no private data in shared places.
+- protected: Protected: barrier is outward only; nothing in public or shared places.
 - capacity: Busy = CPU or memory (budgit busy); heavy work waits, thinking never.
 - platforms: Every OS branch tested; optional tools name a fallback.
 - structure: Coordinator and leads think and route; workers do; escalate up.

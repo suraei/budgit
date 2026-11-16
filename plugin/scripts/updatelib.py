@@ -345,7 +345,7 @@ def _spawn_refresh(root=None):
         _write_cache(time.time(), version)
     finally:
         os.close(fd)  # closing releases the lock, before the child starts
-    args = [sys.executable, os.path.abspath(__file__), "--refresh-cache"] + ([root] if root else [])
+    args = [sys.executable, "-I", "-S", os.path.abspath(__file__), "--refresh-cache"] + ([root] if root else [])
     subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
@@ -381,4 +381,5 @@ def refresh_cache(root=None):
 
 
 if __name__ == "__main__" and sys.argv[1:2] == ["--refresh-cache"]:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))    # -I leaves the script's folder off sys.path: `import studiolib` needs it
     refresh_cache(sys.argv[2] if len(sys.argv) > 2 else None)

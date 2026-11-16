@@ -244,7 +244,8 @@ def apply(project, data, rows, ref="main"):
                 continue
         evidence = "merged to %s in %s: %s; verify report %s/verify/%s.md%s" % (
             ref, row["commit"], row["subject"][:80], os.path.basename(sl.studio_dir(project)), row["id"], note)
-        sl.set_status(project, data, row["id"], "verified", evidence=evidence)
+        sl.set_status(project, data, row["id"], "verified", evidence=evidence,
+                      derived_outcome="closed by merge %s: %s" % (row["commit"][:12], row["subject"][:120]))
         sl.audit(project, "merge-close %s: closed by %s on %s" % (row["id"], row["commit"], ref))
     return refused
 

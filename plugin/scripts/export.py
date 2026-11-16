@@ -9,6 +9,7 @@ Markdown prose is scrubbed (the owner's `share_scrub` table from config.json, th
 code never is (the suite's leak test keeps it clean). Built in a temp dir, gated by leak.scan + the owner's 6-word
 runs from the user's ledgers + `budgit secrets`; any hit → exit 1 and <out> is untouched. Stdlib only.
 """
+import hashlib
 import json
 import os
 import re
@@ -46,7 +47,16 @@ SPANISH_RE = re.compile(r"[áéíóúñ¿¡]|\b(?:%s)\b" % "|".join(
     "nada ahora versión primera compartida semana cuota llegas hasta sesión carpeta proyecto".split()), re.I)
 SPANISH_FILES = ("README.md", "CHANGELOG.md")            # the public face is English; code carries the es catalog
 OMIT_FROM_EXPORT = (os.path.join("bin", "studio"),)      # the old command name: someone new never had it
-SHIPPED_DIRS = ("plugin", os.path.join("skills", vendor.SKILL), SHARE_DIR)
+LEGAL_SKILL = "legal-eu-es-fr"                           # R-741: ships beside the kickoff skill, at plugin/skills/<name>
+SHIPPED_SKILLS = (vendor.SKILL, LEGAL_SKILL)
+SKILL_OMIT = {LEGAL_SKILL: ("cases", "registry-entry.json")}   # R-741: the hub's worked situations and registry draft never ship
+SHIPPED_DIRS = ("plugin",) + tuple(os.path.join("skills", s) for s in SHIPPED_SKILLS) + (SHARE_DIR,)
+
+
+def _omitted(rel, omit):
+    """True when any part of the path (relative to its source folder) is an omitted name, at any depth, whatever its case."""
+    names = {o.lower() for o in omit}
+    return any(part.lower() in names for part in rel.split(os.sep))
 
 
 class ExportRefused(sl.StudioError):
@@ -59,12 +69,15 @@ def shipped_text_files(repo_root=None):
     repo_root = repo_root or os.path.dirname(vendor.plugin_root())
     out = []
     for sub in SHIPPED_DIRS:
+        omit = SKILL_OMIT.get(os.path.basename(sub), ())
         for d, dirs, files in os.walk(os.path.join(repo_root, sub)):
             dirs[:] = sorted(x for x in dirs if x not in lint.SKIP_DIRS)
             for f in sorted(files):
                 if f == "CHANGELOG.md" or f.endswith((".pyc", ".DS_Store")):
                     continue
                 path = os.path.join(d, f)
+                if _omitted(os.path.relpath(path, os.path.join(repo_root, sub)), omit):
+                    continue
                 if lint._text(path)[0] is not None:
                     out.append(path)
     return out
@@ -219,7 +232,7 @@ def _copy_tree(src, dst, table, skip=()):
             if f.endswith((".pyc", ".DS_Store")) or f == "CHANGELOG.md":
                 continue
             s = os.path.join(d, f)
-            if os.path.relpath(s, src) in skip:
+            if _omitted(os.path.relpath(s, src), skip):
                 continue
             t = os.path.join(dst, os.path.relpath(s, src))
             if f.endswith(".md"):
@@ -247,6 +260,10 @@ def build(stage_dir, version, config, repo="OWNER/REPO", author=None):
     if skill is None:
         raise ExportRefused("the %s skill was not found next to the plugin" % vendor.SKILL)
     _copy_tree(skill, os.path.join(plugin, "skills", vendor.SKILL), table)
+    legal = os.path.join(os.path.dirname(root), "skills", LEGAL_SKILL)         # R-741: shipped like the kickoff skill, so a hub without it refuses
+    if not os.path.isdir(legal):
+        raise ExportRefused("the %s skill was not found next to the plugin" % LEGAL_SKILL)
+    _copy_tree(legal, os.path.join(plugin, "skills", LEGAL_SKILL), table, SKILL_OMIT[LEGAL_SKILL])
     _refuse_odd(os.path.join(root, ".claude-plugin", "plugin.json"), deep=False)
     with open(os.path.join(root, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
         manifest = json.load(f)
@@ -581,7 +598,7 @@ def run_hits(stage_dir, texts, allowed=()):
 
 
 GIT_TIMEOUT = 10
-SHIPPED_PATHS = ("plugin", "skills/budgit-kickoff", "share")     # where shipped text lives in the repo (security review round 2)
+SHIPPED_PATHS = ("plugin",) + tuple("skills/" + s for s in SHIPPED_SKILLS) + ("share",)   # where shipped text lives in the repo (security review round 2)
 
 
 def _git_first_seen(repo, span):
@@ -659,6 +676,60 @@ def product_quotes(hits, stage_dir, sources, repo):
     return kept, notes
 
 
+RULE_NAMES = {"her words": "6-word run of owner words", "owner voice": "owner wording in the third person",   # voice-ok
+              "spanish": "Spanish text in a public English file", leak.PROTECTED: "protected project name",
+              "hidden char": "hidden character", "hidden char in name": "hidden character in a file name"}
+
+
+def source_of(rel):
+    """R-1128: the repo file a staged file `rel` was built from, relative to the repo root, or "(generated)"."""
+    rel = rel.replace(os.sep, "/")
+    root = vendor.plugin_root()
+    repo_root = os.path.dirname(root)
+    skills = "plugin/skills/"
+    if rel.startswith(skills + vendor.SKILL + "/"):
+        src = vendor._skill_source()
+        if src:
+            return os.path.relpath(os.path.join(src, rel[len(skills + vendor.SKILL) + 1:]), repo_root)
+    if rel.startswith(skills + LEGAL_SKILL + "/"):
+        return "skills/" + rel[len(skills):]
+    if rel.startswith("plugin/float/"):
+        return os.path.join(FLOAT_SRC, rel[len("plugin/float/"):])
+    if rel.startswith("plugin/") and not rel.startswith("plugin/.claude-plugin"):
+        return rel
+    if rel.startswith(FLOAT_DST + "/"):
+        return os.path.join(FLOAT_SRC, rel[len(FLOAT_DST) + 1:])
+    if rel in ("README.md", "LICENSE", "CHANGELOG.md"):
+        return SHARE_DIR + "/" + rel
+    if rel.startswith("assets/"):
+        return SHARE_DIR + "/" + rel[len("assets/"):]
+    return "(generated)"
+
+
+def _shown_term(h):
+    """The matched text as the refusal report prints it: the owner's own words as their first 3 words and a short hash."""
+    if h.kind == "her words":                                                                    # voice-ok
+        words = h.term.split()
+        return "%s... #%s" % (" ".join(words[:3]), hashlib.sha256(h.term.encode("utf-8")).hexdigest()[:8])
+    return "<hidden>" if h.kind == leak.PROTECTED else h.term
+
+
+def refusal_report(hits, stage_dir=None):
+    """R-1128: one line per hit: the staged path, the line, the rule, the source file and line it came from, and the match
+    (a protected name hidden, the owner's words cut to 3 words and a hash)."""
+    if not hits:
+        return "leak check: clean"
+    lines = []
+    for h in hits[:200]:
+        rule = RULE_NAMES.get(h.kind, h.kind)
+        src = source_of(h.path)
+        where = "%s line %d" % (src, h.line) if h.line and src != "(generated)" else src
+        lines.append("%s:%d: %s %r [rule: %s; source: %s]" % (lint.show(h.path, ""), h.line, h.kind, _shown_term(h), rule, lint.show(where, "")))
+    if len(hits) > 200:
+        lines.append("... %d more" % (len(hits) - 200))
+    return "leak check: %d hit(s) - nothing private may leave\n%s" % (len(hits), "\n".join(lines))
+
+
 def gate(stage_dir, config, repo=None):
     """leak.scan + the user's 6-word runs + `budgit secrets`. Returns the report text; raises on any hit."""
     allow = config.get("share_allow") or ()
@@ -678,7 +749,7 @@ def gate(stage_dir, config, repo=None):
     tail = "".join("\n" + n for n in notes)
     rules = public_rules(stage_dir) + hidden_hits(stage_dir)
     if hits or rules:
-        raise ExportRefused(leak.report(hits + rules) + tail)
+        raise ExportRefused(refusal_report(hits + rules, stage_dir) + tail)
     vendor.scan_staged(stage_dir)
     return leak.report(hits) + tail
 

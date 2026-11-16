@@ -130,8 +130,22 @@ def cmd_suite(args):
     import i18n
     import maincheck
     import suitequeue
-    project = sl.resolve_project(args.project)
+    cwd_project = bool(getattr(args, "cwd_project", False))
+    if cwd_project:                               # R-1101 round 3: a subagent's form, judged by the guard on the same repo top
+        if getattr(args, "project", None):
+            print("budgit suite: --cwd-project and --project exclude each other")
+            return 64
+        top = sl.suite_repo_root(os.getcwd())
+        if not top:
+            print("budgit suite: --cwd-project needs a folder inside a real git checkout (not a linked .git)")
+            return 1
+        project = sl.resolve_project(top)             # the repo top only: never the session-bound project
+    else:
+        project = sl.resolve_project(args.project)
     command = [c for c in (getattr(args, "command", None) or [])]
+    if getattr(args, "report", False):            # R-961: last gate and full durations; exit 1 when the last gate run was over 60 s
+        import suitetimes
+        return suitetimes.report(project)
     if command:                                   # R-569: `budgit suite --wait [--rc] -- <cmd>`, one blocking process
         import suitewait
         import suiteorder
@@ -145,11 +159,29 @@ def cmd_suite(args):
         except KeyboardInterrupt:
             return 130
 
+    if getattr(args, "background", False):         # R-1101: detached but marked, under the same slot; `budgit wait JOB` follows it
+        import suitejobs
+        flags = [f for f, on in (("--rerun", args.rerun), ("--release", args.release), ("--wait", args.wait)) if on]
+        try:
+            maincheck.suite_command(project, strict=cwd_project)      # refuse up front what the job would refuse: nothing is started
+        except maincheck.SuiteUnavailable as exc:
+            print("budgit suite: %s" % exc)
+            return 1
+        try:
+            where = ["--cwd-project"] if cwd_project else ["--project", project]      # the job's own CLI judges the project the same way (it starts in `project`)
+            job = suitejobs.start([sys.executable, "-I", "-S", os.path.abspath(__file__), "suite"] + where + flags, project)
+        except (OSError, suitejobs.JobError) as exc:
+            print("budgit suite: could not start the job: %s" % exc)
+            return 1
+        print(job)
+        print("started in the background; run `budgit wait %s` until it ends (each call waits at most %d s)" % (job, suitejobs.MAX_WAIT_S))
+        return 0
+
     def started(slot):
         print(i18n.t("sq.started", secs=slot.waited, load=_load_text(slot.load)), flush=True)
     try:
         code, slot, hit = maincheck.run_plain_suite(project, notify=_queue_notice, started=started, wait_load=args.wait,
-                                                    load_notice=_load_notice, rerun=args.rerun, release=args.release)
+                                                    load_notice=_load_notice, rerun=args.rerun, release=args.release, strict=cwd_project)
     except suitequeue.LoadTooHigh as exc:
         return _load_refused(exc)
     except suitequeue.suiteorder.AlreadyQueued as exc:
@@ -161,6 +193,15 @@ def cmd_suite(args):
         print(i18n.t("sq.same_tree", when=hit["checked_at"], secs=hit.get("seconds", 0)))
         return 0
     print(i18n.t("sq.done", code=code, secs=slot.waited, load=_load_text(slot.load)))
+    return code
+
+
+def cmd_wait(args):
+    """R-1101: `budgit wait JOB [--max N]`: follow a `budgit suite --background` job, at most 540 s a call. Exit 0 passed, 1 failed,
+    3 still running (call again), 2 refused (another session's job, or a reused pid), 64 a bad --max."""
+    import suitejobs
+    text, code = suitejobs.report(args.job, args.max)
+    print(text)
     return code
 
 
@@ -215,6 +256,22 @@ def cmd_rules(args):
     return 0
 
 
+def cmd_procs(args):
+    """R-847/R-1095: the orphan sweep on its own, so the daily task can call it (see procclose.main)."""
+    import procclose
+    argv = (["--apply"] if args.apply else []) + (["--min-age-s=" + str(args.min_age_s)] if args.min_age_s is not None else [])
+    if getattr(args, "hold", None):
+        argv += ["--hold", *args.hold]
+    for flag in ("words", "src", "until"):
+        if getattr(args, flag, None):
+            argv += ["--" + flag, getattr(args, flag)]
+    if getattr(args, "holds", False):
+        argv.append("--holds")
+    if getattr(args, "unhold", None) is not None:
+        argv += ["--unhold=" + str(args.unhold)]
+    return procclose.main(argv)
+
+
 def cmd_housekeeping(args):
     """R-400: the daily tidy-up: flow count, then merged clean idle worktrees and branches (see housekeeping.py)."""
     import housekeeping
@@ -231,8 +288,12 @@ def cmd_housekeeping(args):
     text = housekeeping.render(report)
     try:                                   # R-847: the backstop; the dry run only lists, --apply closes under the user's standing yes
         import procclose
-        rows = procclose.sweep_orphans(args.apply)
+        expired = []
+        rows = procclose.sweep_orphans(args.apply, expired_out=expired)
+        if (rows or expired) and text and not text.endswith("\n"):
+            text += "\n"
         text += "".join("%s orphaned process pid %d (%s)\n" % ("closed" if args.apply else "would close", r["pid"], r["owner"]) for r in rows)
+        text += "".join(line + "\n" for line in expired)
     except Exception:
         sl.log_error("housekeeping: procclose")
     if args.apply:
@@ -363,7 +424,7 @@ def cmd_activate(args):
                    else "including earlier messages of this session (captured when this turn ends)")
         print("Every input of this session is now captured, %s." % history)
         print("Track each before finishing a turn:")
-        print("  budgit ledger add --src I-n --phase P        # new request (copies your words)")
+        print("  budgit ledger add --src I-n --phase P --appetite small|medium|large   # new request (copies your words)")
         print("  budgit ledger phase mvp|later R-n [R-m ...]  # MVP first: tag the MVP, park the rest")
         print("  budgit ledger link R-n --src I-n             # refines an existing item")
         print("  budgit ledger ack I-n [I-m ...] --note WHY   # approvals / not a new request")
@@ -477,7 +538,7 @@ def _live_snapshot(args):
             pass   # bad input from the mod: fall back to what is recorded
     stored = budget.load()
     fresh = time.time() - (stored.get("seen_at") or 0) <= _LINE_FRESH_S
-    return (stored.get("limits") or {}) if fresh else {}, fresh
+    return budget.plan_limits(stored.get("limits") or {}) if fresh else {}, fresh   # R-1104: no 5-hour figure for a plan without one
 
 
 def _counts(data):
@@ -751,10 +812,13 @@ def cmd_busy(args):
 def cmd_ext_review(args):
     """R-889a: the one wrapper for external-model reviews (codex, gemini): deadline, own process group, owner tag."""
     import extreview
+    if args.model is not None and not extreview.MODEL_RE.match(args.model):
+        print("bad --model name (letters, digits, . _ - only, 1 to 64 characters)")
+        return extreview.EXIT_USAGE
     if not os.path.isfile(args.diff):
         print("diff file not found: %s" % args.diff)
         return extreview.EXIT_USAGE
-    return extreview.review(args.tool, args.diff, args.prompt, args.out, args.timeout)
+    return extreview.review(args.tool, args.diff, args.prompt, args.out, args.timeout, debug=args.debug, model=args.model)
 
 
 def cmd_jobs(args):
@@ -777,6 +841,13 @@ def cmd_job(args):
     """R-788: the opt-in jobs. on | off | status | precheck | run, name cleanup | keepalive | standup."""
     import jobs
     here = os.path.realpath(__file__)
+    if args.op == "health":                      # R-1128: last run of every job and any problem; exit 1 when one is not healthy
+        import jobhealth
+        code, text = jobhealth.report()
+        print(text)
+        return code
+    if not args.name:
+        raise sl.StudioError("budgit job %s needs a job name (cleanup, keepalive, standup)" % args.op)
     if args.op == "on":
         code, text = jobs.turn_on(args.name, here, args.at, _every_seconds(args.every))
     elif args.op == "off":
@@ -1038,6 +1109,36 @@ def cmd_trust(args):
         print(i18n.t("trust.revoked" if sl.revoke_trust(project) else "trust.revoked_none", project=project))
         return 0
     print(i18n.t("trust.on" if sl.trust_work_on(project) else "trust.off", project=project))
+    return 0
+
+
+def cmd_attribution(args):
+    """I-1526: show or set whether commits and PRs carrying a Claude attribution line are refused (default on)."""
+    import i18n
+    if args.value is None:
+        print(i18n.t("cmd.attribution_show", state=i18n.t("cmd.attribution_on" if sl.no_claude_attribution() else "cmd.attribution_off")))
+        return 0
+    saved = sl.set_no_claude_attribution(args.value)
+    print(i18n.t("cmd.attribution_show", state=i18n.t("cmd.attribution_on" if saved == "on" else "cmd.attribution_off")))
+    return 0
+
+
+def cmd_rm_guard(args):
+    """R-988: show or set whether the hook refuses rm-like deletions and names the Trash (default off)."""
+    import i18n
+    if args.value is None:
+        saved = "on" if sl.refuse_rm() else "off"
+    else:
+        saved = sl.set_refuse_rm(args.value)
+    print(i18n.t("cmd.rm_guard_show", state=i18n.t("cmd.rm_guard_on" if saved == "on" else "cmd.rm_guard_off")))
+    return 0
+
+
+def cmd_five_hour(args):
+    """R-1104: show or set whether the 5-hour usage window is shown and gates (auto, the default) or never (off: the plan has none)."""
+    import i18n
+    saved = sl.five_hour_window() if args.value is None else sl.set_five_hour_window(args.value)
+    print(i18n.t("cmd.five_hour_show", state=i18n.t("cmd.five_hour_off" if saved == "off" else "cmd.five_hour_auto")))
     return 0
 
 
@@ -1328,7 +1429,7 @@ def _print_hidden_check(project):
     paths = lint.tracked_paths(project, links=True)
     if not paths:
         return
-    found = [f for f in lint.scan(paths, project) if f.kind in HIDDEN_KINDS]
+    found = [f for f in lint.scope(lint.scan(paths, project), project) if f.kind in HIDDEN_KINDS]
     if found:
         print(_t("release.hidden", n=len(found), files=len({f.path for f in found})))
 
@@ -1397,6 +1498,8 @@ def cmd_status(args):
     for it in sl.stale_doing(data):
         print("stale doing (not updated for more than 7 days): %s %s" % (it["id"], it["text"][:80].replace("\n", " ")))
     for line in sl.round_cap_lines(project, data):
+        print(line)
+    for line in sl.verify_status_lines(project, data):      # R-1136: verify state and the outcome claim, one function
         print(line)
     _published_line(project)
     print("untracked inputs (all sessions): %d" % len(pending))
@@ -1496,6 +1599,7 @@ def cmd_ledger(args):
             _repair_done_at(project, args)
             return
         data = sl.load_ledger(project)
+        batch_failed = False
         if args.op == "top":
             import taskrank
             rows = taskrank.top(data, n=args.n)
@@ -1533,7 +1637,7 @@ def cmd_ledger(args):
                 return
             print("%s [%s] %s" % (it["id"], sl.status_cell(data, it), it.get("title") or ""))
             print(it["text"])
-            for key in ("phase", "src", "doing_by", "assigned_by", "doing_since", "started_at", "appetite", "flags",
+            for key in ("phase", "src", "doing_by", "assigned_by", "doing_since", "started_at", "appetite", "due", "flags",
                         "evidence"):
                 if it.get(key):
                     print("%s: %s" % (key, ", ".join(it[key]) if isinstance(it[key], list) else it[key]))
@@ -1556,6 +1660,10 @@ def cmd_ledger(args):
                 print("folded into %s: %s (%s)" % (it["folded"]["into"], it["folded"]["reason"], it["folded"]["at"]))
             for sub in sl.folded_into(data, it["id"]):
                 print("folded here: %s (%s)" % (sub["id"], sub["folded"]["reason"]))
+            if it.get("outcome"):
+                print("outcome: %s" % it["outcome"])
+            if it["status"] in ("done", "verified"):        # R-1136: the claim is outcome plus proof, one function
+                print(sl.done_claim_line(project, it))
             if it.get("released"):
                 r = it["released"]
                 print("released: %s (%s, %s)" % (r.get("why"), r.get("by"), r.get("at")))
@@ -1563,6 +1671,10 @@ def cmd_ledger(args):
         if args.op == "add":
             phase = sl.check_new_phase(data, args.phase)    # before the inbox entry: a refused add records nothing
             src = args.src
+            appetite = args.appetite
+            if not appetite and "legacy" not in (src or []):      # R-940: no item without a size; dates come from size
+                sys.stderr.write("R-940: give --appetite small|medium|large (dates come from size)\n")
+                sys.exit(2)
             if not src:                         # P8: a first item needs no inbox entry made by hand
                 if args.text is None:
                     raise sl.StudioError("pass --text \"what you want built\" (or --src I-n for an input already in the inbox)")
@@ -1572,7 +1684,15 @@ def cmd_ledger(args):
                     raise sl.StudioError("item text is empty")
                 src = [inbox_id]
             text = args.text if args.text is not None else _inbox_text(project, src)
-            it = sl.add_item(data, text, src, phase=phase, title=args.title)
+            it = sl.add_item(data, text, src, phase=phase, title=args.title, outcome=args.outcome)
+            if args.outcome is None:            # R-1136: no outcome yet: propose a draft from the linked words
+                draft = sl.draft_outcome(_inbox_text(project, src) if src != ["legacy"] else text)
+                print(_t("ledger.outcome_draft", id=it["id"], draft=draft or "...") if draft
+                      else _t("ledger.outcome_none", id=it["id"]))
+            if not appetite:                   # R-925: a legacy add gets a printed guess
+                appetite = sl.guess_appetite(text)
+                print(_t("ledger.guess", size=appetite))
+            sl.set_appetite(data, it["id"], appetite, due=args.due)
             result = "%s -> open" % it["id"]
         elif args.op == "link":
             if args.change is not None or args.why is not None:      # R-286: the input changes an item, say what and why
@@ -1604,11 +1724,16 @@ def cmd_ledger(args):
             done = sl.apply_defaults(project, data)
             result = "%d default answers applied%s" % (len(done), ": " + ", ".join(done) if done else "")
         elif args.op == "appetite":
-            it = sl.set_appetite(data, args.id, args.size)
-            result = "%s -> appetite %s" % (it["id"], args.size)
+            it = sl.set_appetite(data, args.id, args.size, due=args.due)
+            result = "%s -> appetite %s%s" % (it["id"], args.size, ", due " + it["due"] if it.get("due") else "")
+        elif args.op in ("done", "fold") and (len(args.ids) != 1 or args.file):
+            result, batch_failed = _ledger_batch(project, data, args)
         elif args.op == "fold":
-            it = sl.fold_item(project, data, args.id, args.into, args.reason)
+            it = sl.fold_item(project, data, args.ids[0], args.into, args.reason)
             result = "%s -> folded into %s" % (it["id"], args.into)
+        elif args.op == "outcome":
+            it = sl.set_outcome(data, args.id, args.line)
+            result = "%s -> outcome: %s" % (it["id"], it["outcome"])
         elif args.op == "unfold":
             it = sl.unfold_item(project, data, args.id)
             result = "%s -> open" % it["id"]
@@ -1647,8 +1772,7 @@ def cmd_ledger(args):
                 if warn:
                     sys.stderr.write(warn + "\n")
             elif args.op == "done":
-                sl.check_done_proof(args.evidence)
-                it = sl.set_status(project, data, args.id, "done", evidence=args.evidence or "")
+                it = sl.done_item(project, data, args.ids[0], args.evidence, outcome=args.outcome)
             elif args.op == "verify":
                 sl.check_done_proof(args.evidence)
                 it = sl.set_status(project, data, args.id, "verified", evidence=args.evidence)
@@ -1657,6 +1781,38 @@ def cmd_ledger(args):
             result = "%s -> %s" % (it["id"], it["status"])
         sl.save_ledger(project, data)
     print(result)
+    if batch_failed:
+        sys.exit(1)
+
+
+def _ledger_batch(project, data, args):
+    """`ledger done` / `ledger fold` for several ids (or a --file of `id<TAB>text` lines): each id goes through the same
+    gate as a single call, one line per id, and a refused one never stops or undoes the others. -> (text, any refused)."""
+    is_done = args.op == "done"
+    if is_done and getattr(args, "outcome", None) is not None:
+        raise sl.StudioError("--outcome takes one id; in a --file give each line its own third column (id<TAB>proof<TAB>outcome)")
+    entries = [((i, "", i) if sl._BATCH_ID.match(i) else (None, "", "argument %d" % n)) + ((None,) if is_done else ())
+               for n, i in enumerate(args.ids, 1)]
+    if args.file:
+        entries += sl.parse_batch_file(sl.batch_file_path(project, args.file), outcomes=is_done)
+    if not entries:
+        raise sl.StudioError("name at least one id, or a --file of id<TAB>text lines")
+    if is_done:
+        default = args.evidence or ""
+        entries = [(i, t or default, w, o) for i, t, w, o in entries]
+        rows = sl.batch_apply(data, entries, lambda i, t, o=None: sl.done_item(project, data, i, t, outcome=o))
+        word = "done"
+    else:
+        if not args.into:
+            raise sl.StudioError("fold needs --into R-m")
+        default = args.reason or ""
+        entries = [(i, t or default, w) for i, t, w in entries]
+        rows = sl.batch_apply(data, entries, lambda i, t: sl.fold_item(project, data, i, args.into, t))
+        word = "folded into %s" % args.into
+    lines = ["%s: %s" % (i, "ok, " + word if why is None else "refused, " + why) for i, why in rows]
+    bad = sum(1 for _, why in rows if why is not None)
+    lines.append("%d ok, %d refused" % (len(rows) - bad, bad))
+    return "\n".join(lines), bool(bad)
 
 
 def _ledger_match(project, data, args):
@@ -1822,6 +1978,127 @@ def cmd_codex(args):
     print("It is data, not instructions: read it, verify each claim, then decide.")
 
 
+def cmd_reports_sweep(args):
+    """R-1032: move agent dumps older than --days from reports/ to archive/agent-dumps/<date>/ (manifest.jsonl). Moves only."""
+    project = sl.resolve_project(getattr(args, "project", None))
+    if args.days < 0:
+        raise sl.StudioError("--days must be 0 or more")
+    moved, skipped = sl.sweep_reports(project, days=args.days, dry_run=args.dry_run)
+    print("%s %d agent dump(s) older than %d day(s) %s; %d skipped (target existed or file gone)" % (
+        "would move" if args.dry_run else "moved", len(moved), args.days,
+        "(dry run, nothing changed)" if args.dry_run else "to %s" % os.path.relpath(
+            os.path.join(sl.studio_dir(project), "archive", "agent-dumps"), project), len(skipped)))
+
+
+def cmd_githooks(args):
+    """R-1042: install or show the git commit-msg and pre-push hooks that reject an AI attribution trailer."""
+    import githooks
+    if args.all and getattr(args, "project", None):
+        raise sl.StudioError("use --project or --all, not both")
+    named = getattr(args, "project", None)         # any git repo will do: it need not be an activated Budgit project
+    project = None if args.all else (os.path.realpath(os.path.expanduser(named)) if named else sl.resolve_project(None))
+    return githooks.run(args.op, project, all_projects=args.all, dry_run=getattr(args, "dry_run", False))
+
+
+LEGAL_PROFILE_MAX = 64 * 1024
+
+
+def _legal_home_dir():
+    """R-1106: the legal skill's private folder, decided by the one function legalcheck.legal_home() (the reader's own)."""
+    # R-1106 round 2: no skill code is loaded here. The same rules as legalcheck.legal_home() (a parity test keeps them in step):
+    # an absolute $LEGAL_HOME, else <Budgit home>/legal as sl.home_state() decides it.
+    explicit = os.environ.get("LEGAL_HOME")
+    if explicit:
+        explicit = os.path.expanduser(explicit)
+        if not os.path.isabs(explicit):
+            raise sl.StudioError("LEGAL_HOME must be an absolute path: %s" % explicit)
+        return explicit
+    return os.path.join(sl.home_state(), "legal")
+
+
+def cmd_legal_profile_save(args):
+    """R-1106: validate --from FILE and write it atomically as <legal home>/legal-profile.md (0600, folder 0700)."""
+    import secrets
+    import stat
+    src = os.path.expanduser(args.source)
+    try:
+        sfd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)      # a symlink fails here; a FIFO opens but is not regular
+    except OSError as e:
+        raise sl.StudioError("cannot read %s without following a symlink: %s" % (src, e.strerror))
+    try:
+        if not stat.S_ISREG(os.fstat(sfd).st_mode):
+            raise sl.StudioError("%s is not a regular file" % src)
+        raw = b""
+        while len(raw) <= LEGAL_PROFILE_MAX:
+            chunk = os.read(sfd, LEGAL_PROFILE_MAX + 1 - len(raw))
+            if not chunk:
+                break
+            raw += chunk
+    finally:
+        os.close(sfd)
+    if len(raw) > LEGAL_PROFILE_MAX:
+        raise sl.StudioError("%s is larger than %d bytes" % (src, LEGAL_PROFILE_MAX))
+    try:
+        raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise sl.StudioError("%s is not UTF-8 text" % src)
+    folder = os.path.abspath(_legal_home_dir())
+    if os.path.islink(folder):
+        raise sl.StudioError("%s is a symlink; refusing to write through it" % folder)
+
+    def no_git_above(path):                               # personal data never goes into a git work tree (links resolved first)
+        walk = os.path.realpath(path)
+        while True:
+            if os.path.lexists(os.path.join(walk, ".git")):
+                raise sl.StudioError("%s is inside a git work tree (%s); refusing to save a legal profile there" % (folder, walk))
+            parent = os.path.dirname(walk)
+            if parent == walk:
+                return
+            walk = parent
+    no_git_above(folder)
+    existed = os.path.isdir(folder)
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    real = os.path.realpath(folder)
+    no_git_above(real)
+    try:
+        dfd = os.open(real, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as e:
+        raise sl.StudioError("%s is not a plain folder: %s" % (folder, e.strerror))
+    target = os.path.join(folder, "legal-profile.md")
+    tmp = ".legal-profile-%s" % secrets.token_hex(8)
+    made = False
+    try:
+        fst, rst = os.fstat(dfd), os.stat(os.path.realpath(folder))
+        if (fst.st_dev, fst.st_ino) != (rst.st_dev, rst.st_ino):
+            raise sl.StudioError("%s changed while it was being opened; refusing" % folder)
+        home = os.path.realpath(sl.home_state())
+        if not existed or real == home or real.startswith(home.rstrip(os.sep) + os.sep):
+            os.fchmod(dfd, 0o700)                         # our own folder (just created, or under the Budgit home) ends private
+        elif stat.S_IMODE(fst.st_mode) & 0o077:
+            raise sl.StudioError("%s is not private (mode %o) and is not under the Budgit home; chmod 700 it yourself, then retry"
+                                 % (folder, stat.S_IMODE(fst.st_mode)))
+        try:
+            if stat.S_ISLNK(os.lstat("legal-profile.md", dir_fd=dfd).st_mode):
+                raise sl.StudioError("%s is a symlink; refusing to write through it" % target)
+        except FileNotFoundError:
+            pass
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+        made = True
+        with os.fdopen(fd, "wb") as out:
+            out.write(raw)
+        os.chmod(tmp, 0o600, dir_fd=dfd)
+        os.replace(tmp, "legal-profile.md", src_dir_fd=dfd, dst_dir_fd=dfd)
+        made = False
+    finally:
+        if made:
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except OSError:
+                pass
+        os.close(dfd)
+    print("legal profile saved: %s (%d bytes)" % (target, len(raw)))
+
+
 def cmd_comply(args):
     import comply
     project = sl.resolve_project(args.project) if getattr(args, "project", None) else None
@@ -1835,6 +2112,22 @@ def cmd_comply(args):
         print(comply.skills_table(rows))
     print("level used for limits: %s · rules: reference/budget.md · 0 model tokens" % (
         rows[0]["level"] if rows else args.level or "current"))
+
+
+def cmd_msgshape(args):
+    """R-1112 phase 0: score the last N coordinator messages; prints only numbers, never message text."""
+    import msgshape_cli
+    project = sl.resolve_project(getattr(args, "project", None))
+    if args.last < 1:
+        raise sl.StudioError("--last must be 1 or more")
+    target = msgshape_cli.check_out(project, args.out) if args.out else None
+    lines = msgshape_cli.replay_lines(project, args.last)
+    if target:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        sl.atomic_write(target, "\n".join(lines) + "\n")
+        print("saved %s" % target)
+    print("\n".join(lines))
+    return 0
 
 
 def cmd_retro_mine(args):
@@ -1904,6 +2197,22 @@ def cmd_design_check(args):
 def cmd_secrets(args):
     import secretscan
     path = args.path or os.getcwd()
+    # R-1128: the project is the one this session is bound to; --project may only name a folder inside it. The check runs before
+    # --install-hook and before any scan. NOT here (hotfix 2): refusing a folder with no .budgit data as "no project at all"; that
+    # rule broke 14 fixtures and comes back with its fixtures fixed.
+    bound = sl.project_for_session(os.environ.get("CLAUDE_CODE_SESSION_ID"))
+    if bound:
+        bound = os.path.realpath(bound)
+        if args.project and not secretscan.inside_project(args.project, bound):
+            print("budgit secrets: refused, --project %s is outside this session's project %s"
+                  % (os.path.realpath(args.project), bound), file=sys.stderr)
+            return 2
+    project = bound or _nearest_project(args)
+    print("budgit secrets: target folder %s (project %s)" % (os.path.realpath(path), project))
+    if not secretscan.inside_project(path, project):
+        print("budgit secrets: refused, %s is outside the project %s; run it from inside the folder you mean to scan"
+              % (os.path.realpath(path), project), file=sys.stderr)
+        return 2
     if args.install_hook:
         return secretscan.install_hook(path)
     return secretscan.scan(path, staged=args.staged)
@@ -2011,8 +2320,12 @@ def cmd_lint(args):
         print("budgit lint --fix: %s %d file(s)" % (verb, len(changes)))
     skipped = []
     findings = lint.scan(scan_paths, repo, skipped) if scan_paths else []
+    if args.tracked:
+        findings = lint.scope(findings, repo)               # R-1052: the one scope rule, shared with the release check
     if args.hidden:
         findings = [f for f in findings if f.kind in HIDDEN_KINDS]
+    else:
+        findings += lint.voice_findings(scan_paths, repo) if scan_paths else []     # R-1049: the export's owner-voice rule, at lint time
     for line in lint.skipped_lines(skipped, repo):
         print(line)
     print(lint.report(findings, repo))
@@ -2280,6 +2593,12 @@ def cmd_capacity(args):
     for name, row in pic["projects"].items():
         print(_t("capacity.project", name=name, used=row["used"], slots=row["slots"], free=row["free"],
                  layer=capacity.reason_text(row["free_reason"] if row["free_reason"] in ("stuck",) else row["layer"])))
+    ready = capacity.parallel_ready(pic["projects"])
+    if ready:
+        print(_t("capacity.parallel", items="; ".join("%s: %s" % (n, ", ".join(ids)) for n, ids in ready.items())))
+    unknown = capacity.overlap_unknown(pic["projects"])
+    if unknown:
+        print(_t("capacity.overlap_unknown", items="; ".join("%s: %s" % (n, ", ".join(ids)) for n, ids in unknown.items())))
     for name, code in pic["skipped"]:
         if name != "*":
             print(_t("capacity.skipped", name=name, why=_t("capacity.skip." + code)))
@@ -2449,7 +2768,7 @@ def cmd_export(args):
 
 
 MAINTAINER_EPILOG = """first steps: budgit setup --hub <dir> --projects-root <dir>, then budgit new <name>,
-then budgit ledger add --phase mvp --text "what you want built".
+then budgit ledger add --phase mvp --appetite small --text "what you want built".
 
 maintainer commands (for whoever builds or publishes Budgit itself; you can ignore them):
   export  vendor  retro-mine  denies  lint
@@ -2521,6 +2840,7 @@ CLI_WRITES = {
     "ledger set": ("project", (), ()),
     "ledger phase": ("project", (), ()),
     "ledger done": ("project", (), ()),
+    "ledger outcome": ("project", (), ()),              # R-1136: sets the outcome line of an item in <project>/.budgit, like done
     "ledger ack": ("project", (), ()),
     "ledger verify": ("project", (), ()),
     "ledger drop": ("project", (), ()),
@@ -2536,28 +2856,46 @@ CLI_WRITES = {
     "ledger unfold": ("project", (), ()),
     "ledger flag": ("project", (), ()),
     "ledger rank": ("project", (), ()),
-    "budget": ("home", (), ()),                         # bare = show, but the recorded run wrote budget.json / budget.lock in the home
+    "budget": ("home-fixed", ("budget.json", "budget.lock"), ()),   # R-1014: bare = show; budget.current() saves the level under _locked(): budget.py save() -> home/budget.json, _locked() -> home/budget.lock, nothing else
+    "comply": ("home-fixed", ("budget.json", "budget.lock"), ()),   # R-1014: comply.scan only opens transcripts to read; `level or budget.current()` is the same budget.json / budget.lock write as bare budget
+    "rm-guard status": ("none", (), ()),                # R-1014: bare `rm-guard` (value None) only calls sl.refuse_rm() = a read of config.json; on/off call set_refuse_rm and stay "home"
+    "prepare": ("project", (), ()),                     # R-1014: bare prepare = cmd_prepare (budgit 1737) -> studiolib.run_prepare (8657): reads the home approvals, runs only approved digests, writes <project>/.budgit/verify/prepared.json; `--approve` is judged "home" in studiolib._cli_call
+    "varies": ("none", (), ()),                        # R-1014: cmd_varies reads args.file and prints; no write
+    "ext-review": ("home-fixed", ("codex-limit.json",), ("--out",)),   # R-1014: extreview.review writes --out (write_out) and a TemporaryDirectory; only a codex usage limit writes codexlimit.record in the home (R-1000)
     "budget set": ("home", (), ()), "budget auto": ("home", (), ()), "budget record": ("home", (), ()),
     "status": ("project", (), ()),
+    "reports sweep": ("project", (), ()),               # R-1032: moves old agent dumps inside <project>/.budgit (reports/ -> archive/agent-dumps/<date>/, manifest.jsonl); never writes the home, never deletes
+    "githooks install": ("project", (), ()),            # R-1042: writes <repo hooks dir>/commit-msg, pre-push (+ .local) of the named repo(s) or core.hooksPath; never the Budgit home (reads portfolio.json, seeds in memory only)
+    "legal profile save": ("home", (), ()),             # R-1106: writes the legal home's legal-profile.md; coordinator sessions only, a subagent is denied
+    "githooks status": ("none", (), ()),               # R-1042: reads hooks folders and git config only
+    "audit-mcp": ("none", (), ("@",)),                  # R-1068: auditmcp.scan opens config files to read (and, with --home, the user's ~/.claude files) and prints; no write at all
+    "msgshape replay": ("project", (), ("--out",)),     # R-1112: reads this project's transcripts, prints numbers; --out writes one file inside <project>/.budgit/reports only (checked in msgshape_cli.check_out), never the home
+    # R-1058: the guard refuses by what a command can write, never because a row is missing. Read-only commands say so here.
+    "lint": ("project", (), ("@", "--repo")),           # cmd_lint reads; only `--fix` rewrites, in place, the files it scans: the named paths, the repo's tracked files or default folders (a path or --repo in the home is checked)
+    "humanize-lint": ("none", (), ("@",)),              # cmd_humanize_lint -> humanizelint.main: reads the named files and prints findings, writes nothing
+    "brain lint": ("project", (), ("--repo",)),         # cmd_brain: reads notes, prints; the only write is the append to <repo>/.budgit/brain-queries.jsonl (brain.log_query, index/current/impact/backlinks)
+    "brain current": ("project", (), ("--repo",)), "brain impact": ("project", (), ("--repo",)),
+    "brain backlinks": ("project", (), ("--repo",)), "brain index": ("project", (), ("--repo",)),
     # not proven read-only (a bare string is ("home", (), ())): fail closed
-    "activate": "home", "migrate": "home", "import-md": "home", "prepare": "home", "idea": "home", "new": "home",
-    "image": "home", "inbox-backfill": "home", "comply": "home", "retro-mine": "home", "lint": "home",
-    "humanize-lint": "home", "skills": "home", "security": "home", "hypotheses": "home", "audit-mcp": "home",
-    "varies": "home", "vendor": "home", "merge-close": "home", "scout": "home", "setup": "home", "ext-review": "home",
+    "activate": "home", "migrate": "home", "import-md": "home", "idea": "home", "new": "home",
+    "image": "home", "inbox-backfill": "home", "retro-mine": "home",
+    "skills": "home", "security": "home", "hypotheses": "home",
+    "vendor": "home", "merge-close": "home", "scout": "home", "setup": "home",
     "job": "home", "jobs": "home", "layout": "home", "hub": "home", "watermark": "home", "main-check": "home",
-    "suite": "home", "test": "home", "admit": "home", "tm": "home", "rules": "home", "housekeeping": "home",
+    "suite": ("suite", (), ()), "wait": ("suite", (), ()),   # R-1101 / R-1078 A: the narrow class, exact flags only, no --project, hub repo cwd only (studiolib._suite_form_ok, _suite_cwd_ok); writes the suite slot lock, the suite cache and <home>/suite-jobs/
+    "test": "home", "admit": "home", "tm": "home", "rules": "home", "housekeeping": "home", "procs": "home",
     "main-gate": "home", "relocate": "home", "lang": "home", "trace": "home", "brote": "home", "checkpoint": "home",
     "float": "home", "update": "home", "release-check": "home", "chat-link": "home", "migrate-install": "home",
-    "reorganize": "home", "colour": "home", "trust": "home", "renew": "home", "upgrade": "home", "sweep": "home",
+    "reorganize": "home", "colour": "home", "attribution": "home", "rm-guard": "home", "five-hour": "home", "trust": "home", "renew": "home", "upgrade": "home", "sweep": "home",
     "daily": "home", "capacity": "home", "triggers": "home", "triggers shown": "home",
     "triggers answered": "home", "portfolio": "home", "portfolio add": "home", "portfolio pm": "home",
     "portfolio off": "home", "portfolio on": "home", "portfolio protect": "home", "portfolio tm": "home",
     "portfolio inbox": "home", "portfolio route": "home", "portfolio priority": "home", "relay handoff": "home",
     "relay echo": "home", "relay done": "home", "relay fail": "home", "relay reset": "home", "relay status": "home",
-    "codex review": "home", "codex clean-copy-offer": "home", "codex draft": "home", "design-check tokens": "home",
+    "codex review": ("home-fixed", ("codex-limit.json",), ()),     # R-1000: the report goes to <project>/.budgit/reports; only a usage-limit hit writes this cache in the home
+    "codex clean-copy-offer": "home", "codex draft": "home", "design-check tokens": "home",
     "design-check diff": "home", "design-check docs": "home", "design-check shots": "home", "design-check motion": "home",
-    "design-check approve": "home", "design-check detect": "home", "brain lint": "home", "brain current": "home",
-    "brain impact": "home", "brain backlinks": "home", "brain index": "home", "handoff write": "home",
+    "design-check approve": "home", "design-check detect": "home", "handoff write": "home",
     "handoff check": "home",
 }
 
@@ -2667,6 +3005,34 @@ def build_parser():
     c.add_argument("--level", choices=("ample", "normal", "tight", "critical"))
     c.add_argument("--skills", action="store_true", help="also count registered skills used without `budgit skills why`, and rejected or off ones")
     c.set_defaults(func=cmd_comply)
+    c = sub.add_parser("reports", parents=[common], help="agent-dump housekeeping for the project's reports folder")
+    rops = c.add_subparsers(dest="op", required=True)
+    o = rops.add_parser("sweep", parents=[common], help="move old auto-named agent dumps to archive/agent-dumps/<date>/ (moves only, never deletes)")
+    o.add_argument("--days", type=int, default=3, help="only dumps older than this many days (default 3)")
+    o.add_argument("--dry-run", action="store_true", help="count what would move, change nothing")
+    o.set_defaults(func=cmd_reports_sweep)
+    c = sub.add_parser("githooks", parents=[common], help="git hooks that reject an AI attribution trailer at commit and at push (R-1042)")
+    gops = c.add_subparsers(dest="op", required=True)
+    o = gops.add_parser("install", parents=[common], help="put commit-msg and pre-push in the repo's hooks folder; an existing hook is kept and runs first")
+    o.add_argument("--all", action="store_true", help="every project Budgit knows (protected ones included, shown by id)")
+    o.add_argument("--dry-run", action="store_true", help="list what would happen, change nothing")
+    o.set_defaults(func=cmd_githooks)
+    o = gops.add_parser("status", parents=[common], help="per repo: installed, chained, missing or foreign")
+    o.add_argument("--all", action="store_true", help="every project Budgit knows (protected ones included, shown by id)")
+    o.set_defaults(func=cmd_githooks)
+    c = sub.add_parser("legal", parents=[common], help="the legal-eu-es-fr skill's private profile (R-1106)")
+    lops = c.add_subparsers(dest="op", required=True)
+    lp = lops.add_parser("profile", parents=[common], help="the legal profile file")
+    lpops = lp.add_subparsers(dest="op2", required=True)
+    o = lpops.add_parser("save", parents=[common], help="write --from FILE as <legal home>/legal-profile.md (atomic, 0600; a symlink or a file over 64 KB is refused)")
+    o.add_argument("--from", dest="source", required=True, help="the drafted profile (a regular UTF-8 file, at most 64 KB)")
+    o.set_defaults(func=cmd_legal_profile_save)
+    c = sub.add_parser("msgshape", parents=[common], help="message-shape score of the coordinator's own messages (numbers only, R-1112)")
+    mops = c.add_subparsers(dest="op", required=True)
+    o = mops.add_parser("replay", parents=[common], help="score the last N coordinator messages from this project's transcripts; prints numbers only")
+    o.add_argument("--last", type=int, default=30, help="how many messages (default 30)")
+    o.add_argument("--out", help="also save the numbers to a file inside the project's reports folder")
+    o.set_defaults(func=cmd_msgshape)
     c = sub.add_parser("retro-mine", parents=[common],
                        help="mine your corrections from the transcripts into a private report (offline, 0 tokens)")
     c.add_argument("--days", type=int, default=7); c.add_argument("--root", default="~/.claude/projects")
@@ -2817,10 +3183,12 @@ def build_parser():
     s.add_argument("--prompt", required=True)
     s.add_argument("--out", required=True, help="written only when the tool finished with a verdict")
     s.add_argument("--timeout", type=float, default=None, help="seconds (default 600, hard cap 1800)")
+    s.add_argument("--debug", action="store_true", help="gemini only: pass --debug and show 15 redacted lines when there is no verdict; codex gets nothing")
+    s.add_argument("--model", default=None, help="model name, passed as -m NAME to gemini and codex (letters, digits, . _ -); default: the tool's own")
     s.set_defaults(func=cmd_ext_review)
-    s = sub.add_parser("job", parents=[common], help="the opt-in background jobs: on (needs a recorded yes), off, status, precheck, run")
-    s.add_argument("op", choices=("on", "off", "status", "precheck", "run"))
-    s.add_argument("name", choices=("cleanup", "keepalive", "standup"))
+    s = sub.add_parser("job", parents=[common], help="the opt-in background jobs: on (needs a recorded yes), off, status, precheck, run, health (each job's last run and any problem, such as a missing instruction file; this is also the preflight check, there is no separate command)")
+    s.add_argument("op", choices=("on", "off", "status", "precheck", "run", "health"))
+    s.add_argument("name", nargs="?", choices=("cleanup", "keepalive", "standup"))
     s.add_argument("--at", help="with on: HH:MM for cleanup and stand-up")
     s.add_argument("--every", help="with on: the period for keep-alive, e.g. 2h")
     s.set_defaults(func=cmd_job)
@@ -2856,8 +3224,15 @@ def build_parser():
     s.add_argument("--wait", action="store_true", help="when the machine is overloaded, wait and recheck every 30 s instead of exiting 4")
     s.add_argument("--rc", action="store_true", help="with `-- CMD`: a release candidate goes before ordinary suites in this project's queue (there is no machine-wide lock)")
     s.add_argument("--rank", type=int, default=1, help="with `-- CMD`: project priority, 0 = top (runs without nice), larger waits behind smaller (default 1)")
+    s.add_argument("--report", action="store_true", help="R-961: print the last gate and full durations; exit 1 when the last gate run took over 60 s")
+    s.add_argument("--cwd-project", action="store_true", help="a subagent's form: the project is the repo top of the current folder only (never the session's), and only the user's digest approval of its test_command counts")
+    s.add_argument("--background", action="store_true", help="R-1101: start the suite detached (marked, under the same slot), print a job id; follow it with `budgit wait JOB`")
     s.add_argument("command", nargs="*", help="`-- CMD ...`: wait for this project's suite lock (the only one), run CMD (nice 10 unless rank 0), release")
     s.set_defaults(func=cmd_suite)
+    s = sub.add_parser("wait", parents=[common], help="R-1101: wait for a `budgit suite --background` job (at most 540 s a call): running, passed or failed with the log tail; exit 0 / 1 / 3")
+    s.add_argument("job", help="the job id `budgit suite --background` printed")
+    s.add_argument("--max", type=int, default=540, help="seconds to wait in this call, at most 540 (default 540)")
+    s.set_defaults(func=cmd_wait)
     s = sub.add_parser("test", parents=[common], help="run the project's tests: the whole suite with --full, else only what changed (a project without a pool entry runs `budgit suite`)")
     s.add_argument("--full", action="store_true", help="the whole suite")
     s.add_argument("--rerun", action="store_true", help="(budgit suite fallback) run again even if this exact tree already ran green")
@@ -2886,6 +3261,16 @@ def build_parser():
     s.add_argument("--schedule", choices=("on", "off", "status"), help="set up, remove or check the daily run (macOS launch agent)")
     s.add_argument("--at", default="09:30", help="with --schedule on: the time of day, HH:MM (default 09:30)")
     s.set_defaults(func=cmd_housekeeping)
+    s = sub.add_parser("procs", parents=[common], help="close orphaned processes left by Budgit sessions (dry run unless --apply; the user's standing yes)")
+    s.add_argument("--apply", action="store_true", help="close them; without it, only list what would close")
+    s.add_argument("--min-age-s", default=None, help="how old an orphan must be, in seconds: finite, at least 600 (default 3 h)")
+    s.add_argument("--hold", nargs=2, metavar=("KIND", "VALUE"), help="keep a process the user kept on purpose: `pid N` or `port N` / `port LO-HI` (needs --words, --src, --until)")
+    s.add_argument("--words", help="with --hold: the user's quoted words")
+    s.add_argument("--src", help="with --hold: the note it came from, I-n")
+    s.add_argument("--until", help="with --hold: YYYY-MM-DD, at most 14 days away")
+    s.add_argument("--holds", action="store_true", help="list the holds")
+    s.add_argument("--unhold", metavar="ID", help="remove the hold with this stable id (see --holds); needs --words and --src")
+    s.set_defaults(func=cmd_procs)
     s = sub.add_parser("main-gate", parents=[common], help="the git hooks that refuse a merge onto a red main: on, off, status")
     s.add_argument("op", choices=("on", "off", "status"))
     s.set_defaults(func=cmd_main_gate)
@@ -2946,6 +3331,16 @@ def build_parser():
     s = sub.add_parser("colour", parents=[common], help="show or set the colour of the line under the prompt")
     s.add_argument("value", nargs="?", help="on, off or auto (colour unless you turned it off)")
     s.set_defaults(func=cmd_colour)
+
+    s = sub.add_parser("attribution", parents=[common], help="show or set whether Claude attribution lines in commits and PRs are refused")
+    s.add_argument("value", nargs="?", help="on (refuse them, the default) or off (allow them)")
+    s.set_defaults(func=cmd_attribution)
+    s = sub.add_parser("rm-guard", parents=[common], help="show or set whether rm, unlink, rmdir and find -delete are refused (Trash or archive instead)")
+    s.add_argument("value", nargs="?", help="on (refuse them) or off (allow them, the default)")
+    s.set_defaults(func=cmd_rm_guard)
+    s = sub.add_parser("five-hour", parents=[common], help="show or set whether the 5-hour usage window is shown and gates starts (off: the plan has no 5-hour limit)")
+    s.add_argument("value", nargs="?", help="auto (show it when the host sends it, the default) or off (never show it, never gate on it)")
+    s.set_defaults(func=cmd_five_hour)
     s = sub.add_parser("trust", parents=[common], help="a standing yes for one project: Budgit stops asking about commands that only name the project as a whole")
     s.add_argument("op", choices=("work", "status", "revoke"), help="status: show it; revoke: turn it off; work: only explains how (type /budgit-trust work in the chat)")
     s.set_defaults(func=cmd_trust)
@@ -3060,6 +3455,9 @@ def build_parser():
     o.add_argument("--text", help="the item's text; alone it also records itself in the inbox. With --src: only for items without inbox text (e.g. --src legacy)")
     o.add_argument("--phase", help="mvp | later | a release like 0.13.2 | a phase already in use (required)")
     o.add_argument("--title", help="short label for the panels, 1 to 46 characters, Spanish, no final full stop (R-153); the text stays the user's words")
+    o.add_argument("--outcome", help="one line, in the user's terms: what they will see when it works (R-1136; `done` needs it)")
+    o.add_argument("--appetite", choices=["small", "medium", "large"], help="the item's size; required unless --src legacy (R-940: dates come from size)")
+    o.add_argument("--due", metavar="YYYY-MM-DD", help="a due date set by hand; without it small is due today, medium in 3 days (R-925)")
     o = ops.add_parser("link", parents=[common]); o.add_argument("id"); o.add_argument("--src", action="append", required=True)
     o.add_argument("--change", help="what the input changes in the item (logged on it; a done item is reopened)")
     o.add_argument("--why", help="why it changes (required with --change)")
@@ -3080,7 +3478,12 @@ def build_parser():
     o = ops.add_parser("phase", parents=[common], help="tag items: mvp (the MVP) | later (parked until it ships) | ''")
     o.add_argument("phase"); o.add_argument("ids", nargs="+")
     o.add_argument("--reason", help="with `later`: why the item is parked; a parked item with a reason is not drift (R-362)")
-    o = ops.add_parser("done", parents=[common]); o.add_argument("id"); o.add_argument("--evidence")
+    o = ops.add_parser("outcome", parents=[common], help="set the item's outcome: one line of what the user will see when it works")
+    o.add_argument("id"); o.add_argument("line")
+    o = ops.add_parser("done", parents=[common], help="close items with proof; several ids or a --file of id<TAB>proof[<TAB>outcome] lines close many, each judged alone")
+    o.add_argument("ids", nargs="*", metavar="id"); o.add_argument("--evidence", help="the proof; with several ids, the one a line without its own proof takes")
+    o.add_argument("--file", help="lines of id<TAB>proof[<TAB>outcome] (blank lines and # lines skipped); a line without an outcome closes only if its item has one")
+    o.add_argument("--outcome", help="one line of what the user will see: records it and closes in one step (an old item with none needs this; one id only)")
     o = ops.add_parser("verify", parents=[common]); o.add_argument("id"); o.add_argument("--evidence")
     o = ops.add_parser("drop", parents=[common]); o.add_argument("id"); o.add_argument("--by-user", required=True)
     o = ops.add_parser("list", parents=[common]); o.add_argument("--open", action="store_true")
@@ -3099,8 +3502,11 @@ def build_parser():
     ops.add_parser("apply-defaults", parents=[common], help="questions to the user whose allowed default is due get it")
     o = ops.add_parser("appetite", parents=[common], help="how big the item is: small (a session), medium (a day), large (a week)")
     o.add_argument("id"); o.add_argument("size", choices=tuple(sl.APPETITE_DAYS))
+    o.add_argument("--due", metavar="YYYY-MM-DD", help="a due date set by hand; the size never moves it (R-925)")
     o = ops.add_parser("fold", parents=[common], help="the item is part of another: it stops counting as open and shows under it")
-    o.add_argument("id"); o.add_argument("--into", required=True); o.add_argument("--reason", required=True)
+    o.add_argument("ids", nargs="*", metavar="id"); o.add_argument("--into", required=True)
+    o.add_argument("--reason", help="why; with a --file, the reason a line without its own takes")
+    o.add_argument("--file", help="lines of id<TAB>reason (blank lines and # lines skipped)")
     o = ops.add_parser("unfold", parents=[common], help="undo a fold: the item is open again"); o.add_argument("id")
     o = ops.add_parser("flag", parents=[common], help="what ranks the item: bug (a bug the user sees); waiting on the user is `ledger block`")
     o.add_argument("id"); o.add_argument("name", choices=sl.FLAGS); o.add_argument("--off", action="store_true")

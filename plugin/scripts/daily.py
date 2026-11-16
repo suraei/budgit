@@ -359,6 +359,13 @@ def _row(path, label, is_priv, names, avoid, now, clean, prefixed):
     row["duplicates"] = [[rename(a), rename(b)] for a, b in duplicates(committed_open, all_items=items)]
     ranked = sorted(scope, key=lambda i: CLASS_RANK[classify(i)])           # stable: ledger order inside a class
     row["order"] = [{"id": rename(i["id"]), "class": classify(i)} for i in ranked]
+    try:
+        import suitetimes
+        slow = suitetimes.slow_gate(path)                  # R-961: the last gate run, only when over the limit
+        if slow:
+            row["suite"] = {"secs": round(slow["wall"]), "limit": suitetimes.GATE_LIMIT, "slowest": suitetimes.names(slow)}
+    except Exception:
+        pass
     found = clean.count(path)
     if found is not None:
         row["clean"] = found
@@ -497,6 +504,9 @@ def render(out, lang=None):
                 lines.append("    " + t("daily.class." + o["class"].replace("?", "q"), id=o["id"]))
             if len(row["order"]) > SHOW_ORDER:
                 lines.append("    " + t("daily.more", n=len(row["order"]) - SHOW_ORDER))
+        if row.get("suite"):
+            s = row["suite"]
+            lines.append(t("daily.suite_slow", secs=s["secs"], limit=s["limit"], slowest=s["slowest"]))
         clean = row.get("clean")
         lines.append(t("daily.clean", remove=clean["remove"], delete=clean["delete"]) if isinstance(clean, dict) else t("daily.clean_unchecked"))
     return leak.hide("\n".join(lines) + "\n", names)

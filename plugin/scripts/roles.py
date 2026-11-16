@@ -35,6 +35,7 @@ def classify(session_id, tm, entries, project, parent=None):
     parent: the parent session id when the pointer knows one. -> {"role": "TM"|"PM"|"lane", "name", "path"} or None."""
     if not session_id:
         return None
+    # R-932: the role comes from the session's own registration (tm / pm ids); a parent id only tells an UNREGISTERED session apart.
     if tm and tm == session_id:
         return {"role": "TM", "name": "hub", "path": None}
     for e in entries:
@@ -76,6 +77,21 @@ def _parent_of(session_id):
     return parent if isinstance(parent, str) and parent and parent != session_id else None
 
 
+def protected_side_session(session_id, project):
+    """R-932: a one-line warning when `project` is in a configured protected folder and the session is a side session (its
+    pointer names a parent) of the TM or of the PM of an unprotected project: they would share that coordinator's notes
+    folder. The list is the config's `protected_dirs`; no name is built in. -> text or None."""
+    parent = _parent_of(session_id)
+    if not parent or not project or not sl.protected_dir(project):
+        return None
+    tm, entries = _entries()
+    if parent == tm or any(e.get("pm") == parent and not sl.protected_dir(e["path"]) for e in entries):
+        return ("budgit WARNING: this session is in a protected project but was started from a Budgit coordinator session "
+                "(%s); it would share that coordinator's notes folder. It was NOT registered as the project's PM. Start the "
+                "protected project's PM as its own top-level session." % parent[:8])
+    return None
+
+
 def assign(session_id, project, cwd=None, lock_timeout=1.0):
     """Binding time (SessionStart): a project with no recorded pm records this session as its pm; a session started in the hub
     folder records itself as tm when none is recorded. Never overwrites a recorded tm or pm. A session whose pointer names a
@@ -83,13 +99,14 @@ def assign(session_id, project, cwd=None, lock_timeout=1.0):
     `lock_timeout` seconds nothing is recorded (the hook never waits). -> list of what was written."""
     if not sl.valid_session(session_id):
         return []
-    if _parent_of(session_id):
-        return []
+    child = bool(_parent_of(session_id))
     import portfolio
     import livework
     hub = _hub()
-    wants_tm = bool(hub and isinstance(cwd, str) and os.path.isabs(cwd) and _within(cwd, hub))
-    wants_pm = bool(project and is_budgit_project(project))
+    wants_tm = bool(hub and not child and isinstance(cwd, str) and os.path.isabs(cwd) and _within(cwd, hub))   # R-932: a detached TM is still the TM; R-939: a session with a parent never takes TM by itself
+    wants_pm = bool(project and is_budgit_project(project)) and not child
+    if wants_pm and protected_side_session(session_id, project):
+        return []                                                # R-932: never shares a Budgit coordinator's notes folder
     if not (wants_tm or wants_pm):
         return []
     with sl.home_try_lock(portfolio.LOCK_NAME, lock_timeout) as got:
@@ -178,10 +195,13 @@ def session_start_texts(inp, project):
     except (sl.StudioError, OSError):
         sl.log_error("roles: assign")
     info = detect(inp.get("session_id"), project)
+    warn = protected_side_session(inp.get("session_id"), project)
     text = block(info)
     if not text:
-        return []
+        return [warn] if warn else []
     out = [text]
+    if warn:
+        out.append(warn)
     if claude_md_has_rules():
         out.append("budgit: both rule sources are active (Budgit team rules and your CLAUDE.md team rules); CLAUDE.md wins on conflict.")
     return out
@@ -240,7 +260,7 @@ def _plan(data):
     stats = {"tm": "set" if data.get("tm") else "none", "projects": 0, "with_pm": 0, "set_now": 0, "waiting": 0}
     hub = _hub()
     if not data.get("tm") and hub:
-        first = next((sid for _, sid, proj in pointers if _within(proj, hub)), None)
+        first = next((sid for _, sid, proj in pointers if _within(proj, hub) and not _parent_of(sid)), None)   # R-939: a session with a parent never takes TM by itself
         if first:
             data["tm"] = first
             stats["tm"] = "set now"
@@ -250,7 +270,7 @@ def _plan(data):
         stats["projects"] += 1
         if not e.get("pm"):
             first = next((sid for _, sid, proj in pointers
-                          if proj == os.path.realpath(e["path"]) and sid != data.get("tm")), None)
+                          if proj == os.path.realpath(e["path"]) and sid != data.get("tm") and not _parent_of(sid)), None)   # R-939 r2: a session with a parent never takes PM by itself
             if first:
                 e["pm"] = first
                 stats["set_now"] += 1

@@ -29,6 +29,7 @@ Inputs: the project dir, plus a diff range OR the path of an already-downloaded 
 4. Never: send code or findings to any external service or LLM API; run the item under review or any
    untrusted tool; verify a secret against a live API; install anything; edit files. A check you could not
    run is UNVERIFIED, and any UNVERIFIED check blocks PASS.
+5. On a refusal by a guard, a hook or a permission prompt: stop and report it. Never reshape the command, split it, or switch tools (for example Bash refused, then Write or Edit) to reach the same effect.
 
 Report (<=300 words, returned as text for the main session to file):
 Decision: HOLD | PASS (one line, then counts: high / medium / low)
@@ -45,7 +46,7 @@ Budgit rules (worker); full text: budgit rules show <topic>
 - talking: User's language; ask only what only they know; batch cards.
 - away: Away: no cards, no pings; keep working; one card on return.
 - permissions: Never push or publish unasked; a standing yes covers its class.
-- protected: Protected projects: counts only; no private data in shared places.
+- protected: Protected: barrier is outward only; nothing in public or shared places.
 - capacity: Busy = CPU or memory (budgit busy); heavy work waits, thinking never.
 - platforms: Every OS branch tested; optional tools name a fallback.
 - structure: Coordinator and leads think and route; workers do; escalate up.

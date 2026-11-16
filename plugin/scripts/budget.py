@@ -78,13 +78,40 @@ def role_for(subagent_type):
     return "work"
 
 
+TIERS = ("haiku", "sonnet", "opus", "fable")          # cheapest to dearest; the index is the rank
+
+# R-915 (2): ONE table, role -> (default model, ceiling). Every Agent launch is rewritten to min(asked, ceiling); a launch
+# with no model= gets the default; `ESCALATE: <why>` lifts the ceiling one step (logged). Unknown types are "work" (sonnet).
+# The budget level can only lower these further (POLICY), never raise them.
+ROLE_TABLE = {"judgement": ("opus", "opus"), "work": ("sonnet", "sonnet"), "mechanical": ("haiku", "haiku")}
+FORK = "fork"           # a fork keeps the parent's model (the tool ignores model= there): never touched
+
+
+def is_fork(subagent_type):
+    return str(subagent_type or "").strip().lower() == FORK
+
+
+def _cheaper(a, b):
+    return a if TIERS.index(a) <= TIERS.index(b) else b
+
+
 def model_for(subagent_type, level):
     m = POLICY[level]["models"]
-    model = m[role_for(subagent_type)]
-    return m["mechanical"] if model == "none" else model
+    role = role_for(subagent_type)
+    model = m[role]
+    model = m["mechanical"] if model == "none" else model
+    return _cheaper(model, ROLE_TABLE[role][0])
 
 
-TIERS = ("haiku", "sonnet", "opus", "fable")          # cheapest to dearest; the index is the rank
+def ceiling_for(subagent_type, level, escalate=False):
+    """Dearest model the role may run: the table's ceiling (one step up with ESCALATE), never above the level's model."""
+    role = role_for(subagent_type)
+    cap = ROLE_TABLE[role][1]
+    if POLICY[level]["models"][role] != "none":      # R-1018: "none" (work at critical) keeps the table ceiling, never above normal's
+        cap = _cheaper(cap, model_for(subagent_type, level))
+    if escalate:
+        cap = TIERS[min(TIERS.index(cap) + 1, len(TIERS) - 1)]
+    return cap
 ESCALATE = re.compile(r"(?<![A-Za-z-])ESCALATE:")          # "DE-ESCALATE:" and "NOESCALATE:" are not the marker
 
 
@@ -103,13 +130,13 @@ def escalated(prompt):
     return bool(ESCALATE.search(str(prompt or "")))
 
 
-def above_policy(subagent_type, level, given):
-    """-> the role's model when `given` is dearer than it, else None. A role the level gives no model ("none": work at critical,
-    where the policy is to start no new agents) has no ceiling to lower to: model_for would answer haiku, and a caller that
-    chose to run one anyway is not pushed down to it."""
-    if POLICY[level]["models"][role_for(subagent_type)] == "none":
+def above_policy(subagent_type, level, given, escalate=False):
+    """-> the role's ceiling when `given` is dearer than it, else None (a fork is never touched). A role the level gives no model
+    ("none": work at critical, where the policy is to start no new agents) has no ceiling to lower to: a caller that
+    chose to run one anyway is not pushed down to it. `escalate` lifts the ceiling one step."""
+    if is_fork(subagent_type):
         return None
-    allowed = model_for(subagent_type, level)
+    allowed = ceiling_for(subagent_type, level, escalate)
     rank, cap = tier(given), tier(allowed)
     return allowed if rank is not None and cap is not None and rank > cap else None
 
@@ -136,6 +163,13 @@ def rewritten_ids(session_id):
             return {p[1] for p in (l.split() for l in f) if len(p) == 4 and p[0] == session_id}
     except OSError:
         return set()
+
+
+def record_escalation(session_id, tool_use_id, given, kept):
+    """R-915: every ESCALATE that lifted a ceiling is logged (session, tool_use, asked, model it ran on)."""
+    os.makedirs(sl.home_state(), mode=0o700, exist_ok=True)
+    sl.append_text(os.path.join(sl.home_state(), "model-escalations.log"),
+                   "%s %s %s %s\n" % (session_id or "-", tool_use_id or "-", given, kept))
 
 
 def _fills_path():
@@ -470,6 +504,14 @@ def week_outlook(limits, now=None):
 STRONG_FROM = 0.35      # R-330: before this share of the week has passed, the projection alone never reaches agotado or enfermo (it tops out at cansado)
 
 
+def plan_limits(limits):
+    """R-1104: the one place the 5-hour window is dropped for a plan that has none (config `five_hour_window` "off").
+    Every view and gate reads limits through here, so the status line, Brote and the start gate cannot disagree."""
+    if isinstance(limits, dict) and "five_hour" in limits and sl.five_hour_window() == "off":
+        return {k: v for k, v in limits.items() if k != "five_hour"}
+    return limits
+
+
 def brote_state(limits, now=None):
     """R-114: Brote's health from the weekly projection (the approved mock's `outlook()`), plus the 5 h overlay.
     -> {state, fresh, used, projection, runs_out, resets_at, h5}. state "unknown" (fresh False) without a live weekly
@@ -513,7 +555,7 @@ def current(now=None):
     limits = data.get("limits")
     if isinstance(limits, dict) and (now or time.time()) - (data.get("seen_at") or 0) > STALE_AFTER:
         limits = {k: v for k, v in limits.items() if not (isinstance(v, dict) and v.get("resets_at") is None)}   # R-522: a figure with no reset time only counts while fresh
-    level, reason = classify(limits, prev=data.get("level"), now=now)
+    level, reason = classify(plan_limits(limits), prev=data.get("level"), now=now)
     if data.get("level") != level:
         with _locked():                       # re-read under the lock so a merge that just happened is not overwritten
             fresh = load()

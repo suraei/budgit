@@ -10,7 +10,23 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-import studiolib as sl  # noqa: E402
+
+
+def _fallback_exit(error="import"):
+    """R-1128 hotfix 1: Budgit's own library failed to load. The stdlib-only fallback still refuses destructive git, any push and
+    writes into protected folders, says enforcement is reduced and counts it. Never raises; ends the process."""
+    try:
+        import hookfallback
+        hookfallback.run(sys.argv[1] if len(sys.argv) > 1 else "", error=error)
+    except BaseException:
+        pass
+    sys.exit(0)
+
+
+try:
+    import studiolib as sl  # noqa: E402
+except Exception as _exc:
+    _fallback_exit(type(_exc).__name__)
 
 
 def _nullcontext():
@@ -137,6 +153,27 @@ RELAY_NOTE = (
     "Never renew or archive any other chat. The user can also type /reload-plugins here to reload in place.")
 
 
+LEGAL_PROMPT_CHARS = 20000
+
+
+def legal_prompt_context(inp):
+    """Advice only: a prompt with a tax or legal word gets a note naming the legal skill. The prompt is never blocked, changed or
+    stored here; if the detection raises, the hook goes on with no note and the error is logged."""
+    try:
+        import agentgate
+        import i18n
+        prompt = inp.get("prompt")
+        if not isinstance(prompt, str):
+            return
+        prompt = prompt[:LEGAL_PROMPT_CHARS]       # only the start of a long prompt is read
+        if not prompt.strip() or sl.is_harness(prompt):
+            return
+        if agentgate.legal_word(prompt) is not None:
+            _context("UserPromptSubmit", i18n.t("legal.prompt_note"))
+    except Exception:
+        sl.log_error("legal prompt note")
+
+
 def relay_note(inp):
     """R-301: the renewal steps, once per (chat, installed version), only for a prompt the user typed in a chat
     that runs a Budgit older than the installed one. Nothing is done to any chat here."""
@@ -205,6 +242,85 @@ def _decision(event, decision, reason):
                                  "permissionDecisionReason": reason}})
 
 
+_NETWORK_WORDS = re.compile(r"(?<![\w.-])(?:curl|wget|scp|sftp|rsync|ssh|nc|ncat|netcat|ping|dig|whois|nslookup|host)(?![\w-])")
+
+
+_NETWORK_NAMES = {"curl", "wget", "scp", "sftp", "rsync", "ssh", "nc", "ncat", "netcat", "ping", "dig", "whois", "nslookup", "host"}
+
+
+def _has_network_word(command):
+    """R-1119 round 3: a network or upload program among the PARSED words (the guard's own lexer, so `cu''rl` and `"sc"p` read as
+    curl and scp), or spelled in the raw text. A line the lexer cannot read counts as network."""
+    import realdata  # noqa: F401  (the lexer lives in studiolib; realdata shares it)
+    toks = sl._lex_raw(command)
+    if toks is None:
+        return True
+    return any(os.path.basename(t) in _NETWORK_NAMES for t in toks) or bool(_NETWORK_WORDS.search(command))
+
+
+def _cds_inside_root(command, project, cwd):
+    """R-1119 round 3: every cd-like word (cd, pushd, popd) of the line has a literal target that the guard's own resolver
+    (studiolib._norm_candidate, as realdata uses for a tracked cd) places inside the project root, from the starting folder
+    and from the folder the earlier cds reached. A variable, a bare `cd`, `-`, popd, an unknown path or an outside folder, or a
+    cd-like word the lexer does not see as a command word (inside a quoted string), is not provably inside: False."""
+    import realdata
+    toks = sl._lex_raw(command)
+    if toks is None:
+        return False
+    root = os.path.realpath(project)
+    start = os.path.realpath(cwd or project)
+    here, seen = start, 0
+    for i, tok in enumerate(toks):
+        if os.path.basename(tok) not in realdata._CD_NAMES:
+            continue
+        seen += 1
+        args = toks[i + 1:i + 3] if toks[i + 1:i + 2] == ["--"] else toks[i + 1:i + 2]
+        word = realdata._cd_operand(args)
+        if os.path.basename(tok) not in ("cd", "pushd") or word is None:
+            return False
+        nxt = sl._norm_candidate(word, here)
+        for base in {start, here}:
+            target = sl._norm_candidate(word, base)
+            if os.path.commonpath([target, root]) != root:
+                return False
+        here = nxt
+    return realdata.cd_words(command) == seen
+
+
+def _read_only_bash(tool, tool_input, project, cwd, askers=None):
+    """R-1119, rounds 2 and 3: the read text is for ONE case: the real-data guard is the only guard that asked, the
+    command uses no network or upload program (parsed words), every cd target is provably inside the project root, and the
+    existing reader (realdata.judge) finds no write target, no doubt and no out-of-root, key or above-the-root signal. Anything
+    else, or any error, is not read-only: the refusal keeps its old text."""
+    if tool != "Bash" or not project or list(askers or []) != ["real-data"]:
+        return False
+    try:
+        import realdata
+        command = (tool_input or {}).get("command") or ""
+        if _has_network_word(command):
+            return False
+        if not _cds_inside_root(command, project, cwd):
+            return False
+        patterns = sl.load_project_config(project).get("protected_paths") or []
+        ctx = realdata.judge(command, project, patterns, cwd or project)
+        # `ctx.unsure` alone (a `cd ..` the reader lost track of) does not block: after a lost cd a relative operand already sets
+        # `oor` plus its own doubt (realdata.py:784-786), and a tracked cd sends the real path through the `oor` check
+        return not (ctx.sink or ctx.doubts or ctx.keys or ctx.oor or ctx.oor_keys or ctx.above)
+    except Exception:
+        return False
+
+
+def _search_root_decision(tool, tool_input, project, cwd):
+    import searchguard
+    allowed = []
+    if project:
+        try:
+            allowed = [p for p in (sl.load_project_config(project).get("search_roots_allowed") or []) if isinstance(p, str)]
+        except Exception:
+            allowed = []                         # an unreadable config allows nothing extra
+    return searchguard.decision(tool, tool_input, project, cwd, allowed=allowed)
+
+
 def _combine(decisions):
     """deny beats ask; reasons are joined so the user sees every guard that fired."""
     decisions = [d for d in decisions if d]
@@ -224,7 +340,9 @@ def fill_agent_model(inp):
     PreToolUse decision control, read 2026-10-19). "ask" would prompt the user on every call, against the point of the fill."""
     import budget
     tool_input = inp.get("tool_input") or {}
-    if tool_input.get("model"):
+    if budget.is_fork(tool_input.get("subagent_type")):      # R-915: a fork keeps the parent's model
+        return
+    if tool_input.get("model") and str(tool_input.get("model")).strip().lower() != "inherit":   # R-1018: inherit = missing
         return cap_agent_model(inp, tool_input)
     level = budget.current()["level"]
     kind = tool_input.get("subagent_type")
@@ -248,8 +366,11 @@ def cap_agent_model(inp, tool_input):
     level = budget.current()["level"]
     kind = tool_input.get("subagent_type")
     given = tool_input.get("model")
-    allowed = budget.above_policy(kind, level, given)
-    if not allowed or budget.escalated(tool_input.get("prompt")):
+    esc = budget.escalated(tool_input.get("prompt"))
+    allowed = budget.above_policy(kind, level, given, esc)
+    if esc and budget.above_policy(kind, level, given):          # R-915: ESCALATE lifts the ceiling one step; log what ran
+        budget.record_escalation(inp.get("session_id"), inp.get("tool_use_id"), given, allowed or given)
+    if not allowed:
         return
     role = budget.role_for(kind)
     if mode == "advise":
@@ -264,8 +385,11 @@ def cap_agent_model(inp, tool_input):
                              "`ESCALATE: <why>` in the prompt." % (given, allowed, role, level)}})
 
 
-from rawguard import RAW_REASON, SCOUT_READER, TREE_REASON, _fold, raw_glob_rewrite, raw_reason  # noqa: E402,F401
-import rawguard  # noqa: E402
+try:
+    from rawguard import RAW_REASON, SCOUT_READER, TREE_REASON, _fold, raw_glob_rewrite, raw_reason  # noqa: E402,F401
+    import rawguard  # noqa: E402
+except Exception:                  # R-1128: the guard's own module did not load: the same fallback
+    _fallback_exit()
 
 
 def __getattr__(name):            # tests and tools still reach the guard's helpers as hook.<name>
@@ -286,6 +410,22 @@ def summary_events(lines):
 ARCHIVE_TOOL = "mcp__ccd_session_mgmt__archive_session"
 
 
+def _book_legal_audit(project, notes, defer):
+    """R-1125: each `LEGAL: none` brief is one audit line, booked like the other bookkeeping: now, or appended to `defer` to run
+    under the project lock. A failure is logged and said, and never blocks the spawn."""
+    def book():
+        for text in notes:
+            try:
+                sl.audit(project, text)
+            except Exception:
+                sl.log_error("legal audit")
+                emit({"systemMessage": "budgit: the legal audit line could not be written (see ~/.budgit/hooks.log)"})
+    if defer is None:
+        book()
+    else:
+        defer.append(book)
+
+
 def on_pre_tool_use(inp, project, defer=None):
     """The guards decide from the call and the project's files alone, never under the project lock. The bookkeeping
     (audit lines) runs at once, or is appended to `defer` for the caller to run under the lock."""
@@ -302,17 +442,21 @@ def on_pre_tool_use(inp, project, defer=None):
         return
     if tool in ("Agent", "Task"):
         if project:                     # R-849: all-tools agents only with an ALL-TOOLS: line, in projects bound to Budgit
+            notes = []                  # R-1125: audit texts of `LEGAL: none` briefs, booked below with the other bookkeeping
             try:
                 import agentgate
-                gate = agentgate.deny_reason(inp.get("tool_input"))
-            except Exception:
-                sl.log_error("agent gate")
+                gate = agentgate.deny_reason(inp.get("tool_input"), notes)
+            except Exception as e:
+                legal = type(e).__name__ == "LegalCheckError"      # R-1125: say which check it was
+                sl.log_error("legal gate" if legal else "agent gate")
                 gate = None
-                emit({"systemMessage": "budgit: the all-tools agent check could not run; enforcement did not run for this spawn "
-                                       "(see ~/.budgit/hooks.log)"})
+                emit({"systemMessage": "budgit: the %s check could not run; enforcement did not run for this spawn "
+                                       "(see ~/.budgit/hooks.log)" % ("legal brief" if legal else "all-tools agent")})
             if gate:
                 _decision("PreToolUse", "deny", gate)
                 return
+            if notes:
+                _book_legal_audit(project, notes, defer)
         try:                            # bookkeeping and advice only; a failure here is logged, never a reason to skip the rest
             fill_agent_model(inp)
             import agentcap                      # R-904: brief budget above the agent type's maxTurns
@@ -322,6 +466,9 @@ def on_pre_tool_use(inp, project, defer=None):
             example_note = agentcap.example_only_warning(inp.get("tool_input"))   # R-929
             if example_note:
                 _context("PreToolUse", example_note)
+            source_note = agentcap.single_source_warning(inp.get("tool_input"))   # R-929 r4
+            if source_note:
+                _context("PreToolUse", source_note)
             import admit
             advice = admit.advice()
             if advice:
@@ -334,6 +481,14 @@ def on_pre_tool_use(inp, project, defer=None):
             sl.log_error("agent start")
         return
     tool_input = inp.get("tool_input") or {}
+    if tool == "AskUserQuestion":       # R-929 r4: advice only; the guards below still run
+        try:
+            import agentcap
+            card_note = agentcap.single_source_warning(tool_input)
+            if card_note:
+                _context("PreToolUse", card_note)
+        except Exception:
+            sl.log_error("card source check")
     cwd = inp.get("cwd") or project or os.getcwd()
     if not inp.get("agent_id") and not inp.get("agent_type"):
         try:
@@ -354,6 +509,8 @@ def on_pre_tool_use(inp, project, defer=None):
         return decision
 
     found = [("verify-forgery", closed("deny", sl.verify_forgery_decision, tool, tool_input, inp.get("agent_type"), cwd))]
+    if tool in ("Bash", "Grep", "Glob"):         # R-1128: no search rooted at /, the home folder or above the project
+        found.append(("search-root", closed("deny", _search_root_decision, tool, tool_input, project, cwd)))
     found.append(("budgit-home", closed("deny", home_decision, tool, tool_input, cwd, inp.get("agent_type"))))
     if str(tool).startswith("mcp__"):            # an MCP file tool is judged like Write for each path it is given
         found.append(("mcp-file", closed("deny", sl.mcp_file_decision, tool, tool_input, project, cwd, inp.get("agent_type"))))
@@ -361,10 +518,22 @@ def on_pre_tool_use(inp, project, defer=None):
         raw = raw_reason(inp)
         found.append(("raw-store", ("deny", raw) if raw else None))
         command = tool_input.get("command") or ""
-        import commitguard                       # R-900: a subagent commits only chained after a test run
+        try:                                     # R-1019: advice only; it never changes the decision below
+            import i18n
+            word = sl.add_dir_prompt_word(command)
+            if word is not None:
+                _context("PreToolUse", i18n.t("guard.add_dir_prompt", word=word if len(word) <= 40 else word[:37] + "..."))
+        except Exception:
+            sl.log_error("add-dir prompt check")
+        import commitguard                      # R-900: a subagent commits only chained after a test run
         found.append(("commit-chain", closed("deny", commitguard.decision, tool, tool_input, inp.get("agent_id"))))
+        import attribution                       # R-940: no Claude trailer in a commit or PR text
+        found.append(("attribution", closed("deny", attribution.decision, tool, tool_input, cwd)))
+        import norm                              # R-988: opt-in "never rm" (off by default; an unreadable config is off)
+        found.append(("no-rm", closed("deny", norm.decision, tool, tool_input, cwd)))
         found.append(("commit-identity", closed("ask", sl.commit_identity_decision, command, cwd)))
         found.append(("approval", closed("ask", sl.approval_decision, command, project, cwd)))
+        found.append(("hook-skip-deny", closed("deny", sl.hook_skip_deny_decision, command)))   # R-1042: --no-verify / core.hooksPath: deny, not ask
         found.append(("hook-bypass", closed("ask", sl.hook_bypass_decision, command)))
     try:                                         # R-433 / R-304: hold in every session; an error here must not stop the other guards
         import writeguard
@@ -385,8 +554,12 @@ def on_pre_tool_use(inp, project, defer=None):
         import denylog
         _away_note("subagent-ask for %s: %s" % (tool, result[1][:300]), "subagent-ask", inp.get("session_id"), project, cwd,
                    fp=denylog.fingerprint(tool, tool_input))      # L4: one entry per session and command
-        result = ("deny", "budgit guard: this call needs the user's yes, which a subagent cannot give. It is queued for your "
-                          "coordinator: report it in your hand-back, do not reword or retry it. | " + result[1][:200])
+        if _read_only_bash(tool, tool_input, project, cwd, [n for n, d in found if d and d[0] == "ask"]):    # R-1119: a read has an allowed route; a write keeps the old text
+            import i18n
+            result = ("deny", i18n.t("guard.subagent_ask_read") + " | " + result[1][:200])
+        else:
+            result = ("deny", "budgit guard: this call needs the user's yes, which a subagent cannot give. It is queued for your "
+                              "coordinator: report it in your hand-back, do not reword or retry it. | " + result[1][:200])
         found = [(n, d) for n, d in found if not (d and d[0] == "ask")] + [("subagent-ask", result)]
     if result and result[0] == "ask" and _away_now():   # R-641: every guard ask becomes a deny while the user is away; a deny stays a deny
         import away
@@ -497,7 +670,7 @@ def on_post_tool_use(inp, project):
                              "answer", ref=inp.get("tool_use_id"))
     if new_id:
         _context("PostToolUse", "budgit: the user's answer was captured as %s — track it "
-                 "(`budgit ledger add --src %s --phase P`, `link` or `ack`)." % (new_id, new_id))
+                 "(`budgit ledger add --src %s --phase P --appetite small|medium|large`, `link` or `ack`)." % (new_id, new_id))
 
 
 def on_stop(inp, project):
@@ -620,16 +793,53 @@ def on_rules_and_questions(inp, project):
     return False
 
 
+def no_protected_line(project):
+    """The warning text when the bound project has a ledger file and nothing is protected (no `protected_dirs` in the config and
+    no `protected_paths` in the project), else None."""
+    import i18n
+    if not os.path.isfile(sl._ledger_path(project)):
+        return None
+    if sl.load_config().get("protected_dirs"):
+        return None
+    if sl.load_project_config(project).get("protected_paths"):
+        return None
+    return i18n.t("start.no_protected")
+
+
+def _extra(label, fn):
+    """-> the tuple of lines `fn` returns, or () after logging to hooks.log when it raises."""
+    try:
+        return tuple(fn())
+    except Exception:
+        sl.log_error(label)
+        return ()
+
+
 def on_session_start(inp, project, held=True):
     import brain
     sid = inp.get("session_id")
     sl.touch_pointer(sid)
     if held:                                      # with a busy lock the summary is read-only; the next start sweeps
         _session_start_writes(inp, project, sid)
-    pointer = brain.session_pointer(project)
-    conflict = sl.data_dir_conflict(project)      # R-120: a stale session recreated .studio next to .budgit
-    _context("SessionStart", sl.session_summary(project, inp.get("session_id"), extra=(pointer, conflict),
-                                                  full=inp.get("source") in ("compact", "resume")))
+    # R-1128: each extra line is its own guarded call. One that raises is logged and dropped; it never reaches main(), whose
+    # "hook error ... enforcement off" path would switch the guards off for the whole turn.
+    pointer = _extra("session-start: brain pointer", lambda: (brain.session_pointer(project),))
+    conflict = _extra("session-start: data dir conflict", lambda: (sl.data_dir_conflict(project),))      # R-120: a stale .studio next to .budgit
+
+    def _digest():                                # the newest stand-up digest, 2 lines at most, once per day
+        import jobs
+        return tuple(jobs.digest_lines()) if held else ()
+    digest = _extra("session-start: stand-up digest", _digest)
+    try:
+        summary = sl.session_summary(project, inp.get("session_id"), extra=pointer + conflict + digest,
+                                     full=inp.get("source") in ("compact", "resume"))
+    except Exception as exc:                      # R-1128: a damaged project file must not reach main()'s "enforcement off" path
+        sl.log_error("session-start: summary")
+        summary = ("budgit: the project file %s cannot be read (%s). Restore it from git (`git log -p -- %s`) or fix the JSON by hand, "
+                   "then start a new session. Budgit's guards stay on." % (
+                       os.path.join(sl.studio_dir(project), "ledger.json"), sl.oneline(str(exc), 120),
+                       os.path.join(sl.studio_dir(project), "ledger.json")))
+    _context("SessionStart", summary)
     if inp.get("source") == "compact":           # R-123: the resumed session is pointed at the checkpoint written before the cut
         try:
             line = checkpoint_line(project, inp.get("session_id"))
@@ -637,6 +847,14 @@ def on_session_start(inp, project, held=True):
                 _context("SessionStart", line)
         except Exception:
             sl.log_error("session-start: checkpoint line")
+    if inp.get("source") == "clear" and project:   # R-930: a cleared (renewed) chat starts its turn from the pending handoff
+        try:
+            import handoff
+            line = handoff.resume_line(project)
+            if line:
+                _context("SessionStart", line)
+        except Exception:
+            sl.log_error("session-start: clear resume")
     try:                                         # R-286 task 4: one line when a decision waits; a failure prints nothing
         import triggers
         due = triggers.session_line(project, source=inp.get("source"))
@@ -660,6 +878,11 @@ def on_session_end(inp, project, held=True):
         if mine:
             sl.save_ledger(project, data)
     sl.end_pointer(sid, mine)
+    try:                                         # R-1032: old agent dumps leave reports/ (moved, never deleted; codex answers and curated names stay).
+        if held and sl.auto_sweep_allowed(project):     # only under the project lock (not in when_busy), never in a protected folder
+            sl.sweep_reports(project)
+    except Exception as exc:
+        _hook_note("session-end: reports sweep failed (%s)" % exc.__class__.__name__)
 
 
 def on_post_compact(inp, project):
@@ -797,8 +1020,49 @@ HANDLERS = {"permission-request": on_permission_request, "user-prompt-submit": o
             "pre-compact": on_pre_compact, "post-tool-use-failure": on_post_tool_use_failure}
 
 
+def _crashed_guard():
+    """The name of the function the exception in flight came from: the innermost traceback frame."""
+    try:
+        tb = sys.exc_info()[2]
+        while tb is not None and tb.tb_next is not None:
+            tb = tb.tb_next
+        return tb.tb_frame.f_code.co_name if tb is not None else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _fallback_after_crash(inp, name):
+    """A guard raised in a pre-tool-use call: run the stdlib fallback's decision on the payload. A deny is emitted; otherwise the
+    call goes through as before. Either way one plain line tells the user only the basic protections are on for this step."""
+    tool = inp.get("tool_name")
+    deny = None
+    try:
+        import hookfallback
+        out = hookfallback.strict_decide("pre-tool-use", inp, hookfallback.GUARD_CAUSE)
+        deny = out.get("hookSpecificOutput")
+    except Exception:
+        sl.log_error("fallback after guard %s" % name)
+        if tool == "Bash" or tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+            deny = {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                    "permissionDecisionReason": "budgit guard: a guard failed and the basic check could not run; stop and report it."}
+    job = os.environ.get("BUDGIT_JOB")
+    if job:                                  # an unattended job in fallback mode skips: jobs._run reads this marker (exit 75)
+        try:
+            sl.atomic_write(os.path.join(sl.home_state(), "job-fallback-" + re.sub(r"[^A-Za-z0-9_-]", "", job)), name + "\n")
+        except Exception:
+            sl.log_error("job fallback marker")
+    if deny:
+        emit({"hookSpecificOutput": deny})
+    try:
+        import i18n
+        emit({"systemMessage": i18n.t("guard.failed", name=name)})
+    except Exception:
+        emit({"systemMessage": "budgit: the guard %s failed and only the basic protections are on for this step (see ~/.budgit/hooks.log)" % name})
+
+
 def main():
     event = sys.argv[1] if len(sys.argv) > 1 else ""
+    inp = None                                     # R-1128 hotfix 1: stays None when the payload cannot be parsed
     try:
         inp = json.load(sys.stdin)
         if os.environ.get("BUDGIT_HOOK_DEBUG") and isinstance(inp, dict) and inp.get("agent_id"):   # R-849: which fields a subagent payload carries
@@ -868,6 +1132,7 @@ def main():
             check = introspect.live_check(inp.get("session_id"), inp.get("transcript_path"))
             if check:
                 _context("UserPromptSubmit", check)
+            legal_prompt_context(inp)   # a tax or legal word in the prompt: advice naming the legal skill, never a block
             import general   # R-373: a prompt asking for text for a person gets the humanize routing, project or not
             route = general.on_prompt(inp)
             if route:
@@ -886,6 +1151,29 @@ def main():
             if note:
                 _context("SessionStart", note)
             if project:
+                try:                                   # R-1128 hotfix 1: ledgers but no protected folder: say so, once per start
+                    import i18n
+                    line = no_protected_line(project)
+                    if line:
+                        stamp = os.path.join(sl.home_state(), "no-protected-" + hashlib.sha1(os.path.realpath(project).encode("utf-8")).hexdigest())
+                        day = str(sl.today_local())
+                        seen = False
+                        try:                           # at most once a day per project; a stamp that cannot be read or written never stops the line
+                            if not os.path.islink(stamp) and os.path.isfile(stamp):
+                                with open(stamp, encoding="utf-8") as fh:
+                                    seen = fh.read().strip() == day
+                        except Exception:
+                            sl.log_error("session-start: no protected stamp read")
+                        if not seen:
+                            emit({"systemMessage": "budgit: " + line})
+                            try:
+                                if not os.path.islink(stamp):
+                                    os.makedirs(sl.home_state(), exist_ok=True)
+                                    sl.atomic_write(stamp, day + "\n")
+                            except Exception:
+                                sl.log_error("session-start: no protected stamp write")
+                except Exception:
+                    sl.log_error("session-start: no protected folders line")
                 try:                                   # R-785: an update brings the checks question to existing projects
                     import checksdetect
                     offer = checksdetect.offer_line(project)
@@ -960,6 +1248,23 @@ def main():
             if raw:
                 _decision("PreToolUse", "deny", raw)
                 return 0
+            if inp.get("tool_name") in ("Grep", "Glob"):        # R-1128: no search rooted at /, the home folder or above the project
+                try:
+                    root_hit = _search_root_decision(inp.get("tool_name"), inp.get("tool_input") or {}, project,
+                                                     inp.get("cwd") or project or os.getcwd())
+                except Exception:               # fail closed, like raw_reason
+                    sl.log_error("guard _search_root_decision")
+                    root_hit = ("deny", "budgit guard: the search-root check could not read this call; stop and report it.")
+                if root_hit:
+                    _decision("PreToolUse", "deny", root_hit[1])
+                    return 0
+            try:                                # R-940: advice only, the read itself is never held back
+                import readhint
+                note = readhint.hint(inp.get("tool_name"), inp.get("tool_input"))
+                if note:
+                    _context("PreToolUse", note)
+            except Exception:
+                sl.log_error("read hint")
             try:
                 rewritten = raw_glob_rewrite(inp)
             except Exception:                   # fail closed, like raw_reason
@@ -1014,9 +1319,12 @@ def main():
                 HANDLERS[event](inp, project)
         if not got:
             when_busy(event, inp, project)
-    except Exception:  # fail open, but never silently: the user must know enforcement is off
-        sl.log_error(event)
-        if event in ("stop", "session-start", "user-prompt-submit", "pre-tool-use", "post-tool-use", "subagent-stop",
+    except Exception:  # never silently; a pre-tool-use guard crash still runs the basic protections (R-1128 hotfix 1)
+        name = _crashed_guard()
+        sl.log_error("guard %s failed in %s" % (name, event) if event == "pre-tool-use" else event)
+        if event == "pre-tool-use" and isinstance(inp, dict):
+            _fallback_after_crash(inp, name)
+        elif event in ("stop", "session-start", "user-prompt-submit", "pre-tool-use", "post-tool-use", "subagent-stop",
                      "post-tool-use-failure"):
             emit({"systemMessage": "budgit: hook error in %s — enforcement off this turn; "
                                    "see ~/.budgit/hooks.log" % event})

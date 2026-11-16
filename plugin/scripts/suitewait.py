@@ -110,7 +110,22 @@ def read_json(path):
 
 def lock_name(name):
     """The project lock's file name: one function, used by `budgit suite --wait` and by tools/budgit_test.py (both front doors)."""
-    return "budgit-suite-%s.lock" % name
+    return "budgit-suite-%s-full.lock" % name       # R-961: only a FULL run takes a lock; a gate run takes none
+
+
+def kind_of(argv):
+    """R-961: "gate" for a run given modules (runtests.py with test_* names, --changed or --files; unittest with names;
+    budgit_test.py without --full), "full" for everything else (discover, --full, an unknown command: locked, the safe side)."""
+    args = [str(a) for a in argv]
+    text = " ".join(args)
+    if "--full" in args or ("discover" in text and " -p " not in text):
+        return "full"
+    named = any(a.startswith(("test_", "tests.test_", "tests/test_")) for a in args) or "--changed" in args or "--files" in args
+    if "budgit_test" in text:
+        return "gate"
+    if "runtests" in text or "unittest" in text:
+        return "gate" if named else "full"
+    return "full"
 
 
 def lock_paths(name, plat=None, env=None):
@@ -343,6 +358,11 @@ def run(argv, name, rank=1, rc=False, plat=None, env=None, busy_fn=None, sleep=t
     """Busy check (no lock held), then the PER-PROJECT lock only (there is no machine-wide lock: §6 retired it), run `argv`,
     release -> the command's exit code. While it waits it prints the holder: pid, command, age and an ETA."""
     plat = plat or sys.platform
+    if kind_of(argv) == "gate":          # R-961: a gate run never waits behind a full suite and holds no lock
+        cmd = niced(argv, rank, plat, which)
+        if runner:
+            return runner(cmd, cwd)
+        return run_awake(cmd, cwd=cwd, plat=plat, which=which, out=out)
     if busy_fn is None:
         import admit
         busy_fn = lambda: admit.is_busy(window=BUSY_WINDOW)

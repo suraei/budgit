@@ -691,7 +691,7 @@ def run(project, kind="review", model=None, timeout=TIMEOUT):
                 _remove(scratch)
         finally:
             _remove(copy)
-    return sl.save_report(project, "codex-" + kind, model or "default", HEADER + answer)
+    return sl.save_report(project, "codex-" + kind, model or "default", HEADER + answer, keep=True)
 
 
 ENTRY = {"autoMode": {"environment": [

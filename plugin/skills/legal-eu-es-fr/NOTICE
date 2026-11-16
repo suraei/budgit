@@ -1,0 +1,16 @@
+legal-eu-es-fr is part of Budgit (MIT). No text, code or data from another project is copied into it.
+
+Ideas it reuses, rewritten in its own words (checked 2026-10-25):
+- Escalation check before answering; GREEN/YELLOW/RED verdicts; "sources searched / unavailable" footer:
+  anthropics/knowledge-work-plugins, plugin `legal` (Apache-2.0), https://github.com/anthropics/knowledge-work-plugins/tree/main/legal
+- Intake interview that writes a profile read by every step; `[verify]` tag on citations from memory:
+  anthropics/claude-for-legal (Apache-2.0), https://github.com/anthropics/claude-for-legal
+- Article URL plus verification date on every citation: Tough-Respawn/claude-legal-skills-france (MIT),
+  https://github.com/Tough-Respawn/claude-legal-skills-france
+- An official identifier counts only when fetched in the session; abstain rather than invent:
+  brissonjo-sudo/droit-francais-skill (idea only; its text is CC BY-SA 4.0 and is not used),
+  https://github.com/brissonjo-sudo/droit-francais-skill
+- Check that a provision is in force before using it: davendra/uk-legal-skills (idea only; FSL licence, text not used),
+  https://github.com/davendra/uk-legal-skills
+
+Legal sources are cited by link and paraphrased; no official text is reproduced beyond short quotes.

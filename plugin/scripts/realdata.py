@@ -67,7 +67,48 @@ _WRITE_WORDS = re.compile(
     r"switch|apply)|sed\s+-[a-z]*i|perl\s+-[a-z]*i|open|write|unlink|rename)(?:$|[^\w])")
 
 
+def collect(command, cwd, project, patterns):
+    """R-1074 phase 0 (read-only, for tests: no guard calls it yet). Judge `command` exactly as judge() does and return
+    ([(path or None, kind, word)], [doubt text]): every write target the reader found, collected BEFORE the protection filter
+    decided anything. `path` is None for a word the guard cannot read. A doubt is never dropped: an unreadable line (for
+    example `cat >(x)`) gives a doubt, never an empty clean list."""
+    ctx = judge(command, project, patterns, cwd)
+    return list(ctx.sink or []), list(ctx.doubts)
+
+
 class Ctx:
+    in_git = False                         # R-1074: true while git() runs, so its targets are kind `git`
+    sink = None                            # R-1074: the write targets found, (path or None, kind, word); see emit()
+
+    def emit(self, path, kind, word):
+        """R-1074 phase 0: collect one write target. It only collects: no decision reads the sink."""
+        if self.sink is None:
+            self.sink = []
+        self.sink.append((path, kind, word))
+
+    def kind_of(self, what):
+        """R-1074: the sink kind of a target() call, from the words its caller gave (`what`)."""
+        if self.in_git:
+            return "git"
+        w = what.lower()
+        if w == "a redirect":
+            return "redirect"
+        if w == "tee":
+            return "tee"
+        if w == "dd":
+            return "dd"
+        if "rsync" in w:
+            return "rsync"
+        if w == "an archive":
+            return "tar"
+        if w == "a move":
+            return "copy-src"
+        if w == "install":
+            return "copy-dest"
+        if w.endswith(" -o") or w.startswith("find -f"):
+            return "option-output"
+        return "other"
+
     def __init__(self, project, patterns, base, session=None, trusted=False):
         self.project, self.patterns, self.base, self.session, self.trusted = project, patterns, base, session, trusted
         self.here = base
@@ -80,6 +121,9 @@ class Ctx:
         self.cd_mode = "lose"              # R-558 r6: how the next cd of this segment moves the folder (move, lose, skip)
         self.verb = ""                     # R-558 r6 (M1): the program being judged; hard-ask memory keys carry it
         self.rsync_rsh = bool(os.environ.get("RSYNC_RSH"))   # R-558 r6: a remote shell set for rsync by the environment
+        self.oor = False                   # R-1077: a word names data (or a folder above it) outside the root, or cannot be placed
+        self.oor_keys = []                 # R-1077: (`oor-read` | `oor-write`, real path): a yes to a read never covers a write
+        self.xargs = False                 # R-1077: the line has xargs: every word of every segment is judged as an operand
         self.above = False                 # R-562: a copy into a folder above the root has a reason to ask
         self.hard = False                  # R-558 r3: a copy verb resolved a write key, or a contents copy that cannot be trusted
         self.raw = ""                      # the whole Bash command (only the top-level context has it)
@@ -105,7 +149,14 @@ class Ctx:
 
     @property
     def harmless(self):
-        return not self.keys and not self.doubts
+        return not self.keys and not self.doubts and not self.oor
+
+    def oor_key(self, klass, path):
+        """R-1077: a path outside the root that the command reads (`oor-read`) or changes (`oor-write`)."""
+        try:
+            self.oor_keys.append((klass, os.path.realpath(path)))
+        except Exception:
+            self.oor_keys.append((klass, str(path)))
 
     @property
     def keyed(self):
@@ -118,9 +169,9 @@ class Ctx:
         except Exception:
             self.keys.append(str(path))
 
-    def doubt(self, why, hard=False):
+    def doubt(self, why, hard=False, oor=False):
         self.doubts.append(why)
-        self.dclass.append("contents" if hard else "")
+        self.dclass.append("contents" if hard else ("oor" if oor else ""))
         self.dverb.append(self.verb or "sh")
         if hard:
             self.hard = True
@@ -154,6 +205,11 @@ def level(word, ctx, base=None):
         if word.startswith("/dev/"):
             word = os.path.normpath(word)                 # a /dev name that climbs out of /dev is a path like any other
         froot = sl._fold(ctx.root)
+        outside = sl._out_of_root_word_level(word, ctx.project, ctx.patterns, base)
+        if outside == "exact":
+            return "exact"                                # R-1077: data a pattern outside the root protects (a glob is judged by what it expands to)
+        if outside == "ancestor":
+            return "ancestor"                             # R-1077: a folder above it, like the in-root ancestor rule
         if set(word) & _GLOB:
             best = None
             for hit in _glob.glob(os.path.join(base, os.path.expanduser(word))):
@@ -165,7 +221,27 @@ def level(word, ctx, base=None):
             if any(not (set(p) & _GLOB) and _fnmatch.fnmatch(sl._fold(p), rel_pat) for p in ctx.patterns):
                 return "exact"
             return best
-        fpath = sl._fold(sl._norm_candidate(word, base))
+        real = sl._norm_candidate(word, base)
+        fpath = sl._fold(real)
+        wt = sl._code_worktree_of(real, ctx.root)         # R-1072: a proven worktree is code; only named patterns apply in it
+        if wt:
+            fwt = sl._fold(wt)
+            rel = fpath[len(fwt) + 1:]
+            if not rel or sl._is_budgit_own(rel):
+                return None
+            for pat in ctx.patterns:
+                fp = sl._fold(pat)
+                if sl._whole_root_pattern(fp, froot) or sl._whole_root_pattern(fp, fwt):
+                    continue
+                if _fnmatch.fnmatch(rel, fp) or (not (set(fp) & _GLOB) and rel.startswith(fp.rstrip("/") + "/")):
+                    return "exact"
+            for pat in ctx.patterns:
+                prefix = sl._fold(_static_prefix(pat))
+                if prefix and prefix == rel and re.fullmatch(r"\**/?", sl._fold(pat)[len(prefix):].lstrip("/")):
+                    return "exact"
+                if prefix and (prefix == rel or prefix.startswith(rel + "/")):
+                    return "ancestor"
+            return None
         if fpath == froot:
             return "root"
         if not fpath.startswith(froot + os.sep):
@@ -308,12 +384,13 @@ def _set_var(name, value, ctx, persist=True):
 _FOUND = "$__FOUND"                                      # what `{}` stands for inside a find -exec command
 
 
-def target(word, ctx, destructive=False, what="a write"):
+def target(word, ctx, destructive=False, what="a write", kind=None):
     """One word that a writer changes. A protected file is a write; a folder that holds protected data (or the project) is
     one only for a destructive verb; a word the guard cannot read is a doubt unless its file name cannot be protected."""
     if _FOUND in word:
         return                                            # `find S -exec chmod x {}`: the start folders are judged by find()
     v = val(word, ctx)
+    ctx.emit(v, kind or ctx.kind_of(what), word)                # R-1074: collected before level() decides anything
     if v is None:
         # R-558 r6: in a lost folder a relative name can be anything, whatever its file name says
         if ctx.lost or not _tail_excludes(word, ctx):
@@ -355,6 +432,9 @@ def strip_heredocs(command):
     return "\n".join(out), bodies, ok
 
 
+_SIDES = ("out", "in")  # R-1074: each of a segment's `outs` is (side, word), never a prefix on the word;                                                     # marks an input redirect target among a segment's `outs`
+
+
 def segments(text):
     """[(words, outs, op_before)] of a shell text: split at ; && || | & ( ) and newlines; the word after each > is a
     redirect target, the word after each < (and << here-document marker) is dropped. None when it cannot be lexed."""
@@ -375,7 +455,7 @@ def segments(text):
             if ">" in tok or "<" in tok:
                 if words and words[-1].isdigit() and tok.startswith(("<", ">")) and want is None:
                     words.pop()
-                want = ">" if ">" in tok else "<"
+                want = ">" if ">" in tok else ("<<" if "<<" in tok else "<")   # `<<` (a here-document marker or string) is no file
                 continue
             if words or outs:
                 segs.append((words, outs, op))
@@ -384,8 +464,10 @@ def segments(text):
             words, outs, want, op = [], [], None, (op + " " + tok).strip()
             continue
         if want == ">":
-            outs.append(tok)
+            outs.append(("out", tok))
         elif want == "<":
+            outs.append(("in", tok))                            # R-1077: the file a `<` reads is judged (redirect() tells it by the mark)
+        elif want == "<<":
             pass
         elif tok not in ("}", "{"):
             words.append(tok)
@@ -568,6 +650,13 @@ def run(command, ctx):
         if segs is None:
             ctx.doubt("a shell form the guard cannot read")
             return
+        for seg_words, _o, _p in segs:                    # R-1077: with xargs on the line, any word may be fed to a verb
+            rest = [w for w in seg_words if w not in _LEAD]
+            while rest and sl._ASSIGN.match(rest[0]):
+                rest = rest[1:]
+            rest = unwrap(rest) if rest else rest
+            if rest and os.path.basename(rest[0]) in ("xargs", "parallel"):
+                ctx.xargs = True
         certain = certain_cd(text, ctx.raw)
         if cd_words(text) > (1 if certain else 0):
             ctx.lost = True                               # R-558 r7: any cd-like word but the one certain cd loses the folder
@@ -601,7 +690,7 @@ def _judge_segment(words, outs, ctx, cd_mode="lose"):
 def _judge_segment_inner(words, outs, ctx, cd_mode="lose"):
     if any(w.startswith("RSYNC_RSH=") for w in words):
         ctx.rsync_rsh = True                              # R-558 r6 (H3): `RSYNC_RSH=env rsync`, `env RSYNC_RSH=x rsync`
-    for w in words + outs:
+    for w in words + [t for _side, t in outs]:
         if "$(" in w:
             subs = inner_substs(w)
             if subs is None:
@@ -609,8 +698,8 @@ def _judge_segment_inner(words, outs, ctx, cd_mode="lose"):
             else:
                 for inner in subs:
                     run(inner, ctx)
-    for t in outs:
-        redirect(t, ctx)
+    for item in outs:
+        redirect(item, ctx)
     while words and words[0] in _LEAD:
         words = words[1:]
     if not words:
@@ -637,6 +726,7 @@ def _judge_segment_inner(words, outs, ctx, cd_mode="lose"):
         if len(words) > 1:
             ctx.known.pop(words[1], None)
             items = words[3:] if words[2:3] == ["in"] else []
+            _out_of_root_list(items, ctx)                  # R-1077: `for f in <data>/*` reads what it lists, whatever the body says
             if items and not any(w.startswith("-") or "$" in w or "`" in w for w in items):
                 ctx.pure.add(words[1])             # R-515: a loop over literal paths or a glob: a file operand, not a flag
             else:
@@ -655,9 +745,11 @@ def _judge_segment_inner(words, outs, ctx, cd_mode="lose"):
     split = any(os.path.basename(w) == "env" for w in words[:2]) and any(
         t == "--split-string" or t.startswith("--split-string=") or (t.startswith("-") and not t.startswith("--") and "S" in t[1:])
         for t in words[1:])
+    raw = words
     words = unwrap(words)
     if not words:
         return
+    _out_of_root_operands(raw, words, ctx)
     before = len(ctx.keys)
     ctx.cd_mode = cd_mode if direct and words[0] == head else "lose"
     command(words, env, ctx)
@@ -666,11 +758,139 @@ def _judge_segment_inner(words, outs, ctx, cd_mode="lose"):
         ctx.hard = True                               # H5: the older scan reads `env -S '<cmd>'` as one word, whatever it runs
 
 
-def redirect(tok, ctx):
+# heads that never open an operand as a file: naming data outside the root to them is not touching it (R-1077)
+_NO_OPEN = {"echo", "printf", "true", "false", ":", "cd", "pushd", "popd", "pwd", "basename", "dirname", "test", "[", "[[",
+            "type", "which", "export", "declare", "local", "readonly", "typeset", "set", "unset", "realpath", "readlink"}
+
+
+_WRITE_MARKERS = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "--delete"}
+_FOLDER_SHORT = ("-C",)
+_FOLDER_LONG = ("--chdir", "--git-dir", "--work-tree", "--directory", "--target-directory", "--cwd")
+
+
+def _oor_class(head, args):
+    """R-1077: `oor-read` for a reader with no option that writes or runs a program, else `oor-write` (the yes memory keeps the
+    two apart: a yes to `grep -r x ~/Library` never covers `rm -rf ~/Library`)."""
+    if head in _READERS and not _reader_hazard(head, args) and not any(a in _WRITE_MARKERS for a in args):
+        return "oor-read"
+    return "oor-write"
+
+
+def _oor_word(part, ctx, walks, klass, primary=True):
+    """R-1077: judge one word. An exact match (or, for a verb that destroys or walks a tree, a folder above the data) is a key
+    of `klass` and sets `ctx.oor`. A relative word after the folder was lost cannot be placed: that is a doubt of its own class,
+    never a skip. A word with a variable the guard cannot read stays with the literal-name scan (named residual: `cat
+    $ACME_DIR/x`). Returns the word's level."""
+    if primary and ctx.lost and part and not part.startswith(("/", "~", "-")) and "$" not in part and "`" not in part:
+        ctx.oor = True
+        ctx.doubt("an operand relative to a folder the guard lost (%s)" % part, oor=True)
+        return None
+    v = val(part, ctx)
+    if not v:
+        return None
+    level = sl._out_of_root_word_level(v, ctx.project, ctx.patterns, ctx.here)
+    if level == "exact" or (level == "ancestor" and walks):
+        ctx.oor = True
+        if ctx.xargs or (ctx.loops and klass == "oor-read"):
+            # the consumer (the xargs command, the loop body) is not followed: a write, and only for this exact line, so a yes to
+            # `ls P | xargs cat` never covers `ls P | xargs rm -rf` (a loop's list and any `<` inside a loop count the same)
+            import hashlib
+            klass = "oor-write:%s:%s" % ("xargs" if ctx.xargs else "for",
+                                         hashlib.sha1((ctx.raw or "").encode("utf-8", "replace")).hexdigest()[:12])
+        ctx.oor_key(klass, os.path.join(ctx.here, v) if set(v) & _GLOB else sl._norm_candidate(v, ctx.here))
+    return level
+
+
+def _folder_words(args, head=""):
+    """[(index, word)] of each folder a command is told to work in: `-C DIR`, `--chdir=DIR`, `--git-dir DIR` ..., and `-d DIR`
+    for unzip (elsewhere `-d` is a flag: `ls -d`). The index is the word's place in `args`; the word is never itself judged as
+    a relative operand."""
+    shorts = _FOLDER_SHORT + (("-d",) if head == "unzip" else ())
+    out = []
+    for i, w in enumerate(args):
+        if w in shorts or w in _FOLDER_LONG:
+            if i + 1 < len(args):
+                out.append((i + 1, args[i + 1]))
+        elif w.startswith("--") and w.partition("=")[0] in _FOLDER_LONG and "=" in w:
+            out.append((i, w.partition("=")[2]))
+        elif not w.startswith("--") and w[:2] in shorts and len(w) > 2:
+            out.append((i, w[2:]))
+    return out
+
+
+def _out_of_root_list(items, ctx):
+    """R-1077: the word list of a `for` or `select` is read: judged like a reader's operands (a folder above the data counts)."""
+    try:
+        if items and sl._out_of_root_patterns(ctx.project, ctx.patterns):
+            for it in items:
+                _oor_word(it, ctx, True, "oor-read")
+    except Exception:
+        ctx.oor = True
+        ctx.doubt("a word list that could not be read against data outside the project", oor=True)
+
+
+def _out_of_root_operands(raw, words, ctx):
+    """R-1077: every word of the command (the wrapper's own words too: `env -C DIR`, `git -C DIR`, `tar -C DIR`), and the value
+    of `--opt=value`, `of=value` or a glued `-CDIR`, that names data a pattern outside the project root protects is a key,
+    whatever the verb: writes and reads alike. Redirect targets go through redirect(). Any error asks (never passes)."""
+    try:
+        head = os.path.basename(words[0])
+        if (head in _NO_OPEN and not ctx.xargs) or not sl._out_of_root_patterns(ctx.project, ctx.patterns):
+            return
+        ctx.verb = head
+        args = raw[1:]
+        walks = ctx.xargs or sl._walks_or_destroys(head, args)
+        klass = _oor_class(head, args)
+        folders = _folder_words(args, head)
+        anchored = False                      # told to work in the data or in a folder above it: relative words are unknown
+        for _, fw in folders:
+            fv = val(fw, ctx)
+            if fv and sl._out_of_root_word_level(fv, ctx.project, ctx.patterns, ctx.here):
+                anchored = True
+        skip = {i for i, _ in folders}
+        for n, w in enumerate(args):
+            parts = [w]
+            if "=" in w and not w.startswith("="):
+                parts.append(w.partition("=")[2])
+            if w.startswith("-") and not w.startswith("--") and len(w) > 2:
+                parts.append(w[2:])
+            for k, part in enumerate(parts):
+                try:
+                    _oor_word(part, ctx, walks or (n in skip), klass, primary=(k == 0 and not w.startswith("-")))
+                except Exception:
+                    ctx.oor = True
+                    ctx.doubt("a word that could not be read against data outside the project (%s)" % part, oor=True)
+            if anchored and n not in skip and w and not w.startswith("-"):
+                wv = val(w, ctx)
+                if wv is None or not wv.startswith(("/", "~")):
+                    ctx.oor = True
+                    ctx.doubt("a word relative to a folder the command was told to work in, which is or holds protected data (%s)" % w,
+                              oor=True)
+    except Exception:
+        ctx.oor = True
+        ctx.doubt("the operands could not be read against data outside the project", oor=True)
+
+
+def redirect(item, ctx):
+    side, tok = item                                      # R-1074: (side, word): `out` for >, `in` for <
+    if side == "in":                                      # R-1077: `< file` reads it
+        try:
+            if sl._out_of_root_patterns(ctx.project, ctx.patterns):
+                _oor_word(tok, ctx, True, "oor-read")
+        except Exception:
+            ctx.oor = True
+            ctx.doubt("an input redirect that could not be read against data outside the project", oor=True)
+        return
     if tok and tok.startswith("/dev/"):
         tok = os.path.normpath(tok)                       # /dev/stdout/../..<root>/data.json is not a device
     if not tok or tok.isdigit() or tok == "-" or tok.startswith("/dev/") or tok.startswith("&"):
         return
+    try:
+        if sl._out_of_root_patterns(ctx.project, ctx.patterns):
+            _oor_word(tok, ctx, True, "oor-write")
+    except Exception:
+        ctx.oor = True
+        ctx.doubt("a redirect that could not be read against data outside the project", oor=True)
     target(tok, ctx, destructive=True, what="a redirect")
 
 
@@ -867,7 +1087,7 @@ def _command(words, env, ctx):
     if head in ("install", "touch", "truncate"):
         for a in args:
             if not a.startswith("-"):
-                target(a, ctx, destructive=True, what="install")
+                target(a, ctx, destructive=True, what="install", kind="copy-dest" if head == "install" else "other")
         return
     if head in _CD_NAMES:
         # R-558 r7: the folder moves only for the shell's own `cd` that run() found certain, with one literal operand;
@@ -1005,6 +1225,7 @@ def writer(head, args, ctx):
     if head == "ln":
         for o in ops:
             v = val(o, ctx)
+            ctx.emit(v, "link", o)                         # R-1074: collected before level() decides anything
             if v is None:
                 if _FOUND not in o and not _tail_excludes(o, ctx):
                     ctx.doubt("ln with a name the guard cannot read")
@@ -1284,6 +1505,10 @@ def copy_move(head, args, ctx):
     deref = any(_dereference(f) for f in flags)
     parents = head == "cp" and any(_long(f, "--parents", 4) for f in flags)
     v = val(dest, ctx)
+    ctx.emit(v, "copy-dest", dest)                           # R-1074: collected before level() decides anything
+    if head != "mv":                                         # a move's sources are targets and go through target()
+        for s in srcs:
+            ctx.emit(val(s, ctx), "copy-src", s)
     if v is None:
         if _FOUND in dest:
             return                                           # find's own start folders are judged by find()
@@ -1555,6 +1780,7 @@ def archive(head, toks, ctx):
             ctx.doubt("an archive extracted with absolute or rewritten member names")
             return
         for d in sl._extract_folders(head, [val(t, ctx) or t for t in toks], [ctx.here]):
+            ctx.emit(d, "tar", d)                          # R-1074: the extraction folder, collected before level() decides
             if level(d, ctx):
                 ctx.write(d)
             elif _above_root(d, ctx) and not (head == "unzip" and any(re.fullmatch(r"-[a-zA-Z]*[ltpvZ][a-zA-Z]*", t)
@@ -1809,6 +2035,14 @@ def _toplevel(workdir):
 
 
 def git(words, env, ctx):
+    saved, ctx.in_git = ctx.in_git, True                   # R-1074: the targets git() finds are kind `git`
+    try:
+        return _git(words, env, ctx)
+    finally:
+        ctx.in_git = saved
+
+
+def _git(words, env, ctx):
     toks = list(words)
     toks[0] = "git"
     at, locs, cvals = sl._git_global_scan(toks)
@@ -1948,12 +2182,15 @@ def memory_keys(ctx):
     path a write reaches, `script:<root>` for a program whose writes cannot be read, `ambiguous:<root>` for a write whose
     target cannot be read, `lost:<root>` when a cd left the folder lost, `contents:<verb>:<root>` and `above:<verb>:<folder>` for the hard asks. A path or class the user did not answer
     for is never covered by another."""
-    keys = ["write:" + sl._fold(p) for p in dict.fromkeys(ctx.keys)]
+    keys = ["write:" + sl._fold(p) for p in dict.fromkeys(ctx.keys)] + \
+        ["%s:%s" % (c, sl._fold(p)) for c, p in dict.fromkeys(ctx.oor_keys)]       # R-1077: the verb class is in the key
     classes = set()
     for why, klass, verb in zip(ctx.doubts, ctx.dclass, ctx.dverb):
         if klass == "above":
             continue                                       # remembered as `above:<verb>:<folder>` below
-        if klass == "contents":
+        if klass == "oor":
+            classes.add("oor-doubt:" + sl._fold(verb))     # R-1077: its own class, per verb; never `ambiguous` or `lost`
+        elif klass == "contents":
             classes.add("contents:" + sl._fold(verb))      # R-558 r6 (M1): a yes to one verb never covers another
         else:
             classes.add("script" if _SCRIPTISH.search(why) else "ambiguous")

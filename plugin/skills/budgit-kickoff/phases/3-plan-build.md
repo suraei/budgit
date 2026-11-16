@@ -1,6 +1,6 @@
 # Phase 3 — Plan, Phase 4 — Build
 - Spikes answer the user's real question with a real case the user would run (sanity-check the example: geography, units,
-  dates), never "does the plumbing answer".
+  dates), never "does the plumbing answer" (seen on an example trip-planner app).
 - Plan: `superpowers:writing-plans` (if not installed: tasks with files, a failing test first, EARS checks) — WHAT + acceptance checks per task, not full function bodies;
   then `budgit:plan-critic` (fresh context) before building. Spikes before commitments; installs,
   migrations, purchases and pushes are explicit steps the user approves.

@@ -291,6 +291,32 @@ def _commit_data(words, dyn):
     return {i for i in out if not dyn[i]}
 
 
+_CURL_DATA_FLAGS = {"-d", "--data", "--data-raw", "--json", "--data-urlencode"}
+
+
+def _curl_data(words, dyn):
+    """R-1114: indices of curl body values (-d/--data/--data-raw/--json/--data-urlencode, also -dTEXT): the text sent, never
+    a path. Not data: a value starting with `@` (a file), a --data-urlencode value with `@` before its first `=`
+    (`name@file`), and any value the shell builds (`dyn`). -T, -F and --data-binary are not in the set: judged as before."""
+    out, i, n = set(), 0, len(words)
+
+    def data(value, flag):
+        if value.startswith("@"):
+            return False
+        return not (flag == "--data-urlencode" and "@" in value.partition("=")[0])
+    while i < n:
+        w = words[i]
+        if w in _CURL_DATA_FLAGS:
+            if i + 1 < n and data(words[i + 1], w):
+                out.add(i + 1)
+            i += 2
+            continue
+        if w.startswith("-d") and not w.startswith("--") and len(w) > 2 and data(w[2:], "-d"):
+            out.add(i)
+        i += 1
+    return {j for j in out if not dyn[j]}
+
+
 def _literal_view(command):
     """The command minus text that is only data: heredoc bodies read by `cat` or `git`, and git commit message
     values (P5 r8 D39). Bodies fed to a shell or interpreter, redirect targets and everything else stay."""
@@ -1107,7 +1133,10 @@ class _TreeScan:
                 for seg in _expansions(bodies[int(m.group(1))]):
                     self.walk(seg, depth + 1)
         self.unrolled = False
+        pre_dyn = list(dyn)                             # R-1114: a body the shell builds stays judged even when the scan folds it
         words, dyn = self.subst(words, dyn)
+        if len(pre_dyn) != len(dyn):
+            pre_dyn = [True] * len(dyn)
         k = self.program(words, depth)
         if k is None:
             return
@@ -1149,8 +1178,8 @@ class _TreeScan:
         if fed and self._recursive(prog, args):
             self.rec_fed = True                         # a recursive reader receives roots from xargs / -exec (r11)
         gl = prog in _READERS or prog in ("for", "select") or used or fed or bool(sl._INTERPRETERS.match(prog))
-        if prog == "git":
-            data = _commit_data(args, adyn)
+        if prog in ("git", "curl"):
+            data = _commit_data(args, adyn) if prog == "git" else _curl_data(args, pre_dyn[k + 1:])
             self.check_args([a for i, a in enumerate(args) if i not in data],
                             [d for i, d in enumerate(adyn) if i not in data], gl)
         elif prog not in _TREE_SHELLS and prog not in ("eval", "cd", "pushd") \

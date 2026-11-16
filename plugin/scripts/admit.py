@@ -84,7 +84,7 @@ def cpu_median(sampler=cpu_sample, sleep=None, window=60, step=5):
     return statistics.median(got) if got else None
 
 
-def is_busy(sampler=None, sleep=None, window=60, free=None, mem=None):
+def is_busy(sampler=None, sleep=None, window=60, free=None, mem=None, pressure_level=None, use_cpu=True, kernel_gate=False):
     """-> (busy, reason). R-889b: memory first, instantly (kernel pressure, compressor, truly free memory); then the CPU
     median over the window from kernel counters (admission.SystemCPU, the ps sum only as fallback), with the swap-in rate
     measured across that same window. A reading that cannot be taken is skipped and the calm reason names it.
@@ -96,13 +96,14 @@ def is_busy(sampler=None, sleep=None, window=60, free=None, mem=None):
         mem = (lambda: {}) if free else admission.mem_reading
     free_now = free() if free else None
     first = mem()
-    why = admission.busy_reason(free_now, None, first)
+    why = admission.busy_reason(free_now, None, first, pressure_level, kernel_gate)
     if why:
         return True, why
     sampler = sampler or admission.SystemCPU(sleep=sleep or time.sleep, fallback=cpu_sample)
     cpu = cpu_median(sampler, sleep, window)
     signals = admission.mem_signals(first, mem())
-    why = admission.busy_reason(None, cpu, signals)
+    # use_cpu=False (scheduled jobs, R-1128 hotfix 1): the CPU reading is never a reason; memory pressure and the swap rate still are
+    why = admission.busy_reason(None, cpu if use_cpu else None, signals, pressure_level, kernel_gate)
     return (True, why) if why else (False, admission.calm_reason(signals, sampler))
 
 
@@ -156,7 +157,9 @@ def decide(m, kind="lane", config=None, share=None):
     def pct(cores_busy):                                  # R-864: the message names CPU % and free memory, never a load average
         return "?" if cores_busy is None else "%.0f" % (cores_busy * 100.0 / n_cores)
     mem = _n(m.get("free_mb"))
-    verdict, reason = GO, t("ad.r_go", cpu=pct(load), mem=mem, busy=_n(m.get("busy")))
+    picture = m.get("mem")                                # a memory picture with no readable signal says so and never refuses
+    blind = isinstance(picture, dict) and not any(picture.get(k) is not None for k in ("pressure", "psi", "winload", "compressor_mb", "free_true_mb"))
+    verdict, reason = GO, t("ad.r_go_blind" if blind else "ad.r_go", cpu=pct(load), mem=mem, busy=_n(m.get("busy")))
     import admission                                      # R-889b: the lane refusal reads the same memory signals as busy
     memory_why = admission.busy_reason(m.get("free_mb"), None, m.get("mem")) if kind == "lane" else None
     short_of_memory = bool(memory_why)

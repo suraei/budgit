@@ -157,7 +157,7 @@ def run(project, kind, text, model=None, timeout=TIMEOUT, now=None):
             raise sl.StudioError("Codex gave no answer (exit %d): %s" % (r.returncode, tail or "no stderr"))
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-    return sl.save_report(project, "codex-" + kind, model or "default", HEADER % (model or "account default") + answer)
+    return sl.save_report(project, "codex-" + kind, model or "default", HEADER % (model or "account default") + answer, keep=True)
 
 
 REVIEW_FRESH_S = 2 * 3600

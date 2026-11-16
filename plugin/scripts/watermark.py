@@ -77,7 +77,23 @@ def _target(repo):
     hooks = _git(top, "rev-parse", "--git-path", "hooks")
     hooks = hooks if os.path.isabs(hooks) else os.path.join(top, hooks)
     blocked = "core.hooksPath is set" if _git(top, "config", "--get", "core.hooksPath") else None
-    return top, hooks, os.path.join(hooks, "commit-msg"), blocked
+    return top, hooks, _slot(os.path.join(hooks, "commit-msg")), blocked
+
+
+R1042_MARK = "# budgit-githook commit-msg"
+
+
+def _slot(commit_msg):
+    """R-1046: where the watermark hook lives. The R-1042 hook (`budgit githooks install`) owns commit-msg and runs
+    commit-msg.local first, so when it is at commit-msg the watermark hook is commit-msg.local; else commit-msg itself."""
+    if not os.path.islink(commit_msg) and os.path.isfile(commit_msg):
+        try:
+            with open(commit_msg, encoding="utf-8", errors="replace") as f:
+                if R1042_MARK in f.read(400):
+                    return commit_msg + ".local"
+        except OSError:
+            pass
+    return commit_msg
 
 
 def _ours(path):

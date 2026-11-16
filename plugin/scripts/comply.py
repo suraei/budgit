@@ -174,7 +174,7 @@ def audit(main_path, level=None, project=None, registry=None):
         r["project"] = project
         r["untracked_inputs"] = len(sl.untracked(project, sl.load_ledger(project), session=sid))
         reports = " ".join(sl.recent_reports(project, n=10000))
-        # saved = a report under .budgit/reports (SubagentStop hook) OR the agent wrote research/*.md itself
+        # saved = a dump under .budgit/archive/agent-dumps/<date>/ or a report under .budgit/reports (SubagentStop hook) OR the agent wrote research/*.md itself
         r["research_unsaved"] = sum(1 for aid, kind, _, wrote in subs
                                     if kind.endswith("researcher") and not wrote and aid[:8] not in reports)
     return r

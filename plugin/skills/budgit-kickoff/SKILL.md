@@ -31,7 +31,7 @@ reference/ledger.md). Record `CORRECTION #n` + root cause whenever the user corr
   the base/structure, ≤5 ledger items, runnable end to end (one real flow + one command to start it). Tag them
   `budgit ledger phase mvp R-n …`; build the walking skeleton FIRST and show it running to the user. Until the MVP
   ships, every new idea, research angle, polish or tool improvement — yours, an agent's or the user's — is parked:
-  `budgit ledger add … --phase later` / `budgit ledger phase later R-n`, never started (the user's explicit "do it now" is the
+  `budgit ledger add … --phase later --appetite small` / `budgit ledger phase later R-n`, never started (the user's explicit "do it now" is the
   only override). `budgit status` and the session start show «MVP n/m»; `ledger set R-n doing` on a non-MVP item
   warns — stop and park it. Resuming a project without MVP tags → define them before any other work.
   Same for fixes: a review that keeps finding issues is closed after ≤3 rounds with the residual risk named to
@@ -39,7 +39,7 @@ reference/ledger.md). Record `CORRECTION #n` + root cause whenever the user corr
 - **Budgit-level topics are not yours:** backups, storage, tooling, process, plugins, settings →
   check `<hub>/.budgit/research/` (older hubs: `<hub>/research/`, until `budgit hub --move-research`) + `<hub>/docs/research/` + `<hub>/docs/decisions/`; not covered → write
   `<hub>/lessons/inbox/<date>-<project>-<slug>.md` and tell the user. Never research or
-  ask the user about them in parallel. Never edit Budgit files yourself.
+  ask the user about them in parallel. Never edit Budgit files yourself, except `.budgit/progress.md`, which you rewrite in place.
 - **The user's weekly limit is finite:** research via `budgit:researcher` (sonnet), one agent per
   angle, reuse saved research first, announce heavy runs.
 - **New host surface or platform API:** a mod band, a desktop pane, a vendor API you have not used. Before the first
@@ -48,7 +48,7 @@ reference/ledger.md). Record `CORRECTION #n` + root cause whenever the user corr
   screen gets a probe that logs instead.
 - **Verify online, never from memory** (versions, APIs, prices, "best tool"). Never call a source "blocked"
   until its technique ladder was tried (public JSON → maintained library → real browser on the user's machine → other
-  resellers of the same data → mobile API) and ≥3 sources per category were checked. **Wide first, then deep;
+  resellers of the same data → mobile API) and ≥3 sources per category were checked (measured on an example trip-planner app). **Wide first, then deep;
   ≥2 angles agree before offering options on a decision-critical fact.** Persist every finding
   with URL + date in `.budgit/research/` — agent reports vanish.
 - **Context is the main cost (measured: 69% of a week's spend at >400k context/call).** One topic
@@ -60,7 +60,7 @@ reference/ledger.md). Record `CORRECTION #n` + root cause whenever the user corr
   per agent); give line ranges / grep targets, never "read app.js"; no twin A/B critics on the same
   artefact. A brief with >4 deliverables or an exhaustive per-row judgement is split into sequential agents
   (build → wire → verify), and every brief states a hard stop ("at 55 calls commit and report what is left")
-  — agents in a pilot project ran 91–92 calls on 60-call briefs. Files >1500 lines that agents re-read are a cost bug → split them.
+  — agents on an example game ran 91–92 calls on 60-call briefs. Files >1500 lines that agents re-read are a cost bug → split them.
   Check with `python3 <hub>/tools/tokens/tokens.py --agents` when the hub has it. Until a big file is split, give the agent its outline
   (`python3 <hub>/tools/index/fnindex.py FILE`, generated on demand) and have it read only the line ranges it needs.
 - **Budget level (automatic; `budgit budget`):** ample · normal · tight · critical, from the user's plan limits'

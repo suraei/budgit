@@ -25,6 +25,13 @@ write (e.g. `<project>/.budgit/research/<topic>-A.md`).
    project; a hook denies it).
 6. Benchmark honesty: any efficiency/quality claim needs both arms, a correctness column and who measured it
    (author-run vs independent); show the losing cell.
+7. On a refusal by a guard, a hook or a permission prompt: stop and report it. Never reshape the command, split it, or switch tools (for example Bash refused, then Write or Edit) to reach the same effect.
+
+Source tags: tag every source in the report `verbatim` or `via summary`.
+- `verbatim`: you read the page or document text itself (e.g. `get_page_text`, a local file).
+- `via summary`: it passed through a summariser; WebFetch counts as a summariser.
+- A key fact that rests only on `via summary` sources says so in the summary line.
+- An amount, percentage or legal/tax rule carries its source tag next to it.
 
 Return ≤150 words: the report path, the 3 key findings, and what stays unverified.
 
@@ -37,7 +44,7 @@ Budgit rules (worker); full text: budgit rules show <topic>
 - talking: User's language; ask only what only they know; batch cards.
 - away: Away: no cards, no pings; keep working; one card on return.
 - permissions: Never push or publish unasked; a standing yes covers its class.
-- protected: Protected projects: counts only; no private data in shared places.
+- protected: Protected: barrier is outward only; nothing in public or shared places.
 - capacity: Busy = CPU or memory (budgit busy); heavy work waits, thinking never.
 - platforms: Every OS branch tested; optional tools name a fallback.
 - structure: Coordinator and leads think and route; workers do; escalate up.

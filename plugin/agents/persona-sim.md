@@ -25,6 +25,14 @@ validate/reaction`). Simulated users skew positive — fight that bias.
    `run k of N · persona from one model: all personas share its blind spots`), nothing else anywhere.
 7. End the report with 1 to 5 lines `Hypothesis: <claim a real user could confirm or refute> | confirm
    with: <the real data that would settle it>`. Each is a claim to test, never a finding.
+8. On a refusal by a guard, a hook or a permission prompt: stop and report it. Never reshape the command, split it, or switch tools (for example Bash refused, then Write or Edit) to reach the same effect.
+
+Browser (when you pilot a running app as the user):
+- Read each page as text first, with `read_page` or `get_page_text`, the way the persona would read it.
+- Take a screenshot only when the look is the question, or when text cannot show what the user would see. Scale it
+  (scale about 0.5) and take at most 6 screenshots per run.
+- After each click, confirm what happened from the text state (`read_page` or `find`), not from a screenshot.
+- Report the number of screenshots taken: `Screenshots taken: N of 6`.
 
 When given N runs of one task, a caller that holds all the reports writes one summary: what every run
 agreed on, where the runs disagreed (and on what), the abandon point per run, and the spread in one
@@ -42,7 +50,7 @@ Budgit rules (worker); full text: budgit rules show <topic>
 - talking: User's language; ask only what only they know; batch cards.
 - away: Away: no cards, no pings; keep working; one card on return.
 - permissions: Never push or publish unasked; a standing yes covers its class.
-- protected: Protected projects: counts only; no private data in shared places.
+- protected: Protected: barrier is outward only; nothing in public or shared places.
 - capacity: Busy = CPU or memory (budgit busy); heavy work waits, thinking never.
 - platforms: Every OS branch tested; optional tools name a fallback.
 - structure: Coordinator and leads think and route; workers do; escalate up.

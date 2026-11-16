@@ -322,6 +322,150 @@ def interim_text(inp):
     return ""
 
 
+# ---- the ready claim: "ready", "complete", "correct" about outward work needs an independent check from today ------------------
+# Scope: only a project whose `.budgit/project.json` lists `protected_paths` (the marker the real-data guard relies on). Trigger:
+# a ready or completeness word in Spanish, English or French, whole word, case-folded, unless a negation stands in the same clause.
+# Pass: a verify file that `verifyfile.check` accepts, with the reply stating its exact N and M. Blocks once per user turn, with no
+# time window; the rest of that turn it only leaves a note.
+
+_READY_WORDS = re.compile(
+    r"(?<![\w-])(?:"
+    r"listos?|(?:est[aá]n?|estamos|ya|todo)\s+list[oa]s?|list[oa]s?\s+para|"
+    r"(?:est[aá]n?|todo|ya)\s+(?:terminad|completad)[oa]s?|"
+    r"(?:ya\s+)?puedes\s+(?:enviar|presentar|firmar|pagar|validar|mandar)|"
+    r"est[aá]\s+todo|(?:est[aá]n?|es|todo)\s+complet[oa]s?|sin\s+errores|todo\s+correcto|"
+    r"todo\s+hecho|ya\s+est[aá]\s+hecho|all\s+done|tout\s+est\s+fait|"
+    r"revisad[oa]s?|verificad[oa]s?|ok\s+para\s+enviar|"
+    r"ready(?:\s+(?:to|for)\s+(?:send|sending|file|filing|pay|payment|sign|signing|submit|submission|submit))?|all\s+set|"
+    r"(?:is|are|now|fully|all|it['’]s|that['’]s|looks|seems)\s+(?:complete|completed)|verified|"
+    r"nothing\s+(?:is\s+)?missing|no\s+errors|"
+    r"pr[eê]t(?:e|s|es)?(?:\s+[àa]\s+\w+)?|tout\s+est\s+pr[eê]t|c['’]est\s+complet|v[ée]rifi[ée]e?s?"
+    r")(?![\w-])", re.I)
+_CLAUSE = re.compile(r"[.;:!?,\n—]|\s(?:pero|but|mais|aber|sino)\s", re.I)
+_NEGATION = re.compile(
+    r"(?<![\w-])(?:no|ni|nunca|jam[aá]s|not|never|nothing\s+is\s+ready|ne|pas|jamais|nicht)(?![\w-])|n['’]t(?![\w])|(?<![\w-])n['’]", re.I)
+
+
+def _ready_hit(text):
+    """True when the prose holds a ready or completeness word that no negation in its clause cancels."""
+    import humanizelint
+    masked = _blank_indented(humanizelint.mask(_window(text)))
+    for clause in _CLAUSE.split(masked):
+        for m in _READY_WORDS.finditer(clause):
+            if m.group(0).lower().startswith(("nothing", "no errors")) or not _NEGATION.search(clause):
+                return True
+    return False
+
+
+def _marked(project):
+    import studiolib as sl
+    return bool(sl.load_project_config(project).get("protected_paths"))
+
+
+def _verified(project, reply, session):
+    import studiolib as sl
+    import verifyfile
+    root = sl.main_project_root(project)
+    seen = set()
+    for folder in sl.verify_dirs(project):
+        if folder in seen or not os.path.isdir(folder):
+            continue
+        seen.add(folder)
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError:
+            continue                                        # one unreadable folder never hides the others
+        for name in names:
+            if name.endswith(".md") and verifyfile.check(os.path.join(folder, name), root, session, reply=reply)[0]:
+                return True
+    return False
+
+
+def ready_claim(project, text, session, lang=None, active=False, turn=None):
+    """Stop, every session. -> (reason, note): `reason` blocks the turn once per user turn (`turn` is `turn_key(inp)`; in the user's language), `note` is the system message
+    when the turn is let go. (None, None) for an unmarked project, a reply without a ready word, or a passing verify file. Fails open."""
+    try:
+        if not project or not isinstance(text, str) or not _marked(project) or not _ready_hit(text):
+            return None, None
+        if _verified(project, text, session):
+            return None, None
+        import i18n
+        lang = lang if lang in i18n.LANGS else i18n.detect()
+        if callable(turn):                                  # computed only now: marker, word hit and a failed check come first
+            turn = turn()
+        if turn is None:                                    # no transcript: one block per distinct text
+            turn = "text:" + hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:16]
+        if active or _turn_seen(session, turn):
+            return None, i18n.t("ready.note", lang)
+        return i18n.t("ready.reason", lang), None
+    except Exception:
+        return None, None
+
+
+def turn_key(inp):
+    """A key for the user's current turn: a hash of the last real user entry's uuid (its timestamp when it has none) plus its text,
+    so the same prompt typed in two turns still gives two keys. None when the transcript cannot be read."""
+    try:
+        path = inp.get("transcript_path")
+        if not isinstance(path, str):
+            return None
+        for entry in reversed(_raw_tail(path)):
+            message = entry.get("message") if isinstance(entry, dict) and not entry.get("isSidechain") else None
+            if not isinstance(message, dict) or (message.get("role") or entry.get("type")) != "user":
+                continue
+            content = message.get("content")
+            blocks = [{"type": "text", "text": content}] if isinstance(content, str) else \
+                [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+            if any(b.get("type") == "tool_result" for b in blocks):
+                continue
+            prompt = _texts(blocks)
+            if prompt:
+                ident = entry.get("uuid") or entry.get("timestamp") or ""
+                return "turn:" + hashlib.sha1((str(ident) + "\0" + prompt).encode("utf-8", "replace")).hexdigest()[:16]
+        return None
+    except Exception:
+        return None
+
+
+def _raw_tail(path):
+    """The parsed transcript lines in the last TAIL_BYTES; [] on any problem."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - TAIL_BYTES))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+def _turn_seen(session, turn):
+    """True when this chat was already blocked in this turn (or the state cannot be kept); otherwise records the turn and returns False.
+    A new turn is blocked again at once: there is no time window."""
+    import studiolib as sl
+    if not sl.valid_session(session):
+        return True
+    path = _cooldown_path(session, ".ready")
+    try:
+        with open(path, encoding="utf-8") as f:
+            if json.load(f).get("turn") == turn:
+                return True
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        sl.atomic_write(path, json.dumps({"turn": turn}) + "\n")
+    except OSError:
+        return True
+    return False
+
+
 def _count(found):
     """Counts only, never the text: a small json in the machine state folder, read by the retro pass."""
     try:

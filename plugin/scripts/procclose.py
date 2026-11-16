@@ -10,13 +10,17 @@ so no `kill` allow rule is needed. Without CLAUDE_ENV_FILE support nothing carri
 (the fall-back is said in the log, never a guess). Windows cannot read another process's environment: it reads no table.
 """
 import calendar
+import datetime
 import json
+import math
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import time
+import uuid
 
 import studiolib as sl
 
@@ -245,20 +249,328 @@ def descendants(table, pid):
 def orphans(table, now, min_age_s, exclude):
     """Marker-carrying processes of any session whose parent is gone (ppid 1) and that are old enough. An external-review
     child (R-889a: owner tagged `extreview:`) has a wrapper that always waits for it, so ppid 1 means the wrapper died:
-    it is closed after EXT_ORPHAN_MIN_AGE_S, not after the daily threshold."""
+    it keeps its own EXT_ORPHAN_MIN_AGE_S (60 s) threshold, not the daily one. The MIN_AGE_FLOOR_S (600 s) floor applies
+    only to the sweep's --min-age-s and the config value, never to this extreview threshold."""
     return [r for r in table if r["owner"] and r["ppid"] == 1 and r["pid"] not in exclude
             and now - r["start"] >= (EXT_ORPHAN_MIN_AGE_S if r["owner"].startswith(EXT_OWNER_PREFIX) else min_age_s)]
 
 
+# ---------------------------------------------------------------- the hold list (R-1095)
+# The user's later, specific answer overrides the general standing yes: a process the user kept on purpose is never closed until the
+# hold expires. An entry needs the user's quoted words, the note it came from and an expiry at most MAX_HOLD_DAYS away.
+MAX_HOLD_DAYS = 14
+_PORT_ARG = re.compile(r"(?:^|\s)(?:--port(?:=|\s+)|-p\s+)(\d+)(?=\s|$)")
+
+
+def holds_path():
+    return os.path.join(sl.home_state(), "procs-hold.json")
+
+
+MIN_AGE_FLOOR_S = 600                 # an orphan younger than this is never closed, whatever is asked or configured
+
+
+class HoldsError(OSError):
+    """The holds file exists but cannot be trusted. Never read as "no holds": the callers close nothing."""
+
+
+def esc(text):
+    """Control characters (newline, escape, NUL) shown as escapes, so words can never forge a log or screen line."""
+    return repr(str(text))[1:-1]
+
+
+def check_min_age(value):
+    """-> the age in seconds as a float; ValueError (with a message to show) unless it is finite and at least MIN_AGE_FLOOR_S."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("--min-age-s must be a number of seconds, got %s" % esc(value))
+    if not math.isfinite(v) or v < MIN_AGE_FLOOR_S:
+        raise ValueError("--min-age-s must be a finite number of at least %d seconds, got %s" % (MIN_AGE_FLOOR_S, esc(value)))
+    return v
+
+
+SRC_RE = re.compile(r"I-[0-9]+")
+ID_RE = re.compile(r"[0-9a-f]{32}")
+MAX_PORT_SPAN = 100
+
+
+def _date(text):
+    """A full ISO date YYYY-MM-DD, nothing before or after it (no slicing)."""
+    if not isinstance(text, str) or len(text) != 10:
+        raise ValueError("not a full ISO date")
+    return datetime.date.fromisoformat(text)
+
+
+def _validate_entry(e):
+    """Raise ValueError unless the entry has a 32-hex id, the user's words, an I-n, a kind with a usable value, an `added` date not
+    after today and an expiry within MAX_HOLD_DAYS of it (both full ISO dates)."""
+    if not isinstance(e, dict):
+        raise ValueError("an entry is not an object")
+    if not isinstance(e.get("id"), str) or not ID_RE.fullmatch(e["id"]):
+        raise ValueError("an entry has no valid id")
+    if e.get("kind") not in ("pid", "port"):
+        raise ValueError("an entry has no valid kind")
+    if not isinstance(e.get("words"), str) or not e["words"].strip():
+        raise ValueError("an entry has no words")
+    if not isinstance(e.get("src"), str) or not SRC_RE.fullmatch(e["src"]):
+        raise ValueError("an entry has no I-n src")
+    try:
+        added, until = _date(e.get("added")), _date(e.get("expires"))
+    except ValueError:
+        raise ValueError("an entry has no valid added or expires date")
+    if added > _today():
+        raise ValueError("an entry was added in the future")
+    if (until - added).days > MAX_HOLD_DAYS:
+        raise ValueError("an entry lasts more than %d days" % MAX_HOLD_DAYS)
+    if e["kind"] == "port":
+        if not _parse_port_range(e.get("value")):
+            raise ValueError("an entry has a bad port")
+    else:
+        try:
+            int(e["value"])
+            start = e["start"]
+            if isinstance(start, bool) or not isinstance(start, (int, float)) or not math.isfinite(start):
+                raise ValueError("start is not a finite number")
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("an entry has a bad pid or start time")
+
+
+def _read_holds():
+    """The entries. [] only when the file does not exist; anything else wrong with it raises HoldsError."""
+    path = holds_path()
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return []
+    except OSError as e:
+        raise HoldsError("cannot stat %s: %s" % (path, e))
+    if stat.S_ISLNK(st.st_mode):
+        raise HoldsError("%s is a symlink" % path)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as e:
+        raise HoldsError("cannot read %s: %s" % (path, e))
+    if not isinstance(data, list):
+        raise HoldsError("%s is not a list" % path)
+    for e in data:
+        try:
+            _validate_entry(e)
+        except ValueError as err:
+            raise HoldsError("%s: %s" % (path, err))
+    return data
+
+
+def _parse_port_range(value):
+    m = re.fullmatch(r"(\d{1,5})(?:-(\d{1,5}))?", str(value).strip())
+    if not m:
+        return None
+    lo = int(m.group(1))
+    hi = int(m.group(2) or lo)
+    return (lo, hi) if 1 <= lo <= hi <= 65535 and hi - lo + 1 <= MAX_PORT_SPAN else None
+
+
+def _today(today=None):
+    import datetime
+    return today or datetime.date.today()
+
+
+def _split(entries, today):
+    live, gone = [], []
+    for e in entries:
+        (live if _date(e["expires"]) >= today else gone).append(e)
+    return live, gone
+
+
+def active_holds(today=None):
+    """-> (the entries still in force, the expired ones). Raises HoldsError when the file cannot be trusted."""
+    return _split(_read_holds(), _today(today))
+
+
+def session_id():
+    for var in (OWNER_VAR, "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        v = re.sub(r"[^A-Za-z0-9_.:-]", "", os.environ.get(var) or "")
+        if v:
+            return v
+    return "unknown"
+
+
+def _locked_update(change):
+    """Read, `change(entries) -> (new entries or None, result)` and replace, all inside one flock. The lock file is opened
+    without following a symlink, the new file is a mkstemp in the same folder (mode 0600) moved over the old one."""
+    import fcntl
+    import tempfile
+    path = holds_path()
+    folder = os.path.dirname(path)
+    os.makedirs(folder, exist_ok=True)
+    lk = os.open(path + ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        new, result = change(_read_holds())
+        if new is not None:
+            fd, tmp = tempfile.mkstemp(dir=folder, prefix="procs-hold.", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(new, f, indent=2)
+                os.chmod(tmp, 0o600)
+                os.replace(tmp, path)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        return result
+    finally:
+        os.close(lk)
+
+
+def report_expired(today=None):
+    """Say each expired hold once (marks it `reported` under the lock, logs it) -> the lines. [] when there is no file."""
+    try:
+        os.lstat(holds_path())
+    except FileNotFoundError:
+        return []
+    today, lines = _today(today), []
+
+    def change(entries):
+        gone = _split(entries, today)[1]
+        changed = False
+        for e in entries:
+            if e in gone and not e.get("reported"):
+                lines.append("hold expired and no longer protects: %s %s (%s) until %s «%s»" % (
+                    esc(e["kind"]), esc(e["value"]), esc(e["src"]), esc(e["expires"]), esc(e["words"])))
+                e["reported"], changed = True, True
+        return (entries if changed else None), None
+    _locked_update(change)
+    for line in lines:
+        log(line)
+    return lines
+
+
+def _unreadable(err):
+    """Said loudly, in the log and on stderr; the caller then signals nothing."""
+    msg = "holds file unreadable; nothing closed (%s)" % esc(err)
+    log("procclose: " + msg)
+    sys.stderr.write("budgit: " + msg + "\n")
+
+
+def add_hold(kind, value, words, src, until, today=None, reader=None, me=None):
+    """Validate and store one hold -> (True, entry) or (False, why)."""
+    today = _today(today)
+    if kind not in ("pid", "port"):
+        return False, "kind must be pid or port"
+    if not str(words or "").strip():
+        return False, "a hold needs the user's quoted words (--words)"
+    if not SRC_RE.fullmatch(str(src or "").strip()):
+        return False, "a hold needs the note it came from (--src I-n)"
+    try:
+        exp = datetime.date.fromisoformat(str(until))
+    except ValueError:
+        return False, "--until must be YYYY-MM-DD"
+    if exp < today:
+        return False, "--until is already past"
+    if (exp - today).days > MAX_HOLD_DAYS:
+        return False, "a hold lasts at most %d days" % MAX_HOLD_DAYS
+    entry = {"kind": kind, "words": str(words).strip(), "src": str(src).strip(), "expires": exp.isoformat(),
+             "added": today.isoformat(), "id": uuid.uuid4().hex}
+    table = (reader or read_table)()
+    if kind == "port":
+        rng = _parse_port_range(value)
+        if not rng:
+            return False, "port must be N or LO-HI, within 1..65535 and at most %d ports wide" % MAX_PORT_SPAN
+        if not any(rng[0] <= int(n) <= rng[1] for r in table for n in _PORT_ARG.findall(r.get("command") or "")):
+            return False, ("no running process names this port in its command line; a port set by env or config cannot be held, "
+                           "hold the pid")
+        entry["value"] = "%d-%d" % rng if rng[0] != rng[1] else rng[0]
+    else:
+        try:
+            pid = int(value)
+        except (TypeError, ValueError):
+            return False, "pid must be a number"
+        if pid <= 1:
+            return False, "pid %d cannot be held: it would cover every orphan" % pid
+        if pid in ancestors(table, os.getpid() if me is None else me):
+            return False, "pid %d is the caller or one of its ancestors" % pid
+        row = next((r for r in table if r["pid"] == pid), None)
+        if not row:
+            return False, "pid %d is not running, so its start time cannot be recorded" % pid
+        entry["value"], entry["start"] = pid, row["start"]
+    _locked_update(lambda entries: (entries + [entry], None))
+    log("hold added id=%s session=%s %s %s until %s (%s) words=«%s»" % (
+        esc(entry["id"]), esc(session_id()), esc(kind), esc(entry["value"]), esc(entry["expires"]), esc(entry["src"]),
+        esc(entry["words"])))
+    return True, entry
+
+
+def remove_hold(hold_id, words, src):
+    """Remove the hold with this stable id (never a list position) -> True, or False when no entry has it. Logged."""
+    if not str(words or "").strip():
+        raise ValueError("removing a hold needs --words")
+    if not SRC_RE.fullmatch(str(src or "").strip()):
+        raise ValueError("removing a hold needs --src I-n")
+    removed = []
+
+    def change(entries):
+        keep = [e for e in entries if e.get("id") != hold_id]
+        removed.extend(e for e in entries if e.get("id") == hold_id)
+        return (keep if removed else None), None
+    _locked_update(change)
+    for e in removed:
+        log("hold removed id=%s session=%s %s %s (%s) removed with src=%s words=«%s»" % (
+            esc(hold_id), esc(session_id()), esc(e["kind"]), esc(e["value"]), esc(e["src"]), esc(src), esc(words)))
+    return bool(removed)
+
+
+def hold_matches(entry, row):
+    if entry.get("kind") == "pid":
+        try:
+            return row["pid"] == int(entry["value"]) and abs(row["start"] - float(entry["start"])) <= START_TOLERANCE_S
+        except (KeyError, TypeError, ValueError):
+            return False
+    rng = _parse_port_range(entry.get("value"))
+    return bool(rng) and any(rng[0] <= int(n) <= rng[1] for n in _PORT_ARG.findall(row.get("command") or ""))
+
+
+def held_map(table, holds):
+    """{pid: hold} for every process a hold matches and every descendant of one."""
+    out = {}
+    for r in table:
+        for h in holds:
+            if hold_matches(h, r):
+                out[r["pid"]] = h
+                for d in descendants(table, r["pid"]):
+                    out.setdefault(d["pid"], h)
+                break
+    return out
+
+
+def hold_of(table, row, held):
+    """The hold covering `row` or any of its descendants, else None."""
+    if row["pid"] in held:
+        return held[row["pid"]]
+    return next((held[d["pid"]] for d in descendants(table, row["pid"]) if d["pid"] in held), None)
+
+
 # ---------------------------------------------------------------- the closer
-def close(targets, reader=read_table, kill=os.kill, killpg=os.killpg, sleep=time.sleep, wait_s=WAIT_S, me=None, only_marked=False):
+def close(targets, reader=read_table, kill=os.kill, killpg=os.killpg, sleep=time.sleep, wait_s=WAIT_S, me=None, only_marked=False, holds=None):
     """Terminate `targets` (rows read earlier): process groups first, a bounded wait, then SIGKILL. Each pid is re-read
     first and skipped when its start time changed (pid reuse) or its marker is gone. A group is signalled as a group only when
     every member of it in the fresh table is a target, so an unmarked neighbour never dies with it. -> the rows closed."""
     me = os.getpid() if me is None else me
     fresh = reader()
     safe = ancestors(fresh, me)
-    live = [t for t in targets if any(same(t, f) and f["owner"] and f["pid"] not in safe for f in fresh)]
+    get_holds = (lambda: holds) if holds is not None else (lambda: active_holds()[0])
+    try:
+        held = held_map(fresh, get_holds())        # R-1095: the user's hold wins; re-read right before each signal phase
+    except HoldsError as e:                        # an untrusted holds file: signal nothing
+        _unreadable(e)
+        return []
+    live = [t for t in targets if any(same(t, f) and f["owner"] and f["pid"] not in safe for f in fresh)
+            and hold_of(fresh, t, held) is None]
     kids = {}
     for f in fresh:
         kids.setdefault(f["ppid"], []).append(f)
@@ -308,8 +620,13 @@ def close(targets, reader=read_table, kill=os.kill, killpg=os.killpg, sleep=time
         sleep(0.05)
     again = reader()                  # pids and group ids can be reused during the wait: KILL only what still matches
     by = {f["pid"]: f for f in again}
+    try:
+        held = held_map(again, get_holds())
+    except HoldsError as e:                        # the file went bad since TERM: no SIGKILL
+        _unreadable(e)
+        return live
     survivors = [by[t["pid"]] for t in tree if t["pid"] in by and same(t, by[t["pid"]]) and t["pid"] not in safe
-                 and (not only_marked or by[t["pid"]]["owner"])]
+                 and t["pid"] not in held and (not only_marked or by[t["pid"]]["owner"])]
     send(signal.SIGKILL, survivors, again)
     return live
 
@@ -438,7 +755,15 @@ def on_subagent_stop(inp, reader=read_table, **kw):
     start, cmds = transcript_facts(path)
     table = reader()
     check_blind(table)
-    left = agent_leftovers(table, sid, start, cmds, ancestors(table, kw.get("me") or os.getpid()))
+    safe = ancestors(table, kw.get("me") or os.getpid())
+    left = agent_leftovers(table, sid, start, cmds, safe)
+    import suitejobs                                  # R-1101: a suite job the agent started is its child too, even though it was not backgrounded in Bash
+    try:
+        jobs = suitejobs.live_jobs(table, sid, start, safe)
+    except Exception as exc:                          # fail CLOSED: jobs that cannot be read still block the stop, with the remedy
+        log("subagent gate: suite jobs unreadable (%s)" % esc(str(exc)[:120]))
+        jobs = [{"pid": -1, "job": "<job id>", "command": "", "start": 0, "owner": sid}]
+    left += [r for r in jobs if r["pid"] not in {x["pid"] for x in left}]
     state = _state_path(inp.get("agent_id") or path)
     if not left:
         try:
@@ -453,33 +778,78 @@ def on_subagent_stop(inp, reader=read_table, **kw):
             sl.append_text(state, "blocked %s\n" % sl.now())
         except OSError:
             pass
-        what = "; ".join("stop %d %s" % (r["pid"], r["command"].split(" %s=" % OWNER_VAR)[0][:80]) for r in left)
+        what = "; ".join("stop %d %s" % (r["pid"], r["command"].split(" %s=" % OWNER_VAR)[0][:80]) for r in left if "job" not in r)
+        waits = ["run `budgit wait %s` until it ends" % r["job"] for r in jobs]
+        if waits and not what:
+            return {"decision": "block", "reason": "budgit R-847: the suite job you started is still running (%s), then finish. "
+                                                   "Ending the turn now would close it." % "; ".join(waits)}
         return {"decision": "block", "reason": "budgit R-847: you left a process running (%s) before handing back. Stop it, then finish. "
-                                               "A server left running is a FAIL." % what}
-    closed = close(left, reader=reader, **kw)
+                                               "A server left running is a FAIL.%s" % (what, (" And " + "; ".join(waits) + ".") if waits else "")}
+    if kw.get("holds") is None:
+        try:
+            _read_holds()
+        except OSError as e:                          # never a silent pass: the gate says it could not close
+            _unreadable(e)
+            try:
+                os.remove(state)
+            except OSError:
+                pass
+            log("FAIL agent %s handed back with %d live process(es); holds file unreadable, nothing closed" % (
+                esc(inp.get("agent_id")), len(left)))
+            return {"systemMessage": "budgit R-847 FAIL: %d process(es) left running by this agent were NOT closed: holds file "
+                                     "unreadable; nothing closed" % len(left)}
+    unread = [r for r in left if r["pid"] == -1]      # L-Q4: the jobs could not be read; close this session's runners by marker and argv shape
+    if unread:
+        left = [r for r in left if r["pid"] != -1] + [r for r in suitejobs.runner_rows(table, sid, start, safe) if r["pid"] not in {x["pid"] for x in left}]
+    closed = close(left, reader=reader, **kw) if left else []
     for r in closed:
         log("FAIL agent %s handed back with a live process; closed it: %s" % (inp.get("agent_id"), _fmt(r, now)))
     try:
         os.remove(state)
     except OSError:
         pass
+    if unread:
+        log("FAIL agent %s handed back while its suite jobs could not be read; closed %d runner(s)" % (esc(inp.get("agent_id")), len(closed)))
+        return {"systemMessage": "budgit R-847 FAIL: this agent's suite jobs could not be read; %d runner process(es) of this session were closed "
+                                 "by the hook (a job that survived is closed by the 3 h sweep)" % len(closed)}
     return {"systemMessage": "budgit R-847 FAIL: %d process(es) left running by this agent were closed by the hook" % len(closed)} if closed else None
 
 
 # ---------------------------------------------------------------- the daily backstop
-def sweep_orphans(apply_changes, reader=read_table, min_age_s=None, now=None, **kw):
-    """Marker-carrying processes with ppid 1 older than the threshold (config `orphan_min_age_s`, default 3 h). Dry run unless
-    `apply_changes`; each one is logged with its pid, age, command and owner under the user's standing yes. -> [rows]"""
+def sweep_orphans(apply_changes, reader=read_table, min_age_s=None, now=None, held_out=None, expired_out=None, **kw):
+    """Marker-carrying processes with ppid 1 older than the threshold (config `orphan_min_age_s`, default 3 h, never under
+    MIN_AGE_FLOOR_S). Dry run unless `apply_changes`; each one is logged with its pid, age, command and owner under the user's
+    standing yes. An untrusted holds file closes nothing (dry run or not). -> [rows]"""
     if min_age_s is None:
         try:
-            min_age_s = float(sl.load_config().get("orphan_min_age_s") or DEFAULT_MIN_AGE_S)
-        except (TypeError, ValueError):
+            min_age_s = check_min_age(sl.load_config().get("orphan_min_age_s") or DEFAULT_MIN_AGE_S)
+        except ValueError as e:
+            log("procclose: config orphan_min_age_s ignored, default used (%s)" % e)
             min_age_s = DEFAULT_MIN_AGE_S
     now = time.time() if now is None else now
     table = reader()
     check_blind(table)
+    try:
+        holds = kw["holds"] if kw.get("holds") is not None else active_holds()[0]
+        if kw.get("holds") is None:
+            lines = report_expired()
+            if expired_out is not None:
+                expired_out.extend(lines)
+    except OSError as e:                          # HoldsError, or a lock that cannot be taken: nothing is signalled
+        _unreadable(e)
+        return []
     candidates = orphans(table, now, min_age_s, ancestors(table, kw.get("me") or os.getpid()))
     found = []
+    held = held_map(table, holds)
+    kept = []
+    for r in candidates:
+        hold = hold_of(table, r, held)
+        if hold:                                  # R-1095: the user kept it on purpose; never listed as closable
+            kept.append((r, hold))
+            log("daily sweep HELD by the user (%s, %s) until %s: %s" % (esc(hold.get("src")), esc(hold.get("words")), esc(hold.get("expires")), _fmt(r, now)))
+    candidates = [r for r in candidates if hold_of(table, r, held) is None]
+    if held_out is not None:
+        held_out.extend(kept)
     for r in candidates:                          # until the user decides on a keep list (tmux, gpg-agent, ssh mux): only a process
         if all(d["owner"] for d in descendants(table, r["pid"])):     # whose whole subtree is marked is closed
             found.append(r)
@@ -497,15 +867,71 @@ def sweep_orphans(apply_changes, reader=read_table, min_age_s=None, now=None, **
 
 def main(argv=None):
     """`budgit procs [--apply] [--min-age-s N]`: the dry run lists, --apply closes (the user's standing yes)."""
-    argv = list(sys.argv[1:] if argv is None else argv)
-    min_age = None
-    if "--min-age-s" in argv:
-        min_age = float(argv[argv.index("--min-age-s") + 1])
-    rows = sweep_orphans("--apply" in argv, min_age_s=min_age)
+    import argparse
+    p = argparse.ArgumentParser(prog="budgit procs")
+    p.add_argument("--apply", action="store_true")
+    p.add_argument("--min-age-s", default=None)
+    p.add_argument("--hold", nargs=2, metavar=("KIND", "VALUE"))
+    p.add_argument("--words")
+    p.add_argument("--src")
+    p.add_argument("--until")
+    p.add_argument("--holds", action="store_true")
+    p.add_argument("--unhold", metavar="ID")
+    a = p.parse_args(list(sys.argv[1:] if argv is None else argv))
+    if a.min_age_s is not None:
+        try:
+            a.min_age_s = check_min_age(a.min_age_s)
+        except ValueError as e:
+            print("budgit procs: %s" % e, file=sys.stderr)
+            return 2
+    if a.hold:
+        try:
+            ok, res = add_hold(a.hold[0], a.hold[1], a.words, a.src, a.until)
+        except OSError as e:
+            print("not held: %s" % e)
+            return 1
+        print("held: %s" % json.dumps(res) if ok else "not held: %s" % res)
+        return 0 if ok else 1
+    if a.holds or a.unhold is not None:
+        if a.unhold is not None:
+            try:
+                ok = remove_hold(a.unhold, a.words, a.src)
+            except ValueError as e:
+                print("not removed: %s" % e)
+                return 1
+            except OSError as e:
+                print("not removed: %s" % esc(e))
+                return 1
+            print("removed hold %s" % esc(a.unhold) if ok else "no hold with id %s" % esc(a.unhold))
+            return 0 if ok else 1
+        try:
+            entries = _read_holds()
+        except OSError as e:
+            print("holds file unreadable: %s" % esc(e))
+            return 1
+        gone = _split(entries, _today())[1]
+        for e in entries:
+            print("%s  %s %s until %s (%s) «%s»%s" % (esc(e.get("id", "-")), esc(e["kind"]), esc(e["value"]), esc(e["expires"]),
+                                                      esc(e["src"]), esc(e["words"]),
+                                                      "  [expired]" if e in gone else ""))
+        if not entries:
+            print("no holds")
+        return 0
+    held_out, expired = [], []
+    rows = sweep_orphans(a.apply, min_age_s=a.min_age_s, held_out=held_out, expired_out=expired)
     now = time.time()
     for r in rows:
-        print(("closed " if "--apply" in argv else "would close ") + _fmt(r, now))
-    if not rows:
+        print(("closed " if a.apply else "would close ") + _fmt(r, now))
+    for r, h in held_out:
+        print("held by the user (%s) until %s: %s" % (esc(h.get("src")), esc(h.get("expires")), _fmt(r, now)))
+    for line in expired:                             # an expired hold is said once, in a dry run, --apply and housekeeping
+        print(line)
+    try:
+        _read_holds()
+    except OSError:                                  # sweep_orphans already said it on stderr and in the log
+        print("holds file unreadable; nothing closed")
+        return 1
+    if not rows and not held_out:
         print("no orphaned marked processes")
     return 0
 

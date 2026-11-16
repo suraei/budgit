@@ -23,7 +23,7 @@ let timer = null
 async function budgit($, cwd, args) {
   try {
     const r = await $.process.run(
-      ['python3', $.plugin.root + '/bin/budgit', ...args, '--project', cwd],
+      ['python3', '-I', '-S', $.plugin.root + '/bin/budgit', ...args, '--project', cwd],
       { timeoutMs: RUN_TIMEOUT_MS },
     )
     return r.exitCode === 0 ? String(r.stdout).trim() : null
@@ -41,7 +41,7 @@ async function floatRun($, arg) {
   const args = Object.prototype.hasOwnProperty.call(FLOAT_ARGS, word_) ? FLOAT_ARGS[word_] : null
   if (!args) return null
   try {
-    const r = await $.process.run(['python3', $.plugin.root + '/bin/budgit', 'brote', ...args], { timeoutMs: FLOAT_TIMEOUT_MS })
+    const r = await $.process.run(['python3', '-I', '-S', $.plugin.root + '/bin/budgit', 'brote', ...args], { timeoutMs: FLOAT_TIMEOUT_MS })
     return (String(r.stdout || '') + String(r.stderr || '')).trim()
   } catch {
     return ''

@@ -422,9 +422,7 @@ def analyse(item, root, procs):
         verdict = ("git_file", 0)
     elif item["git_state"] == "failed":
         verdict = ("git_failed", 0)
-    elif item["dirty"]:
-        verdict = ("dirty", item["dirty"])
-    elif item["dataless"]:
+    elif item["dataless"]:       # uncommitted changes (item["dirty"]) are information only: the move is a same-volume rename, which keeps the tree byte for byte
         verdict = ("icloud", item["dataless"])
     elif not item["dataless_complete"]:
         verdict = ("icloud_unknown", 0)
@@ -493,6 +491,8 @@ def render(result):
         if i["hand_edits"] is not None:
             line += i18n.t("rc.hand_edits", n=i["hand_edits"])
         lines.append("    " + line)
+        if i.get("dirty"):
+            lines.append("    " + i18n.t("rc.dirty_info", n=i["dirty"]))
     if result.get("left") or result.get("loose"):
         lines += ["", i18n.t("rc.left", n=len(result["left"]), names=", ".join(result["left"]) or "-", loose=result["loose"])]
     if result.get("sorted"):

@@ -2,6 +2,53 @@
 
 To update, ask Claude in any chat to update Budgit: it runs `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, and reports the version. Your next chat uses it. In a terminal session, `/reload-plugins` is an optional extra. The Release notes page of the wiki has the same notes.
 
+## 0.13.9.12
+
+Update now if you run 0.13.9.10 or older.
+
+This release also carries the 0.13.9.11 changes listed below, which were never published on their own.
+
+### Fixed
+
+- **Scheduled stand-up and keep-alive can run again** when neither Budgit nor your project sits in a folder macOS protects (Documents, Desktop, Downloads, iCloud Drive). Proven by tests; the first real scheduled run after you update is the live proof.
+  - When macOS blocks Budgit's own folder, `budgit job health` and the session start say so in plain words, with the steps. Known limit: if only your project sits in a protected folder, the stand-up can come out empty without a warning (next hotfix).
+  - They run in their own folder, outside Budgit's settings folder. Before, every call was refused there.
+  - Stand-up and keep-alive also run on a normal busy laptop: before, a "warn" memory reading skipped them every day without a word. Proven by tests with simulated memory readings.
+  - When a job does skip, `budgit job health` says why and when, and the job retries once later that day.
+- **You see the stand-up when you open a session, once a day:** its date and first line, quoted.
+- **A damaged ledger.json no longer turns Budgit's protections off.** You get one line naming the file and how to restore it.
+- **If a Budgit guard crashes, or its library cannot load,** only a short list of read-only commands runs without asking: `git status`, `log`, `diff` and `show`, `ls`, `pwd`, and `cat`, `head` and `tail` inside the project. Everything else asks. You see a one-line warning each time.
+- **Status shows whether each item's proof still holds:** PASS, FAIL, none, or superseded.
+
+### Changed
+
+- The search-root guard ships OFF by default. Turn it on in Budgit's own config. Its known gaps are fixed in the next hotfix.
+- With the search guard on, a commit message written as a heredoc or `$(...)` that contains a word like find or grep is refused. Use a plain `git commit -m "..."`.
+
+### Known limits
+
+- If Claude Code sends the hook input it cannot parse, the hook lets the call through and prints "enforcement off".
+- `git push --force` asks rather than refuses.
+- A job that the fallback stopped is recorded as skipped after its run has ended.
+
+### Also in this hotfix
+
+- **The pre-commit line `budgit secrets --staged` never blocks a commit for a user without gitleaks.** It prints "staged: NOT scanned (gitleaks missing)" with the one install line and exits 0. A full `budgit secrets` with a skipped tool still exits 3, and Budgit's own release gate still counts a skipped scan as not clean. With `--staged`, the dependency scan is not part of the check and the output says so.
+- **The search guard fails closed on a command it cannot read.** A search whose command name is hidden (quotes, variables, substitutions, globs, busybox, a shell fed from stdin) is refused; a search inside the project from any subfolder is allowed, `..` included. `search_guard` in Budgit's own config turns it off.
+
+## 0.13.9.11
+
+- **Sized ledger items get a due date from their size** (R-925). Small items are due today and rank first when overdue. A malformed due date is ignored instead of failing. `ledger add` carries `--appetite` in every example and caller, and refuses a commit trailer in item text (R-943, R-940).
+- **Roles come from registration** (R-930, R-932). A session that was cleared and renewed resumes its role. A session with a parent never takes the coordinator role by itself, including on reorganize (R-939).
+- **The protected-project barrier is outward only** and the rule texts agree with each other (R-944, R-942, R-948). The preview sections match the shipped rules (R-929).
+- **`budgit attribution on|off`** sets whether commits with an attribution line are refused; the default is on (R-979, R-978). The check also reads a message piped in with `-F -`, `-F /dev/stdin`, a heredoc or a file (R-973, R-983, R-998, R-985).
+- **Opt-in no-delete hook** (R-988). It is off by default. Turn it on with `budgit rm-guard on`. It refuses `rm` forms, including behind wrapper options, busybox and `git clean`, and names the Trash instead.
+- **The verify-report guard judges write targets, not mentions** (R-980, R-990, R-993, R-995, R-996, R-997). It resolves bare and relative targets from any working directory, refuses glob, quoted and symlinked targets, asks on substituted targets, and no longer reacts to reads or to text in titles. Its ask text goes through the language files.
+- **`ledger verify` ignores a report written for another commit** (R-991). A match needs at least 7 hex characters, and no match among several reports refuses.
+- **The single-source warning is quieter and wider** (R-974, R-984, R-992, R-999). It skips your own rules, and it covers more source phrasings, in English and Spanish, from one shared connector list. It uses neutral possessives (my, your, our, their, its) and never assumes a gender.
+- **One-line status notes no longer trip the client-text gate** (R-987).
+- **Tests follow `--appetite`** and set up their own import path (R-976, R-985).
+
 ## 0.13.9.10
 
 - **`budgit asks`** lists every ask you made with its state (read-only), and flags asks that got lost, such as a message that never reached an answer.
@@ -11,7 +58,6 @@ To update, ask Claude in any chat to update Budgit: it runs `claude plugin marke
 - **A brief that quotes only your example is warned** so the general rule is stated first.
 - Call caps in briefs also cover the verify-report write, and a warning shows above the turn limit.
 - **Brote in the terminal shows its one-line text form** while a smaller pet is built; the floating Brote is unchanged.
-- **Mentioning `BUDGIT_HOME` or `STUDIO_HOME` in a comment, or passing it to a child process, is allowed again.** The guard still blocks real reads of those folders.
 
 ## 0.13.9.9
 
@@ -22,7 +68,7 @@ To update, ask Claude in any chat to update Budgit: it runs `claude plugin marke
 - **The 5-hour gauge.** On Pro and Max the status line shows the 5-hour window next to the weekly one, and pacing levels (tight, critical) use both with hysteresis.
 - **The Brote build cache is shared and keyed** by source, compiler version and flags, keeps the newest 4, and a warm build compiles nothing.
 - **Test runs share one cache** and the pool halves on battery only under 30 % or in Low Power Mode.
-- **One busy rule** for every command: kernel CPU counters plus true free memory; the load-average reading is gone.
+- **One busy rule** judges the machine by kernel CPU counters and the memory that is truly free; the system load figure plays no part.
 - **Scheduled-task runs no longer count as your messages.** A prompt that starts with `<scheduled-task` is treated as automated text, so it gets no inbox entry and does not switch off away mode.
 
 ## 0.13.9.7

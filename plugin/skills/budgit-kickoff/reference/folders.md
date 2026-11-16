@@ -8,7 +8,8 @@ project's own folders hold the product.
 | Ledger, progress, retro, project.json | `.budgit/` |
 | Plans and specs written before building | `.budgit/plans/` |
 | Research notes (URL + date) | `.budgit/research/` (raw scout files in `.budgit/research/raw/`, never read by hand) |
-| Agent and verifier reports | `.budgit/reports/`, `.budgit/verify/` |
+| Curated and codex reports, verifier reports | `.budgit/reports/`, `.budgit/verify/` |
+| Agent hand-back dumps (one file per agent stop) | `.budgit/archive/agent-dumps/<YYYY-MM-DD>/` with a `manifest.jsonl` per day; `budgit reports sweep` moves old ones there from `reports/` |
 | Handovers between sessions | `.budgit/handover/` |
 | The product (code, its own manual, assets) | the project's own folders, e.g. `src/`, `docs/` |
 

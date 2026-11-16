@@ -600,9 +600,20 @@ def launcher_text(root, python):
         if "\n" in value or "\x00" in value or "\r" in value:
             raise JobError("a path with a line break")
     budgit = os.path.join(root, "bin", "budgit")
+    # I-1713: a run that fails at ANY layer (no python, no plugin, an argument error, an import error) leaves "<start> <exit>" in
+    # <home>/launcher-fail-<args as letters and _> for `job health`, written here with no Python and never through a link. A run that
+    # reached the job code records itself (a later time), and that record wins.
     return "\n".join([
         "#!/bin/sh",
         "# Budgit scheduled-job launcher. Written by Budgit; an update rewrites this text, never the launch agent.",
+        "d=${0%/*}; h=${d%/*}; s=$(date +%s)",
+        "k=$(printf '%s' \"$*\" | tr -c 'A-Za-z0-9' '_')",
+        "note() {",
+        '  f="$h/launcher-fail-$k"',
+        '  if [ -d "$h" ] && [ ! -L "$h" ] && [ ! -L "$f" ] && [ ! -L "$f.tmp" ]; then',
+        '    { printf \'%s\\n\' "$s $1${2:+ $2}" > "$f.tmp" && mv -f "$f.tmp" "$f"; } 2>/dev/null',
+        "  fi",
+        "}",
         "py=%s" % shlex.quote(python),
         '[ -x "$py" ] || py=""',
         'if [ -z "$py" ]; then',
@@ -610,11 +621,26 @@ def launcher_text(root, python):
         '    if [ -x "$c" ]; then py=$c; break; fi',
         "  done",
         "fi",
-        'if [ -z "$py" ]; then echo "budgit: no python3 found for this job" >&2; exit 75; fi',
+        'if [ -z "$py" ]; then echo "budgit: no python3 found for this job" >&2; note 75; exit 75; fi',
         "b=%s" % shlex.quote(budgit),
-        'if [ ! -f "$b" ]; then echo %s >&2; exit 75; fi' % shlex.quote(NO_PLUGIN_LINE),
-        'exec "$py" "$b" "$@"',
+        'if [ ! -f "$b" ]; then echo %s >&2; note 75; exit 75; fi' % shlex.quote(NO_PLUGIN_LINE),
+        # python's stderr goes through a private temp file (mktemp, mode 600) so the shell can see macOS's privacy refusal; the text is
+        # copied on to the log as before and only the word `blocked` is ever kept
+        'e=$(mktemp "${TMPDIR:-/tmp}/budgit-job.XXXXXX" 2>/dev/null) || e=/dev/null',
+        '"$py" -I -S "$b" "$@" 2>"$e"',
+        "rc=$?",
+        'cat "$e" >&2',
+        'bl=""',
+        'if [ "$rc" -ne 0 ] && grep -q "Operation not permitted" "$e" 2>/dev/null; then bl=blocked; fi',
+        '[ "$e" = /dev/null ] || rm -f "$e"',
+        '[ "$rc" -eq 0 ] || note "$rc" $bl',
+        'exit "$rc"',
         ""])
+
+
+def launcher_fail_name(args):
+    """The file name the launcher uses for a job's command line (the same letters-and-underscore rule as its `tr`)."""
+    return "launcher-fail-" + re.sub(r"[^A-Za-z0-9]", "_", " ".join(args))
 
 
 def plist_text(job, launcher, at=None, home=None, every=None):

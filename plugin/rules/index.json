@@ -4,7 +4,7 @@
     {"id": "talking", "file": "core.md", "n": 1, "roles": ["core"], "digest": "User's language; ask only what only they know; batch cards."},
     {"id": "away", "file": "core.md", "n": 2, "roles": ["core"], "digest": "Away: no cards, no pings; keep working; one card on return."},
     {"id": "permissions", "file": "core.md", "n": 3, "roles": ["core"], "digest": "Never push or publish unasked; a standing yes covers its class."},
-    {"id": "protected", "file": "core.md", "n": 4, "roles": ["core"], "digest": "Protected projects: counts only; no private data in shared places."},
+    {"id": "protected", "file": "core.md", "n": 4, "roles": ["core"], "digest": "Protected: barrier is outward only; nothing in public or shared places."},
     {"id": "capacity", "file": "core.md", "n": 7, "roles": ["core"], "digest": "Busy = CPU or memory (budgit busy); heavy work waits, thinking never."},
     {"id": "platforms", "file": "core.md", "n": 14, "roles": ["core"], "digest": "Every OS branch tested; optional tools name a fallback."},
     {"id": "structure", "file": "coordinator.md", "n": 5, "roles": ["coordinator", "lead", "worker"], "digest": "Coordinator and leads think and route; workers do; escalate up."},

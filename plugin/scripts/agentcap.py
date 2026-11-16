@@ -245,6 +245,61 @@ def example_only_warning(tool_input, markers=None, prefixes=RULE_PREFIXES):
             "not only that example.")
 
 
+# R-992: one connector list ("and", "y", "e", "plus", "&", comma, ", and") voids the warning on every alternative.
+_DET = r"(?:the|my|your|our|their|its|su|sus|el|la|los|las)"
+_DOC_NOUN = (r"(?:specs?|specifications?|especificaci(?:ón|on|ones)|docs?|documents?|documentation|documentos?"
+             r"|documentaci(?:ón|on)|reports?|informes?|reportes?)\b")
+_CONN = (r"(?:\s+(?:and|y|e|plus)\s+(?:" + _DET + r"\s+)?\w"
+         r"|\s*&\s*(?:" + _DET + r"\s+)?\w"
+         r"|\s*,\s*(?:(?:and|y|e|plus)\s+)?(?:" + _DET + r"\s+\w|" + _DOC_NOUN + r"))")
+# "the report from QA and the logs" is two sources, so an origin phrase may sit before the connector.
+_SECOND = r"(?!(?:\s+(?:from|by|de|por)\s+\S+?)?" + _CONN + r")"
+_NOT_PLACE = r"(?!\s+(?:folders?|dir(?:ectory)?|page|pages|carpeta|p[aá]ginas?|fees?)\b)"
+_ONE_SOURCE = re.compile(r"\b(?:rules?|criteria|reglas?|criterios?)\s+(?:from|del?|seg[uú]n)\s+(?!(?:" + _DET + r"\s+)?\S+" + _CONN + r")\S"
+                         r"|\bseg[uú]n\s+(?:el|la|los|las|su|sus)\s+(?:\w+\s+)?" + _DOC_NOUN + _NOT_PLACE + _SECOND +
+                         # R-984: per/from/según [lo que dice] [possessive] <document noun>; a second source voids it
+                         r"|\b(?:per|from|seg[uú]n)\s+(?:lo\s+que\s+dice\s+)?(?:" + _DET + r"\s+)?"
+                         r"" + _DOC_NOUN + _NOT_PLACE + _SECOND, re.I)
+# R-974 r2: exact user-source phrases only; a document noun or file name within 3 words after it voids the phrase.
+_NOT_DOC = (r"(?![\w\-'’])"
+            r"(?!(?:\s+[\w.\-]+){0,3}?\s+[\w\-]*(?:report|spec|doc|file|informe|fichero|pdf)\w*)"
+            r"(?!(?:\s+[\w\-]+){0,3}?\s+\w[\w\-]*\.\w{2,4}\b)")
+_USER_PHRASE = (r"(?:the\s+user(?:['’]s\s+(?:words|rules))?|(?:my|your|our|their)\s+(?:words|rules)"
+                r"|sus\s+(?:palabras|reglas)|(?:el\s+usuario|la\s+usuaria|usuari[oa]))")
+_USER_SOURCE = re.compile(r"\b(?:rules?|criteria|reglas?|criterios?)\s+(?:from|del?|seg[uú]n)\s+" + _USER_PHRASE + _NOT_DOC
+                          + r"|\bseg[uú]n\s+(?:sus\s+(?:palabras|reglas)|lo\s+que\s+dice\s+el\s+usuario)" + _NOT_DOC, re.I)
+_EARLIER_ID = re.compile(r"\bI-\d+")
+EARLIER_RULES = ("approved design", "diseño aprobado", "briefs.md", "earlier rules", "reglas anteriores", "existing rules")
+
+
+def _card_text(tool_input):
+    """Prompt of a brief, or the question and option text of an AskUserQuestion card."""
+    parts = [str(tool_input.get("prompt") or "")]
+    qs = tool_input.get("questions")
+    for q in qs if isinstance(qs, list) else []:
+        if isinstance(q, dict):
+            parts.append(str(q.get("question") or ""))
+            for o in q.get("options") if isinstance(q.get("options"), list) else []:
+                parts.append(" ".join(str(o.get(k) or "") for k in ("label", "description")) if isinstance(o, dict) else str(o))
+    return "\n".join(parts)
+
+
+def single_source_warning(tool_input):
+    """One line when a brief or card takes its rules from ONE named source and cites no earlier
+    rules (a ledger note id, an approved design, briefs.md, earlier/existing rules, or a second named source). Else None."""
+    if not isinstance(tool_input, dict):
+        return None
+    text = _card_text(tool_input)
+    hits = len(_ONE_SOURCE.findall(_USER_SOURCE.sub(" ", text)))   # R-974: the user's own rules are the right source
+    if not hits:
+        return None
+    low = text.lower()
+    if hits > 1 or _EARLIER_ID.search(text) or any(p in low for p in EARLIER_RULES):
+        return None
+    return ("R-929: the brief takes its rules from one source; name the user's earlier rules on this subject "
+            "(I-n words, approved designs, code tables) too.")
+
+
 def _inside(path, root):
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 

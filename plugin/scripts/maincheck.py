@@ -178,11 +178,12 @@ def write_flag(top, branch, state):
 
 # ---------------------------------------------------------------- the suite
 
-def suite_command(project):
+def suite_command(project, strict=False):
+    """`strict` (a subagent's `suite --cwd-project`): only the per-realpath digest approval of THIS test_command counts."""
     cfg = sl.load_project_config(project)
     if cfg.get("test_command"):
         command = str(cfg["test_command"])
-        if not sl.test_command_approved(project, command):          # it comes from a repo file and runs as shell
+        if not sl.test_command_approved(project, command, digest_only=strict):          # it comes from a repo file and runs as shell
             raise SuiteUnavailable("`test_command` in %s runs as shell and nobody approved it. Show the user this command, then "
                                    "give the user this command in a fenced bash block to run in a terminal (never run it "
                                    "yourself):\n  %s\n\n  %s" % (os.path.join(sl.studio_dir(project), "project.json"),
@@ -366,13 +367,13 @@ def check(project, rerun=False, runner=None, notify=None, wait_load=False, load_
     return branch, sha, result, bool(result.get("same_tree"))
 
 
-def run_plain_suite(project, notify=None, started=None, wait_load=False, load_notice=None, rerun=False, release=False):
+def run_plain_suite(project, notify=None, started=None, wait_load=False, load_notice=None, rerun=False, release=False, strict=False):
     """`budgit suite`: the project's own suite in its checkout (not a clean copy), queued like main-check, at low priority
     -> (exit code, slot, hit). R-382: when this exact tree (clean checkout) already ran green with this command, nothing runs
     and `hit` is that recorded entry (slot is None); it is also checked again after the queue, since the suite ahead of us
     may have been this very tree."""
     top = repo_top(project)
-    command = suite_command(project)
+    command = suite_command(project, strict=strict)
     label = "suite %s" % os.path.basename(top)
 
     def lookup():

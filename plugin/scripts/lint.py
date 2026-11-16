@@ -478,6 +478,43 @@ def tracked_paths(repo, links=False):
             and os.path.splitext(p)[1].lower() not in BINARY_EXTS]   # a symlink's text is its target's business, its name is its own
 
 
+FIXTURE_MARK = "lint-fixture"          # R-1052: on a line, that line is an intended fixture (line-level only, never a whole file)
+FIXTURE_DIRS = {"fixtures"}             # a path part that names a fixtures folder
+
+
+def _shipped_rel(rel):
+    """True when the repo-relative path sits under a tree the release or share export ships (export.SHIPPED_DIRS)."""
+    import export                       # late: export imports this module
+    rel = rel.replace(os.sep, "/")
+    dirs = [d.replace(os.sep, "/") for d in export.SHIPPED_DIRS]
+    return any(rel == d or rel.startswith(d + "/") for d in dirs)
+
+
+def in_scope(f, repo, cache):
+    """R-1052, the one scope rule behind `lint --tracked` and the release check: a kind only counts where it is a real risk.
+    A personal path counts in a file that ships or is shared (under export.SHIPPED_DIRS); elsewhere (.studio logs, tests, docs)
+    it never leaves the repo. An invisible character in a test file does not count when that very line carries
+    FIXTURE_MARK, or the path has a fixtures folder; any other hidden character counts everywhere."""
+    rel = os.path.relpath(f.path, repo) if f.path.startswith(repo + os.sep) else f.path
+    parts = rel.replace(os.sep, "/").split("/")
+    if f.kind == "personal-path":
+        return _shipped_rel(rel)
+    if f.kind == "invisible" and parts[0] == "tests":
+        if FIXTURE_DIRS & set(parts[:-1]):
+            return False
+        lines = cache.get(f.path)
+        if lines is None:
+            text = _text(f.path)[0] or ""
+            lines = cache[f.path] = text.replace("\r\n", "\n").split("\n")
+        return not (0 < f.line <= len(lines) and FIXTURE_MARK in lines[f.line - 1])
+    return True
+
+
+def scope(findings, repo):
+    cache = {}
+    return [f for f in findings if in_scope(f, repo, cache)]
+
+
 def scan_tracked(repo):
     paths = tracked_paths(repo, links=True)
     if paths is None:
@@ -485,6 +522,20 @@ def scan_tracked(repo):
     out = []
     for path in paths:
         out.extend(entry_findings(path))
+    return scope(out, repo)
+
+
+def voice_findings(paths, repo):
+    """R-1049: owner voice in the files the exporter would ship -> [Finding(path, line, 0, "owner-voice", word)].
+    The shipped-file predicate (export.shipped_text_files) and the rule (export.voice_hits) are export's own, imported
+    here, never copied. Files outside the shipped trees (tests/, .studio/) are not judged."""
+    import export                      # late: export imports this module
+    shipped = {os.path.realpath(p) for p in export.shipped_text_files(os.path.realpath(repo))}
+    out = []
+    for path in _files(paths):
+        if os.path.isdir(path) or os.path.realpath(path) not in shipped:
+            continue
+        out.extend(Finding(path, h.line, 0, "owner-voice", h.term) for h in export.voice_hits([path], os.path.dirname(path)))
     return out
 
 

@@ -389,13 +389,21 @@ def free_true_limit(total_mb):
     return max(BUSY_FREE_MB, int((total_mb or 0) * BUSY_FREE_RAM_FRACTION))
 
 
-def memory_reason(mem):
-    """Busy text from a memory picture (mem_reading or mem_signals), else None. Unknown readings are skipped."""
+def memory_reason(mem, pressure_level=None, kernel_gate=False):
+    """Busy text from a memory picture (mem_reading or mem_signals), else None. Unknown readings are skipped.
+    `pressure_level`: the macOS level that counts as busy for this caller (default BUSY_PRESSURE_LEVEL, warn). A scheduled job passes
+    critical (4), because an ordinary laptop reports warn all day; the swap-in rate and compressor limits stay the same."""
     if not mem:
         return None
     level = mem.get("pressure")
-    if level is not None and level >= BUSY_PRESSURE_LEVEL:
+    if level is not None and level >= (pressure_level or BUSY_PRESSURE_LEVEL):
+        if kernel_gate:       # a scheduled job: the line names the level and the compressor figure next to it
+            comp0, total0 = mem.get("compressor_mb"), mem.get("total_mb")
+            extra = " (compressor %.1f GB of %.0f GB)" % (comp0 / 1024.0, total0 / 1024.0) if comp0 is not None and total0 else ""
+            return "macOS memory pressure %s%s" % (PRESSURE_NAMES.get(level, level), extra)
         return "memory pressure %s" % PRESSURE_NAMES.get(level, level)
+    if kernel_gate and level is not None:
+        return None           # R-1146 for jobs: the kernel says the level is below the job's limit; the compressor and swap-in limits do not apply
     psi = mem.get("psi")
     if psi is not None and psi >= BUSY_PSI_SOME_AVG10:
         return "memory pressure: some avg10 %.1f %% (limit %.0f %%)" % (psi, BUSY_PSI_SOME_AVG10)
@@ -438,14 +446,14 @@ def read_machine(per_worker_mb=None, sample=None, sampler=None, sleep=time.sleep
 
 # ---------------------------------------------------------------- the one busy rule (admit.py calls these too)
 
-def busy_reason(free_true, cpu, mem=None):
+def busy_reason(free_true, cpu, mem=None, pressure_level=None, kernel_gate=False):
     """The busy rule, defined ONCE (R-532, R-889b). free_true: TRULY free MB (free pages, never inactive) or None, judged
     like mem's free_true_mb (only where no kernel pressure reading exists); cpu: median CPU as % of all usable cores or None;
     mem: a mem_reading or mem_signals picture or None. Free plus inactive memory is never a busy signal (R-889b round 2).
     -> the reason text naming the signal that fired, else None. A reading that is None is skipped. Memory is judged first."""
     if free_true is not None and (mem or {}).get("free_true_mb") is None:
         mem = dict(mem or {}, free_true_mb=free_true)
-    why = memory_reason(mem)
+    why = memory_reason(mem, pressure_level, kernel_gate)
     if why:
         return why
     if cpu is not None and cpu > BUSY_CPU_PCT:
