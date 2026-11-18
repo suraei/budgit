@@ -45,6 +45,8 @@ def classify(session_id, tm, entries, project, parent=None):
         return None
     row = next((e for e in entries if os.path.realpath(e["path"]) == os.path.realpath(project)), None)
     name = (row or {}).get("name") or os.path.basename(os.path.realpath(project))
+    if parent and parent != session_id and parent == tm and not (row or {}).get("pm"):
+        return {"role": "PM", "name": name, "path": project}      # R-1137: the TM started it, and the project has no PM yet
     if (parent and parent != session_id) or (row and row.get("pm") and row["pm"] != session_id):
         return {"role": "lane", "name": name, "path": project}
     return {"role": "PM", "name": name, "path": project}
@@ -99,12 +101,13 @@ def assign(session_id, project, cwd=None, lock_timeout=1.0):
     `lock_timeout` seconds nothing is recorded (the hook never waits). -> list of what was written."""
     if not sl.valid_session(session_id):
         return []
-    child = bool(_parent_of(session_id))
+    parent = _parent_of(session_id)
+    child = bool(parent)
     import portfolio
     import livework
     hub = _hub()
     wants_tm = bool(hub and not child and isinstance(cwd, str) and os.path.isabs(cwd) and _within(cwd, hub))   # R-932: a detached TM is still the TM; R-939: a session with a parent never takes TM by itself
-    wants_pm = bool(project and is_budgit_project(project)) and not child
+    wants_pm = bool(project and is_budgit_project(project))          # R-1137: a child of the TM may take a PM-less project (checked under the lock)
     if wants_pm and protected_side_session(session_id, project):
         return []                                                # R-932: never shares a Budgit coordinator's notes folder
     if not (wants_tm or wants_pm):
@@ -117,6 +120,8 @@ def assign(session_id, project, cwd=None, lock_timeout=1.0):
         if wants_tm and not data.get("tm"):
             data["tm"] = session_id
             done.append("tm")
+        if child and data.get("tm") != parent:
+            wants_pm = False                                   # R-1137: only the TM's own child can be a PM; a PM's child is a lane
         if wants_pm and data.get("tm") != session_id:
             canon = livework.canon(os.path.realpath(project))
             row = next((e for e in data["projects"] if e["path"] == canon), None)
@@ -156,8 +161,13 @@ def _sections(text):
     return out
 
 
-def block(info, rules_text=None):
-    """The SessionStart text for one role: at most MAX_BLOCK_LINES lines."""
+HARD_SAFETY = "Hard safety"        # the rules-file section whose lines every role card keeps in full (R-1137)
+
+
+def block_parts(info, rules_text=None):
+    """R-1137: the role card as two pieces -> (fixed, rest) lists of lines, or None. fixed: the role line, the hard-safety
+    lines and the rules-file pointer (never shortened). rest: the role's own rules, then the common ones, each at most
+    LINE_CAP characters, so that fixed + rest is at most MAX_BLOCK_LINES lines (the full text sits behind the pointer)."""
     if not info:
         return None
     if rules_text is None:
@@ -172,11 +182,23 @@ def block(info, rules_text=None):
         head.append("You coordinate the hub and all projects.")
     else:
         head.append("%s of project %s." % ("PM" if info["role"] == "PM" else "Lane (technician)", safe_name(info["name"])))
-    tail = ["full rules: %s" % rules_path()]
-    body = secs.get(key, []) + secs.get("Common", [])
-    room = MAX_BLOCK_LINES - len(head) - len(tail)
-    body = [l if len(l) <= LINE_CAP else l[:LINE_CAP - 1].rstrip() + "…" for l in body[:max(room, 0)]]   # R-849: full text sits behind `tail`
-    return "\n".join(head + body + tail)
+    cap = lambda l: l if len(l) <= LINE_CAP else l[:LINE_CAP - 1].rstrip() + "…"
+    fixed = head + [cap(l) for l in secs.get(HARD_SAFETY, [])] + ["full rules: %s" % rules_path()]
+    own = secs.get(key, [])
+    body = own + secs.get("Common", [])
+    room = max(MAX_BLOCK_LINES - len(fixed), 0)
+    body = [cap(l) for l in body[:room]]                          # R-849: full text sits behind the pointer
+    n = min(len(own), len(body))
+    return fixed, body[:n], body[n:]                              # the role's own lines outrank the common ones
+
+
+def block(info, rules_text=None):
+    """The SessionStart text for one role: at most MAX_BLOCK_LINES lines."""
+    parts = block_parts(info, rules_text)
+    if not parts:
+        return None
+    fixed, own, common = parts
+    return "\n".join(fixed[:-1] + own + common + fixed[-1:])
 
 
 def claude_md_has_rules():
@@ -187,24 +209,39 @@ def claude_md_has_rules():
         return False
 
 
-def session_start_texts(inp, project):
-    """-> list of context texts (empty when the role is unknown). Records the first session of a project as its PM and the first
-    hub session as the TM (never overwriting). Never edits CLAUDE.md."""
+def session_start_parts(inp, project):
+    """R-1137: -> (role or None, [(tag, text)]) for startbudget. Records the first session of a project as its PM (or a session
+    the TM started, when the project has no PM yet) and the first hub session as the TM (never overwriting). Never edits
+    CLAUDE.md. Tags: "role" (the fixed card and a protected-folder warning), "role.rules", "notice"."""
     try:
         assign(inp.get("session_id"), project, inp.get("cwd"))
     except (sl.StudioError, OSError):
         sl.log_error("roles: assign")
     info = detect(inp.get("session_id"), project)
     warn = protected_side_session(inp.get("session_id"), project)
-    text = block(info)
-    if not text:
-        return [warn] if warn else []
-    out = [text]
+    parts = block_parts(info)
+    out = []
+    if parts:
+        out.append(("role", "\n".join(parts[0][:-1])))
+        if parts[1]:
+            out.append(("role.rules", "\n".join(parts[1])))
+        if parts[2]:
+            out.append(("role.common", "\n".join(parts[2])))
+        out.append(("role", parts[0][-1]))
     if warn:
-        out.append(warn)
-    if claude_md_has_rules():
-        out.append("budgit: both rule sources are active (Budgit team rules and your CLAUDE.md team rules); CLAUDE.md wins on conflict.")
-    return out
+        out.append(("role", warn))
+    if parts and claude_md_has_rules():
+        out.append(("notice", "budgit: both rule sources are active (Budgit team rules and your CLAUDE.md team rules); CLAUDE.md wins on conflict."))
+    return (info or {}).get("role"), out
+
+
+def session_start_texts(inp, project):
+    """-> list of context texts (empty when the role is unknown); the same text as session_start_parts, with the role card whole."""
+    role, parts = session_start_parts(inp, project)
+    if not role:
+        return [t for _, t in parts]
+    card = "\n".join(t for tag, t in parts if tag in ("role", "role.rules", "role.common") and not t.startswith("budgit WARNING"))
+    return [card] + [t for tag, t in parts if t.startswith("budgit WARNING") or tag == "notice"]
 
 
 # ---------------------------------------------------------------- budgit reorganize

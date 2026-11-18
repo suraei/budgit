@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import sys
 import unicodedata
 
@@ -70,19 +71,23 @@ def count():
         path = os.path.join(base, "hook-fallback.count")
         if os.path.islink(path):
             return
-        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        nofollow = getattr(os, "O_NOFOLLOW", 0) | os.O_NONBLOCK
         n = 0
         try:
             fd = os.open(path, os.O_RDONLY | nofollow)
             try:
-                n = int(os.read(fd, 32).decode("ascii", "ignore").strip() or 0)
+                if stat.S_ISREG(os.fstat(fd).st_mode):
+                    n = int(os.read(fd, 32).decode("ascii", "ignore").strip() or 0)
             finally:
                 os.close(fd)
         except (OSError, ValueError):
             n = 0
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow, 0o600)
+        # O_TRUNC is not given at open: a FIFO or device must be refused before anything is cut
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | nofollow, 0o600)
         try:
-            os.write(fd, str(n + 1).encode("ascii"))
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                os.ftruncate(fd, 0)
+                os.write(fd, str(n + 1).encode("ascii"))
         finally:
             os.close(fd)
     except Exception:
@@ -102,9 +107,10 @@ def log_library_failure(event, error="import"):
             return
         safe = lambda s: re.sub(r"[^A-Za-z0-9_.-]", "_", str(s or ""))[:60] or "unknown"
         line = "%s %s: %s (%s)\n" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), safe(event), LIB_CAUSE, safe(error))
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0), 0o600)
         try:
-            os.write(fd, line.encode("utf-8", "replace"))
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                os.write(fd, line.encode("utf-8", "replace"))
         finally:
             os.close(fd)
     except Exception:
@@ -407,9 +413,26 @@ def bash_denied(command, _depth=0, acc=None):
     return None
 
 
+def read_regular(path, limit=1 << 20):
+    """Text of `path` if it is a regular file, else None. O_NONBLOCK and O_NOFOLLOW at open, fstat S_ISREG on the fd: a planted
+    FIFO or device never blocks a hook."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        return os.read(fd, limit).decode("utf-8", "replace")
+    finally:
+        os.close(fd)
+
+
 def _json(path):
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    text = read_regular(path)
+    if text is None:
+        raise OSError("not a regular file: config")
+    return json.loads(text)
 
 
 def _realp(path):

@@ -17,6 +17,7 @@ R-869: while <cmd> runs the machine stays awake: `caffeinate -i -w <pid>` (macOS
 Everything that varies (platform, tools, clock, sleep, readings) is a parameter, so tests use fakes."""
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -340,6 +341,79 @@ def holder_line(lock_path, now, project_dir=None, cpu_count=os.cpu_count):
         return "waiting for the lock: holder unknown"
 
 
+WAITS_LOG = "suite-waits.log"
+_NAME_BAD = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def wait_name(name):
+    """The checkout's basename only, cut to letters, digits, dot, dash and underscore (no space, no path, no control character)."""
+    s = _NAME_BAD.sub("_", os.path.basename(str(name or "").rstrip("/\\")))[:40]
+    return s or "?"
+
+
+def _home(home=None):
+    if home:
+        return home
+    import studiolib
+    return studiolib.home_state()
+
+
+def log_wait(name, start, end, rc, home=None):
+    """R-1134: one line `start end name rc` appended to <Budgit home>/suite-waits.log (O_APPEND, O_NOFOLLOW). Skipped, never
+    written through, when the target is not a regular file. No path and no command text. Never raises."""
+    try:
+        path = os.path.join(_home(home), WAITS_LOG)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), 0o600)
+        try:
+            import stat
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return False
+            os.write(fd, ("%d %d %s %d\n" % (int(start), int(end), wait_name(name), 1 if rc else 0)).encode())
+            return True
+        finally:
+            os.close(fd)
+    except (OSError, ImportError, AttributeError):
+        return False
+
+
+def read_waits(since_hours=None, home=None, now=time.time):
+    """-> {checkout: [count, total seconds, max seconds]} from the log (bad lines skipped; a non-regular file reads as empty)."""
+    out = {}
+    try:
+        fd = os.open(os.path.join(_home(home), WAITS_LOG), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except (OSError, ImportError, AttributeError):
+        return out
+    import stat
+    with os.fdopen(fd) as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            return out
+        cutoff = now() - since_hours * 3600 if since_hours is not None else None
+        for line in f:
+            p = line.split()
+            try:
+                a, b, n = int(p[0]), int(p[1]), p[2]
+            except (IndexError, ValueError):
+                continue
+            if cutoff is not None and b < cutoff:
+                continue
+            w = max(0, b - a)
+            row = out.setdefault(n, [0, 0, 0])
+            row[0] += 1
+            row[1] += w
+            row[2] = max(row[2], w)
+    return out
+
+
+def waits_report(since_hours=None, home=None, now=time.time):
+    rows = read_waits(since_hours, home, now)
+    if not rows:
+        return "no suite waits recorded"
+    lines = ["checkout  count  total_min  max_min"]
+    for n, (c, t, m) in sorted(rows.items(), key=lambda kv: -kv[1][1]):
+        lines.append("%s  %d  %.1f  %.1f" % (n, c, t / 60, m / 60))
+    return "\n".join(lines)
+
+
 def wait_not_busy(busy_fn, sleep, out):
     """Wait, holding NO lock, until the machine is not busy -> True when it was busy at the first reading."""
     first = None
@@ -354,7 +428,7 @@ def wait_not_busy(busy_fn, sleep, out):
 
 
 def run(argv, name, rank=1, rc=False, plat=None, env=None, busy_fn=None, sleep=time.sleep, out=print, cwd=None,
-        runner=None, now=time.time, which=shutil.which):
+        runner=None, now=time.time, which=shutil.which, home=None):
     """Busy check (no lock held), then the PER-PROJECT lock only (there is no machine-wide lock: §6 retired it), run `argv`,
     release -> the command's exit code. While it waits it prints the holder: pid, command, age and an ETA."""
     plat = plat or sys.platform
@@ -388,6 +462,7 @@ def run(argv, name, rank=1, rc=False, plat=None, env=None, busy_fn=None, sleep=t
             sleep(POLL)
         write_holder(path, argv, now())
         leave(base, ticket)
+        log_wait(name, began, now(), rc, home or (env if env is not None else os.environ).get("BUDGIT_SUITE_LOCK_DIR"))   # an explicit test lock folder keeps its log with it
         out("suite lock acquired after %ds: running" % int(now() - began))
         cmd = niced(argv, rank, plat, which)
         if runner:

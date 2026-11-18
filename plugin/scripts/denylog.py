@@ -96,7 +96,7 @@ def alarm(project):
             inbox_id = sl.append_inbox(project, text, None, ALARM_TAG)
             if not inbox_id:
                 continue
-            opened.append(sl.add_item(data, text, [inbox_id], title="Guard %s denies often" % guard)["id"])
+            opened.append(sl.add_item(data, text, [inbox_id], title="Guard %s denies often" % guard, area="triage")["id"])
         if opened:
             sl.save_ledger(project, data)
         return opened

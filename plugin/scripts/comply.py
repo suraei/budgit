@@ -227,7 +227,22 @@ def scan(root, days=7, level=None, project=None, registry=None):
     return rows
 
 
+def over_budget_lines(days=7):
+    """R-1158: one line per owner session with runs in the last `days` days, from the past-run record."""
+    return ["over budget: %d of %d runs (PM session %s)" % (over, total, owner[-6:])
+            for owner, (over, total) in sorted(agentcap.over_budget_by_owner(days).items())]
+
+
 def table(rows):
+    text = _table(rows)
+    try:
+        extra = over_budget_lines()
+    except Exception:
+        extra = []
+    return "\n".join([text] + extra)
+
+
+def _table(rows):
     quiet = [r for r in rows if not r["agents"] and not violations(r)]
     rows = [r for r in rows if r not in quiet]
     if not rows:

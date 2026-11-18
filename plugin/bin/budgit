@@ -143,6 +143,10 @@ def cmd_suite(args):
     else:
         project = sl.resolve_project(args.project)
     command = [c for c in (getattr(args, "command", None) or [])]
+    if getattr(args, "waits", False):             # R-1134: queue minutes per checkout from suite-waits.log
+        import suitewait
+        print(suitewait.waits_report(getattr(args, "since", None)))
+        return 0
     if getattr(args, "report", False):            # R-961: last gate and full durations; exit 1 when the last gate run was over 60 s
         import suitetimes
         return suitetimes.report(project)
@@ -211,6 +215,7 @@ def cmd_test(args):
     project = sl.resolve_project(args.project)
     entry = os.path.join(project, "tools", "budgit_test.py")
     if not os.path.isfile(entry):
+        print("no selective map in this project: running the full suite (queued)")      # R-1134: this fallback IS a full suite, so the lock is right
         return cmd_suite(args)
     import subprocess
     return subprocess.call([sys.executable, entry] + (["--full"] if args.full else []), cwd=project)
@@ -242,11 +247,16 @@ def cmd_rules(args):
         for t in rules.topics():
             print("%-13s %-3s %s  [%s]" % (t["id"], "off" if t["id"] in state["off"] else "on", t["digest"], ", ".join(t["roles"])))
         return 0
+    if args.action == "show" and args.grep:         # R-1137: only the matching lines, each with its topic
+        for tid, line in rules.grep(args.grep, args.topic):
+            print("%s: %s" % (tid, line))
+        return 0
     if not args.topic:
         print("budgit rules %s <topic>: topics are %s" % (args.action, ", ".join(rules.topic_ids())))
         return 1
     if args.action == "show":
-        print(rules.text(args.topic))
+        rules._find(args.topic)
+        print("\n".join(rules.body_lines(args.topic)))   # R-1137: bodies only, no header, no provenance quote
     elif args.action in ("on", "off"):
         rules._find(args.topic)
         postupdate.set_topic(args.topic, args.action == "off")
@@ -424,7 +434,7 @@ def cmd_activate(args):
                    else "including earlier messages of this session (captured when this turn ends)")
         print("Every input of this session is now captured, %s." % history)
         print("Track each before finishing a turn:")
-        print("  budgit ledger add --src I-n --phase P --appetite small|medium|large   # new request (copies your words)")
+        print("  budgit ledger add --src I-n --phase P --appetite small|medium|large --area WORD   # new request (copies your words)")
         print("  budgit ledger phase mvp|later R-n [R-m ...]  # MVP first: tag the MVP, park the rest")
         print("  budgit ledger link R-n --src I-n             # refines an existing item")
         print("  budgit ledger ack I-n [I-m ...] --note WHY   # approvals / not a new request")
@@ -1616,9 +1626,30 @@ def cmd_ledger(args):
         if args.op == "list":
             items = [it for it in data["items"] if (not args.open or it["status"] in ("open", "doing"))
                      and (not args.status or it["status"] == args.status)]
+            # R-1137: filters and counts. A protected name reads "private" in every printed field (livework.shield).
+            # R-1131 (by-area view) is absorbed here; the later joins with research reports belong to R-1112 phase 6.
+            import livework
+            names = livework.private_names()
+            if args.area:
+                items = [it for it in items if sl.item_area(it) == sl.fold_ascii(args.area).casefold()]
+            if args.phase:
+                items = [it for it in items if it.get("phase", "") == args.phase]
+            if args.text:
+                items = [it for it in items if sl.item_matches_text(it, args.text)]
+            if args.by_area:
+                counts = {}
+                for it in items:
+                    counts[sl.item_area(it)] = counts.get(sl.item_area(it), 0) + 1
+                if args.json:
+                    print(json.dumps(counts, ensure_ascii=False))
+                else:
+                    for area in sorted(counts, key=lambda a: (-counts[a], a)):
+                        print("%s %d" % (area, counts[area]))
+                return
             if args.json:                       # R-288: the agreed fields, for hooks and the card queue
                 print(json.dumps([{"id": it["id"], "status": it["status"], "phase": it.get("phase", ""),
-                                   "title": it.get("title"), "doing_by": it.get("doing_by"),
+                                   "area": sl.item_area(it), "title": livework.shield(it.get("title"), names),
+                                   "doing_by": it.get("doing_by"),
                                    "doing_since": it.get("doing_since"), "blocked": it.get("blocked"),
                                    "started_at": it.get("started_at"), "appetite": it.get("appetite")}
                                   for it in items], ensure_ascii=False))
@@ -1628,7 +1659,8 @@ def cmd_ledger(args):
             for it in items:
                 state = sl.claim_state(it)
                 print("%s [%s%s%s] %s" % (it["id"], sl.status_cell(data, it), "/" + state if state else "",
-                                          ", blocked" if it.get("blocked") else "", it["text"][:120].replace("\n", " ")))
+                                          ", blocked" if it.get("blocked") else "",
+                                          livework.shield(it["text"][:120].replace("\n", " "), names)))
             return
         if args.op == "show":
             it = sl.find_item(data, args.id)
@@ -1637,7 +1669,7 @@ def cmd_ledger(args):
                 return
             print("%s [%s] %s" % (it["id"], sl.status_cell(data, it), it.get("title") or ""))
             print(it["text"])
-            for key in ("phase", "src", "doing_by", "assigned_by", "doing_since", "started_at", "appetite", "due", "flags",
+            for key in ("phase", "src", "doing_by", "assigned_by", "doing_since", "started_at", "appetite", "area", "due", "flags",
                         "evidence"):
                 if it.get(key):
                     print("%s: %s" % (key, ", ".join(it[key]) if isinstance(it[key], list) else it[key]))
@@ -1672,9 +1704,17 @@ def cmd_ledger(args):
             phase = sl.check_new_phase(data, args.phase)    # before the inbox entry: a refused add records nothing
             src = args.src
             appetite = args.appetite
-            if not appetite and "legacy" not in (src or []):      # R-940: no item without a size; dates come from size
-                sys.stderr.write("R-940: give --appetite small|medium|large (dates come from size)\n")
+            legacy = "legacy" in (src or [])
+            missing = []
+            if not appetite and not legacy:      # R-940: no item without a size; dates come from size
+                missing.append("R-940: give --appetite small|medium|large (dates come from size)")
+            if not args.area and not legacy:     # R-1157: and none without an area
+                missing.append("R-1157: give %s" % sl.AREA_FORM)
+            if missing:
+                sys.stderr.write("; ".join(missing) + "\n")
                 sys.exit(2)
+            if args.area:
+                sl.check_area(args.area)
             if not src:                         # P8: a first item needs no inbox entry made by hand
                 if args.text is None:
                     raise sl.StudioError("pass --text \"what you want built\" (or --src I-n for an input already in the inbox)")
@@ -1684,7 +1724,7 @@ def cmd_ledger(args):
                     raise sl.StudioError("item text is empty")
                 src = [inbox_id]
             text = args.text if args.text is not None else _inbox_text(project, src)
-            it = sl.add_item(data, text, src, phase=phase, title=args.title, outcome=args.outcome)
+            it = sl.add_item(data, text, src, phase=phase, title=args.title, outcome=args.outcome, area=args.area)
             if args.outcome is None:            # R-1136: no outcome yet: propose a draft from the linked words
                 draft = sl.draft_outcome(_inbox_text(project, src) if src != ["legacy"] else text)
                 print(_t("ledger.outcome_draft", id=it["id"], draft=draft or "...") if draft
@@ -1723,6 +1763,9 @@ def cmd_ledger(args):
         elif args.op == "apply-defaults":
             done = sl.apply_defaults(project, data)
             result = "%d default answers applied%s" % (len(done), ": " + ", ".join(done) if done else "")
+        elif args.op == "area":
+            it = sl.set_area(data, args.id, args.word)
+            result = "%s -> area %s" % (it["id"], it["area"])
         elif args.op == "appetite":
             it = sl.set_appetite(data, args.id, args.size, due=args.due)
             result = "%s -> appetite %s%s" % (it["id"], args.size, ", due " + it["due"] if it.get("due") else "")
@@ -1731,6 +1774,13 @@ def cmd_ledger(args):
         elif args.op == "fold":
             it = sl.fold_item(project, data, args.ids[0], args.into, args.reason)
             result = "%s -> folded into %s" % (it["id"], args.into)
+        elif args.op == "due":
+            it = sl.set_due(project, data, args.id, args.date, clear=args.clear)
+            result = _t("ledger.due_cleared", id=it["id"]) if args.clear else _t("ledger.due_set", id=it["id"], date=it["due"])
+        elif args.op == "evidence":
+            it = sl.add_evidence(project, data, args.id, args.sha, test=args.test, report=args.report,
+                                 decision=args.decision, rule=args.rule)
+            result = _t("ledger.evidence_added", id=it["id"])
         elif args.op == "outcome":
             it = sl.set_outcome(data, args.id, args.line)
             result = "%s -> outcome: %s" % (it["id"], it["outcome"])
@@ -1772,17 +1822,51 @@ def cmd_ledger(args):
                 if warn:
                     sys.stderr.write(warn + "\n")
             elif args.op == "done":
-                it = sl.done_item(project, data, args.ids[0], args.evidence, outcome=args.outcome)
+                it = _close_one(project, data, args.ids[0], _done_text(args), args.outcome)
             elif args.op == "verify":
                 sl.check_done_proof(args.evidence)
                 it = sl.set_status(project, data, args.id, "verified", evidence=args.evidence)
             else:  # drop
-                it = sl.set_status(project, data, args.id, "dropped", by_user=args.by_user)
+                if bool(args.not_needed) == bool(args.by_user):
+                    raise sl.StudioError(_t("ledger.notneeded_choice"))
+                if args.not_needed:
+                    it = sl.set_status(project, data, args.id, "dropped", not_needed=args.evidence or "")
+                else:
+                    it = sl.set_status(project, data, args.id, "dropped", by_user=args.by_user)
             result = "%s -> %s" % (it["id"], it["status"])
         sl.save_ledger(project, data)
     print(result)
     if batch_failed:
         sys.exit(1)
+
+
+def _done_text(args):
+    """R-1173 part 3: the proof text of `ledger done`: --evidence, or `decision I-n` / `rule file:line` (a close with no code)."""
+    given = [x for x in (args.evidence, args.decision, args.rule) if x]
+    if len(given) > 1:
+        raise sl.StudioError(_t("ledger.nocode_exclusive"))
+    if args.decision:
+        return "decision " + args.decision
+    if args.rule:
+        return "rule " + args.rule
+    return args.evidence
+
+
+def _close_one(project, data, item_id, text, outcome=None, scrub=False):
+    """`scrub` (a batch row): an error about the row's own `decision X` / `rule X` is a fixed message with no part of X."""
+    return _close_one_raw(project, data, item_id, text, outcome, quiet=scrub)
+
+
+def _close_one_raw(project, data, item_id, text, outcome=None, quiet=False):
+    """One close: `decision I-n` and `rule file:line` are checked by sl.no_code_proof (no sha gate: nothing was built);
+    every other text goes through the sha+test gate. The single and the batch form share this."""
+    m = re.fullmatch(r"\s*decision\s+(\S+)\s*", text or "")
+    r = re.fullmatch(r"\s*rule\s+(\S+)\s*", text or "")
+    if m or r:
+        proof = sl.no_code_proof(project, decision=m.group(1) if m else None, rule=r.group(1) if r else None,
+                                 item=sl.find_item(data, item_id), quiet=quiet)
+        return sl.done_item(project, data, item_id, proof, outcome=outcome, no_code=True)
+    return sl.done_item(project, data, item_id, text, outcome=outcome)
 
 
 def _ledger_batch(project, data, args):
@@ -1798,9 +1882,9 @@ def _ledger_batch(project, data, args):
     if not entries:
         raise sl.StudioError("name at least one id, or a --file of id<TAB>text lines")
     if is_done:
-        default = args.evidence or ""
+        default = _done_text(args) or ""
         entries = [(i, t or default, w, o) for i, t, w, o in entries]
-        rows = sl.batch_apply(data, entries, lambda i, t, o=None: sl.done_item(project, data, i, t, outcome=o))
+        rows = sl.batch_apply(data, entries, lambda i, t, o=None: _close_one(project, data, i, t, o, scrub=True))
         word = "done"
     else:
         if not args.into:
@@ -2769,7 +2853,7 @@ def cmd_export(args):
 
 
 MAINTAINER_EPILOG = """first steps: budgit setup --hub <dir> --projects-root <dir>, then budgit new <name>,
-then budgit ledger add --phase mvp --appetite small --text "what you want built".
+then budgit ledger add --phase mvp --appetite small --area main --text "what you want built".
 
 maintainer commands (for whoever builds or publishes Budgit itself; you can ignore them):
   export  vendor  retro-mine  denies  lint
@@ -2841,6 +2925,8 @@ CLI_WRITES = {
     "ledger set": ("project", (), ()),
     "ledger phase": ("project", (), ()),
     "ledger done": ("project", (), ()),
+    "ledger due": ("project", (), ()),                  # R-1173: re-dates an item in <project>/.budgit
+    "ledger evidence": ("project", (), ()),             # R-1173: adds proof to an item in <project>/.budgit
     "ledger outcome": ("project", (), ()),              # R-1136: sets the outcome line of an item in <project>/.budgit, like done
     "ledger ack": ("project", (), ()),
     "ledger verify": ("project", (), ()),
@@ -2853,6 +2939,7 @@ CLI_WRITES = {
     "ledger unblock": ("home", (), ()),
     "ledger apply-defaults": ("home", (), ()),
     "ledger appetite": ("project", (), ()),             # R-901 round 4: each non-home entry has a recorded run in the test
+    "ledger area": ("project", (), ()),                 # R-1157: sets the area of an item
     "ledger fold": ("project", (), ()),
     "ledger unfold": ("project", (), ()),
     "ledger flag": ("project", (), ()),
@@ -3226,6 +3313,8 @@ def build_parser():
     s.add_argument("--rc", action="store_true", help="with `-- CMD`: a release candidate goes before ordinary suites in this project's queue (there is no machine-wide lock)")
     s.add_argument("--rank", type=int, default=1, help="with `-- CMD`: project priority, 0 = top (runs without nice), larger waits behind smaller (default 1)")
     s.add_argument("--report", action="store_true", help="R-961: print the last gate and full durations; exit 1 when the last gate run took over 60 s")
+    s.add_argument("--waits", action="store_true", help="R-1134: print queue minutes per checkout (count, total, max) from suite-waits.log")
+    s.add_argument("--since", type=float, default=None, metavar="HOURS", help="with --waits: only waits that ended in the last HOURS")
     s.add_argument("--cwd-project", action="store_true", help="a subagent's form: the project is the repo top of the current folder only (never the session's), and only the user's digest approval of its test_command counts")
     s.add_argument("--background", action="store_true", help="R-1101: start the suite detached (marked, under the same slot), print a job id; follow it with `budgit wait JOB`")
     s.add_argument("command", nargs="*", help="`-- CMD ...`: wait for this project's suite lock (the only one), run CMD (nice 10 unless rank 0), release")
@@ -3251,6 +3340,7 @@ def build_parser():
     s = sub.add_parser("rules", parents=[common], help="the team rules: list, show, off, on, edit a topic")
     s.add_argument("action", choices=("list", "show", "off", "on", "edit"))
     s.add_argument("topic", nargs="?")
+    s.add_argument("--grep", help="with show: only the lines holding this word (case and accent folded); no topic = every topic")
     s.set_defaults(func=cmd_rules)
     s = sub.add_parser("housekeeping", parents=[common], help="the daily tidy-up: flow count, then merged clean idle worktrees and branches (dry run unless --apply)")
     s.add_argument("--apply", action="store_true", help="remove them (git worktree remove and git branch -d only); without it, only say what would go")
@@ -3458,6 +3548,7 @@ def build_parser():
     o.add_argument("--title", help="short label for the panels, 1 to 46 characters, Spanish, no final full stop (R-153); the text stays the user's words")
     o.add_argument("--outcome", help="one line, in the user's terms: what they will see when it works (R-1136; `done` needs it)")
     o.add_argument("--appetite", choices=["small", "medium", "large"], help="the item's size; required unless --src legacy (R-940: dates come from size)")
+    o.add_argument("--area", help="the area the item belongs to, one lowercase word of 1-24 characters (a-z 0-9 -); required unless --src legacy (R-1157); an item with no natural area takes --area triage")
     o.add_argument("--due", metavar="YYYY-MM-DD", help="a due date set by hand; without it small is due today, medium in 3 days (R-925)")
     o = ops.add_parser("link", parents=[common]); o.add_argument("id"); o.add_argument("--src", action="append", required=True)
     o.add_argument("--change", help="what the input changes in the item (logged on it; a done item is reopened)")
@@ -3481,14 +3572,28 @@ def build_parser():
     o.add_argument("--reason", help="with `later`: why the item is parked; a parked item with a reason is not drift (R-362)")
     o = ops.add_parser("outcome", parents=[common], help="set the item's outcome: one line of what the user will see when it works")
     o.add_argument("id"); o.add_argument("line")
-    o = ops.add_parser("done", parents=[common], help="close items with proof; several ids or a --file of id<TAB>proof[<TAB>outcome] lines close many, each judged alone")
+    o = ops.add_parser("done", parents=[common], help="close items with proof (every sha must be on main or the latest release); several ids or a --file of id<TAB>proof[<TAB>outcome] lines close many, each judged alone")
     o.add_argument("ids", nargs="*", metavar="id"); o.add_argument("--evidence", help="the proof; with several ids, the one a line without its own proof takes")
     o.add_argument("--file", help="lines of id<TAB>proof[<TAB>outcome] (blank lines and # lines skipped); a line without an outcome closes only if its item has one")
     o.add_argument("--outcome", help="one line of what the user will see: records it and closes in one step (an old item with none needs this; one id only)")
+    o.add_argument("--decision", metavar="I-n", help="close an item that is a recorded decision or a relayed escalation: the proof is this input, which must exist in the inbox (R-1173)")
+    o.add_argument("--rule", metavar="file:line", help="close a rule-only item: the proof is this rule line; the file must exist and the line be in range (R-1173)")
+    o = ops.add_parser("due", parents=[common], help="re-date an item, or drop its date with --clear")
+    o.add_argument("id"); o.add_argument("date", metavar="YYYY-MM-DD", nargs="?")
+    o.add_argument("--clear", action="store_true", help="drop the due date (not with a date)")
+    o = ops.add_parser("evidence", parents=[common], help="add proof to an item without closing it: exactly one of --sha, --decision, --rule")
+    o.add_argument("id"); o.add_argument("--sha", help="a commit of the project's repo"); o.add_argument("--test"); o.add_argument("--report")
+    o.add_argument("--decision", metavar="I-n", help="proof is this recorded input, which must exist in the inbox")
+    o.add_argument("--rule", metavar="file:line", help="proof is this rule line; the file must be inside the project and the line in range")
     o = ops.add_parser("verify", parents=[common]); o.add_argument("id"); o.add_argument("--evidence")
-    o = ops.add_parser("drop", parents=[common]); o.add_argument("id"); o.add_argument("--by-user", required=True)
+    o = ops.add_parser("drop", parents=[common]); o.add_argument("id"); o.add_argument("--by-user")
+    o.add_argument("--not-needed", action="store_true"); o.add_argument("--evidence")      # R-1180
     o = ops.add_parser("list", parents=[common]); o.add_argument("--open", action="store_true")
     o.add_argument("--status", choices=sl.STATUSES); o.add_argument("--json", action="store_true")
+    o.add_argument("--area", help="R-1137: only this area (security, performance, testing, release, jobs, legal, other ...)")
+    o.add_argument("--phase", help="R-1137: only this phase")
+    o.add_argument("--text", help="R-1137: only items whose title or change notes hold this word (case and accent folded)")
+    o.add_argument("--by-area", action="store_true", help="R-1137: counts per area instead of the items")
     o = ops.add_parser("show", parents=[common]); o.add_argument("id"); o.add_argument("--json", action="store_true")
     o = ops.add_parser("block", parents=[common], help="the item waits for something; it keeps its status")
     o.add_argument("id"); o.add_argument("--reason"); o.add_argument("--by", help="the input (I-n) it waits on")
@@ -3504,6 +3609,8 @@ def build_parser():
     o = ops.add_parser("appetite", parents=[common], help="how big the item is: small (a session), medium (a day), large (a week)")
     o.add_argument("id"); o.add_argument("size", choices=tuple(sl.APPETITE_DAYS))
     o.add_argument("--due", metavar="YYYY-MM-DD", help="a due date set by hand; the size never moves it (R-925)")
+    o = ops.add_parser("area", parents=[common], help="the area of the item: one lowercase word (R-1157); fills it on an old item")
+    o.add_argument("id"); o.add_argument("word", metavar="WORD")
     o = ops.add_parser("fold", parents=[common], help="the item is part of another: it stops counting as open and shows under it")
     o.add_argument("ids", nargs="*", metavar="id"); o.add_argument("--into", required=True)
     o.add_argument("--reason", help="why; with a --file, the reason a line without its own takes")

@@ -2,6 +2,24 @@
 
 To update, ask Claude in any chat to update Budgit: it runs `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, and reports the version. Your next chat uses it. In a terminal session, `/reload-plugins` is an optional extra. The Release notes page of the wiki has the same notes.
 
+## 0.13.9.13
+
+### Added
+
+- **Ledger items need an area.** `ledger add` now requires `--area`, and `ledger area` fills in the area of old items.
+- **Ledger and rules are easier to search:** `rules show --grep` finds a rule by word, and `ledger list` has filters (including by area).
+- **Every prompt carries the real local time** of your machine (clock and time zone), in English and Spanish, in every session.
+- **Call caps come from similar past runs:** Budgit keeps a record of past runs, suggests a call cap from similar ones, and prints a note when a run reaches 80 % of its cap.
+
+### Changed
+
+- **Verifier reruns check only what changed.** Selective test runs take no suite lock, so they no longer wait behind a full run.
+- **Advisory notes show once per session** instead of on every call, and each role gets one start budget; over-budget sections become short pointers.
+- **`ledger done` refuses a proof sha that main cannot reach.**
+- **A test run imports only its own checkout,** so a worktree can no longer test another copy's code by mistake.
+- **A card about a file carries its path** (or link), including directories and Windows paths.
+- With the language set to Spanish, job warnings and job messages now print in Spanish.
+
 ## 0.13.9.12
 
 Update now if you run 0.13.9.10 or older.

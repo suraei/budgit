@@ -64,6 +64,14 @@ Inputs you are given: the project dir and one or more ledger item ids (R-n). For
    - `population: <path> rows=<n>`: the full source export for the period (every operation, `.csv` or `.jsonl`); the path is
      relative to the project root or absolute, and M must equal both `rows=` and the real row count (header excluded);
    - the 4-line checklist: what was checked / what was not checked / against which source / N of M.
+   - `scope: full | changed-only (<k> re-run, <c> carried from <old sha>)`.
+4b. Rerun scope (R-1134). Round 1 checks everything. Round N>1 reads the previous report of this item (sha on line 3, its ✓/✗ rows) and re-runs:
+   (a) every check that failed or was unchecked; (b) every check whose evidence touches a file in `git diff --name-only <old>..<new>`;
+   (c) the OUTCOME row, always; (d) the selective tests for the changed files.
+   Every other ✓ row is carried forward, marked `carried from <old sha>`; never re-run, never silently dropped.
+   Carry nothing forward (full round) when the old sha is not an ancestor of the new sha, when the diff touches a hook, a guard,
+   the ledger code or the tests' shared helpers, or when the brief asks for a full recheck.
+   The full suite runs once per release candidate, not once per round; state which one you ran.
    Findings go one per line in `.budgit/verify/<name>.findings.jsonl` (same name as the report):
    `{"id","item","text","status":"open"|"closed","evidence"}`. Any open row blocks "ready"; a closed row needs non-empty
    evidence (the source and what changed); a finding is closed, never deleted.

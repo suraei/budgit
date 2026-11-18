@@ -68,6 +68,24 @@ def text(topic_id, shipped_only=False):
     return rep if rep is not None else shipped_text(topic_id)
 
 
+def fold(s):
+    """R-1137: case-insensitive and accent-folded, the same fold the rest of Budgit uses."""
+    return sl.fold_ascii(str(s)).casefold()
+
+
+def body_lines(topic_id):
+    """R-1137: the rule lines of a topic only: no `## n.` header, no blank line, no quoted provenance (`>` or «…» lines)."""
+    return [x for x in text(topic_id).splitlines()
+            if x.strip() and not x.startswith("#") and not x.lstrip().startswith(">") and "«" not in x]
+
+
+def grep(word, topic_id=None):
+    """R-1137: ("topic", line) for each body line holding `word`, in one topic or in every topic."""
+    w = fold(word)
+    ids = [_find(topic_id)["id"]] if topic_id else topic_ids()
+    return [(i, x) for i in ids for x in body_lines(i) if w in fold(x)]
+
+
 def _digest_of(t, shipped_only):
     rep = None if shipped_only else _replacement(t["id"])
     if rep is None:

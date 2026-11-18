@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.13.9.12-7d68c4?style=flat-square" alt="Version 0.13.9.12">
+  <img src="https://img.shields.io/badge/version-0.13.9.13-7d68c4?style=flat-square" alt="Version 0.13.9.13">
   <img src="https://img.shields.io/badge/Claude_Code-2.1.292%2B-D97757?style=flat-square&logo=claude&logoColor=white" alt="Claude Code 2.1.292 or newer">
   <img src="https://img.shields.io/badge/Python-3-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3">
   <img src="https://img.shields.io/badge/macOS-tested-000000?style=flat-square&logo=apple&logoColor=white" alt="Tested on macOS">
@@ -52,10 +52,10 @@
   </picture>
 </p>
 
-> The Claude desktop app's Cowork and Customize > Plugins screens cannot install Budgit. Install it from Claude Code with `/plugin install budgit --marketplace suraei/budgit`, or from a shell with `claude plugin marketplace add suraei/budgit` then `claude plugin install budgit@budgit-hub`.
+> The Claude desktop app's Cowork and Customize > Plugins screens cannot install Budgit. Install it from Claude Code with `/plugin install budgit --marketplace OWNER/REPO`, or from a shell with `claude plugin marketplace add OWNER/REPO` then `claude plugin install budgit@budgit-hub`.
 
 ```
-/plugin install budgit --marketplace suraei/budgit
+/plugin install budgit --marketplace OWNER/REPO
 ```
 
 Claude Code 2.1.292+ and Python 3. [Getting started](../../wiki/Getting-started) has the rest.
@@ -216,7 +216,7 @@ A small pet whose mood is your week. He lives above your prompt, and on macOS in
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/wiki/suraei/budgit/images/brote-float.gif" width="100%" alt="Brote, drawn flat, standing and moving on top of a Claude window">
+  <img src="https://raw.githubusercontent.com/wiki/OWNER/REPO/images/brote-float.gif" width="100%" alt="Brote, drawn flat, standing and moving on top of a Claude window">
 </p>
 
 **Floating window (macOS):** `/budgit-brote on` brings him back and `/budgit-brote off` closes him. The floating window runs on macOS only.

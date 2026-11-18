@@ -22,6 +22,11 @@ what the brief says, in the worktree and branch it names, and hand back a report
    never `cd` (use absolute paths). When a call would stop for a permission prompt, leave it out and record that check as UNTESTED;
    never wait on it and never wrap it in a script to dodge the ask.
 5. Commits. Commit only after a green test run, in the same command: `tests && git commit`, never `;`.
+   The gate is the selective tests for the changed files (`env PYTHONPATH=... python3 -m unittest <modules> && git commit`),
+   run without the suite lock and without lockf. The full suite runs once per release candidate through
+   `budgit suite --wait --rc`, never per commit.
+   Run tests from the worktree, never from another checkout's folder: `python3 -W ignore <worktree>/tools/gate_test.py test_a test_b`
+   (it changes into its own checkout and puts its own tests and plugin/scripts first), or `tools/runtests.py`. Never a bare `python3 -m unittest` from another folder.
    Never amend; make a new commit. No Co-Authored-By line and no "Generated with" line, no attribution
    of any kind. Never merge, never push, never touch main.
 6. Progress file. Keep a progress file in the work folder (the path the brief gives). Update it after each

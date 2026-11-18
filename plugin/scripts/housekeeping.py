@@ -784,9 +784,15 @@ def schedule(op, budgit_path, at=None, name="cleanup", every=None):
     LABEL = job["label"]                                            # this job's label (shadows the module's cleanup label here)
     path = os.path.join(agents_dir(), LABEL + ".plist")
     uid = os.getuid()
+    import jobs
+    task = jobs.covering_task(name)                                 # R-1141: an app scheduled task that runs this job
     if op == "status":
         if not os.path.exists(path):
+            if task:
+                return 0, "job.covered", {"task": task, "name": name}
             return 0, "hk.sched_off", {}
+        if task:
+            return 1, "job.twice", {"task": task, "name": name}                   # a launch agent AND the app task: two schedulers
         try:
             import plistlib
             with open(path, "rb") as f:
@@ -813,11 +819,16 @@ def schedule(op, budgit_path, at=None, name="cleanup", every=None):
         except OSError:
             return 1, "hk.sched_failed", {"why": path}
         return 0, "hk.sched_removed", {}
+    if task:                                                        # R-1141: one scheduler per job: the app task covers it, no launch agent
+        return 0, "job.covered", {"task": task, "name": name}
     if "interval" in job:
         if every is not None and not (type(every) is int and every >= MIN_INTERVAL):
             return 64, "hk.sched_time", {"at": str(every)}
     elif at is not None and not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
         return 64, "hk.sched_time", {"at": at}
+    where = jobs.blocked_where(budgit_path)                         # R-1141: a launch agent there fails with exit 2 (macOS privacy); refuse
+    if where:
+        return 1, "job.tcc_refused", {"where": where, "name": name}
     import updatelib
     import installstep as upgrade
     home = sl.home_state()

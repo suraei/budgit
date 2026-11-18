@@ -31,7 +31,7 @@ reference/ledger.md). Record `CORRECTION #n` + root cause whenever the user corr
   the base/structure, ≤5 ledger items, runnable end to end (one real flow + one command to start it). Tag them
   `budgit ledger phase mvp R-n …`; build the walking skeleton FIRST and show it running to the user. Until the MVP
   ships, every new idea, research angle, polish or tool improvement — yours, an agent's or the user's — is parked:
-  `budgit ledger add … --phase later --appetite small` / `budgit ledger phase later R-n`, never started (the user's explicit "do it now" is the
+  `budgit ledger add … --phase later --appetite small --area WORD` / `budgit ledger phase later R-n`, never started (the user's explicit "do it now" is the
   only override). `budgit status` and the session start show «MVP n/m»; `ledger set R-n doing` on a non-MVP item
   warns — stop and park it. Resuming a project without MVP tags → define them before any other work.
   Same for fixes: a review that keeps finding issues is closed after ≤3 rounds with the residual risk named to

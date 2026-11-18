@@ -114,12 +114,30 @@ def scheduled():
     return out
 
 
-def problems(now=None, state=None, sched=None, prompt_exists=None):
-    """-> [(name, kind, fields)], kind in failed | missed | never | noprompt (instruction file missing). Every input is injectable for tests."""
+def active_state(state, sched):
+    """R-1141: the run records that still count: a Budgit job counts only while its launch agent is on. The log of a job that is off (or
+    that an app scheduled task now runs) is stale and never a failure."""
+    import housekeeping
+    return {n: e for n, e in state.items() if n not in housekeeping.JOBS or n in sched}
+
+
+def problems(now=None, state=None, sched=None, prompt_exists=None, live=None):
+    """-> [(name, kind, fields)], kind in failed | missed | never | noprompt (instruction file missing) | twice (a launch agent and an
+    app task both run the job). Every input is injectable for tests; with no state given (`live`) the stale records are dropped
+    and the twice check runs."""
     now = time.time() if now is None else now
-    state = load() if state is None else state
+    live = state is None if live is None else live
     sched = scheduled() if sched is None else sched
+    state = load() if state is None else state
+    if live:
+        state = active_state(state, sched)
     found = []
+    if live:
+        import jobs
+        for name in sorted(sched):
+            task = jobs.covering_task(name)
+            if task:
+                found.append((name, "twice", {"task": task}))
     for name in sorted(state):
         e = state[name]
         age = now - e["last"]
@@ -157,34 +175,52 @@ def last_runs(state=None):
     return rows
 
 
+def _row(name, last, code, state):
+    note = (state.get(name) or {}).get("note")
+    if note and last != "never":      # R-1128: a skip shows its reason and time
+        return "%s: skipped: %s, %s" % (name, note, time.strftime("%Y-%m-%d %H:%M", time.localtime(last)))
+    return ("%s: never" % name if last == "never"
+            else "%s: last run %s, exit %s" % (name, time.strftime("%Y-%m-%d %H:%M", time.localtime(last)), code))
+
+
 def last_runs_text(state=None):
     """-> one plain line per job: `name: last run <local time>, exit N`, or `name: never`."""
-    out = []
     state = load() if state is None else state
+    return "\n".join(_row(name, last, code, state) for name, last, code in last_runs(state))
+
+
+def scheduler_text(state, sched, lang=None):
+    """R-1141: one line per job for `budgit job health`, by who runs it: a job whose launch agent is on shows its last run; a job an app
+    scheduled task runs reads "off (covered by the app task X)"; any other job reads "off". Neither of the last two is a failure."""
+    import i18n
+    import jobs
+    out = []
     for name, last, code in last_runs(state):
-        note = (state.get(name) or {}).get("note")
-        if note and last != "never":      # R-1128: a skip shows its reason and time
-            out.append("%s: skipped: %s, %s" % (name, note, time.strftime("%Y-%m-%d %H:%M", time.localtime(last))))
+        if name in sched:
+            out.append(_row(name, last, code, state))
             continue
-        out.append("%s: never" % name if last == "never"
-                   else "%s: last run %s, exit %s" % (name, time.strftime("%Y-%m-%d %H:%M", time.localtime(last)), code))
+        task = jobs.covering_task(name)
+        out.append(i18n.t("jh.row_covered", lang, name=name, task=task) if task else i18n.t("jh.row_off", lang, name=name))
     return "\n".join(out)
 
 
 def report(now=None, state=None, sched=None, lang=None, prompt_exists=None):
-    """R-1128: -> (exit code, text) for `budgit job health`: the last run of every job ("never" with no record), then the problem line.
+    """R-1128: -> (exit code, text) for `budgit job health`: one line per job, then the problem line. R-1141: with no state given the
+    jobs are read as they are on this machine (who runs each one; a stale log of a job that is off does not count).
     Exit 0 only when no job has a problem (a failed or missed run, or an instruction file missing)."""
+    live = state is None
+    sched = scheduled() if sched is None else sched
     state = load() if state is None else state
-    problem = line(now, state, sched, lang, prompt_exists)
-    text = last_runs_text(state)
+    problem = line(now, state, sched, lang, prompt_exists, live=live)
+    text = scheduler_text(state, sched, lang) if live else last_runs_text(state)
     return (1, text + "\n" + problem) if problem else (0, text)
 
 
-def line(now=None, state=None, sched=None, lang=None, prompt_exists=None, kinds=None):
+def line(now=None, state=None, sched=None, lang=None, prompt_exists=None, kinds=None, live=None):
     """-> the one job-health line in the user's language, or None when every job is healthy (the report prints nothing then).
     `kinds`: only the problems of those kinds (the session start asks for "blocked")."""
     import i18n
-    found = [p for p in problems(now, state, sched, prompt_exists) if kinds is None or p[1] in kinds]
+    found = [p for p in problems(now, state, sched, prompt_exists, live) if kinds is None or p[1] in kinds]
     if not found:
         return None
     items = "; ".join(i18n.t("jh." + kind, lang, name=name, **f) for name, kind, f in found)

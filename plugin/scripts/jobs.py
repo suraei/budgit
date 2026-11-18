@@ -140,31 +140,77 @@ def recorded_yes(name):
 PRIVACY_FOLDERS = (("Documents",), ("Desktop",), ("Downloads",), ("Library", "Mobile Documents"))     # macOS privacy (TCC) folders
 
 
-def blocked_folder_warning(name, budgit_path, cwd=None, home=None, lang=None):
-    """I-1713: "" or one plain warning when the plugin or the current project sits under Documents, Desktop, Downloads or iCloud Drive of
-    the user's folder (macOS may stop a launch agent there; the user may have granted access, so this never refuses)."""
+def blocked_where(budgit_path, cwd=None, home=None, lang=None):
+    """"" or what sits in a macOS privacy folder (Documents, Desktop, Downloads, iCloud Drive of the user's folder): the Budgit plugin or
+    the current project."""
     import i18n
     home = os.path.realpath(home or os.path.expanduser("~"))
     root = os.path.dirname(os.path.dirname(os.path.realpath(budgit_path)))
     here = os.path.realpath(cwd or os.getcwd())
-    for where, path in (("Budgit (%s)" % root, root), ("the project (%s)" % here, here)):
+    for where, path in ((i18n.t("jh.where_plugin", lang, path=root), root), (i18n.t("jh.where_project", lang, path=here), here)):
         for parts in PRIVACY_FOLDERS:
             base = os.path.join(home, *parts)
             if path == base or path.startswith(base + os.sep):
-                return i18n.t("jh.warn_folder", lang, where=where, name=name)
+                return where
     return ""
+
+
+def blocked_folder_warning(name, budgit_path, cwd=None, home=None, lang=None):
+    """I-1713: "" or one plain warning when the plugin or the current project sits under a privacy folder (see blocked_where)."""
+    import i18n
+    where = blocked_where(budgit_path, cwd, home, lang)
+    return i18n.t("jh.warn_folder", lang, where=where, name=name) if where else ""
+
+
+# R-1141: each job has ONE scheduler. When a Claude app scheduled task (a folder under <Claude config>/scheduled-tasks) covers a job,
+# Budgit installs no launch agent for it; health and status say so. The one place that names the tasks and looks for them.
+APP_TASKS = {"keepalive": ("budgit-keep-alive",), "cleanup": ("budgit-housekeeping",), "standup": ("budgit-daily-standup",)}
+
+
+def app_tasks_dir():
+    base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    return os.path.join(base, "scheduled-tasks")
+
+
+def covering_task(name):
+    """-> the name of the app scheduled task that runs job `name`, or None. Only the existence of its folder is looked at."""
+    for task in APP_TASKS.get(name, ()):
+        if os.path.isdir(os.path.join(app_tasks_dir(), task)):
+            return task
+    return None
+
+
+PER_JOB_KEYS = {"hk.sched_set": "job.sched_set", "hk.sched_removed": "job.sched_removed", "hk.sched_off": "job.sched_off",
+                "hk.sched_on": "job.sched_on", "hk.sched_stale": "job.sched_stale", "hk.sched_failed": "job.sched_failed",
+                "hk.sched_stale_launcher": "job.sched_stale_launcher"}
+
+
+def say(name, key, fields, lang=None):
+    """R-1141: the line for what schedule() returned. The hk.sched_* lines talk about the daily housekeeping, so another job gets its
+    own job.sched_* line naming it (status of keepalive never prints the cleanup line)."""
+    import i18n
+    if name != "cleanup" and key in PER_JOB_KEYS:
+        key = PER_JOB_KEYS[key]
+    if key.startswith("job."):
+        fields = dict(fields, name=name)
+    at = fields.get("at")
+    if isinstance(at, str) and at.startswith("every ") and at.endswith(" s"):      # an interval job: the time words follow the language
+        fields = dict(fields, at=i18n.t("job.every", lang, n=at[6:-2]))
+    return i18n.t(key, lang, **fields)
 
 
 def turn_on(name, budgit_path, at=None, every=None, which=shutil.which):
     """-> (exit code, text). Refuses without a recorded yes (exit 1, nothing written)."""
     import housekeeping
-    if name not in housekeeping.JOBS:
-        return 64, "budgit job: unknown job %s (cleanup, keepalive, standup)" % name
-    if not recorded_yes(name):
-        return 1, "budgit job on %s: no recorded yes; record one with `budgit setup --answer %s=yes`" % (name, name)
-    code, key, fields = housekeeping.schedule("on", budgit_path, at, name, every)
     import i18n
-    text = i18n.t(key, **fields)
+    if name not in housekeeping.JOBS:
+        return 64, i18n.t("jh.unknown_job", name=name)
+    if not recorded_yes(name):
+        return 1, i18n.t("jh.no_yes", name=name)
+    code, key, fields = housekeeping.schedule("on", budgit_path, at, name, every)
+    text = say(name, key, fields)
+    if key == "job.covered":                      # R-1141: an app task runs it; nothing is installed, nothing else to do
+        return code, text
     if code == 0:
         try:
             warning = blocked_folder_warning(name, budgit_path)
@@ -178,26 +224,24 @@ def turn_on(name, budgit_path, at=None, every=None, which=shutil.which):
         data[name] = {"claude": claude}   # only a hint now: run time resolves again (resolve_claude_runtime)
         save(data)
         if not claude:
-            text += "\nbudgit job: `claude` was not found on PATH; the job will log one line and do nothing until it is."
+            text += "\n" + i18n.t("jh.no_claude")
     return code, text
 
 
 def turn_off(name, budgit_path):
     import housekeeping
-    import i18n
     if name not in housekeeping.JOBS:
         return 64, "budgit job: unknown job %s" % name
     code, key, fields = housekeeping.schedule("off", budgit_path, None, name)
-    return code, i18n.t(key, **fields)
+    return code, say(name, key, fields)
 
 
 def status(name, budgit_path):
     import housekeeping
-    import i18n
     if name not in housekeeping.JOBS:
         return 64, "budgit job: unknown job %s" % name
     code, key, fields = housekeeping.schedule("status", budgit_path, None, name)
-    return code, i18n.t(key, **fields)
+    return code, say(name, key, fields)
 
 
 # R-332 / R-871: scheduled tasks that are retired, not deleted. The model housekeeping task is replaced by the deterministic

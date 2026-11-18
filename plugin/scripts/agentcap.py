@@ -2,13 +2,15 @@
 now counts every tool call a subagent makes (hook input carries agent_id only inside subagents). Zero model tokens.
 cap-5 -> a note to wrap up; past cap+20 -> every tool but Write is denied so the agent saves its report and ends."""
 import json
+import math
 import os
 import re
+import time
 
 import studiolib as sl
 
 SOFT_MARGIN, HARD_MARGIN = 5, 20
-WARN_PERCENT = 80                           # R-750: one "report soon" note per round at this share of the brief's budget
+WARN_PERCENT = 80                           # R-750, R-1158: one "stop starting new work" note per round at this share of the budget
 MAX_STATED = 500
 
 
@@ -54,6 +56,177 @@ def _bump(agent_id, suffix=""):
         f.write(str(n))
     os.replace(tmp, path)
     return n
+
+
+# R-1158: one JSON line per finished round, in Budgit's own state beside the counters: agent type, the first 60 chars of
+# the description, stated budget, work calls used, date, owner session id. Never prompt text.
+RUNS_NAME, LAUNCHES_NAME = "runs.jsonl", "launches.jsonl"
+MAX_LINES = 2000
+TAIL_BYTES, ROTATE_BYTES = 512 * 1024, 1024 * 1024
+MIN_SIMILAR = 3
+SIMILAR_WORDS = 2
+SUGGEST_FACTOR = 1.2
+STOP_WORDS = frozenset("with from that this have into your their there about then than them they what when will "
+                       "make some more only also just over each both done work item step build fix".split())
+
+
+def _runs_path(name=RUNS_NAME):
+    return os.path.join(sl.home_state(), "agent-calls", name)
+
+
+def _read_lines(name):
+    try:                                         # only the tail is read; bad bytes never raise (R-1158 round 2)
+        with open(_runs_path(name), "rb") as f:
+            size = f.seek(0, os.SEEK_END)
+            f.seek(max(0, size - TAIL_BYTES))
+            data = f.read(TAIL_BYTES)
+    except OSError:
+        return []
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    if size > TAIL_BYTES:
+        lines = lines[1:]                        # the first line of a tail may be cut in half
+    out = []
+    for line in lines[-MAX_LINES:]:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict):
+            out.append(rec)
+    return out
+
+
+def _append(name, rec):
+    path = _runs_path(name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        if os.path.getsize(path) > ROTATE_BYTES:
+            os.replace(path, path + ".1")        # one old copy, replaced each time: the record stays bounded
+    except OSError:
+        pass
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(fd, (json.dumps(rec, ensure_ascii=False) + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def _kind(value):
+    return sl.canon_agent(value) if isinstance(value, str) and value else "general-purpose"
+
+
+def note_launch(inp):
+    """At the Agent tool's PreToolUse: remember type and description for the round-end record (the stop event has no
+    description of its own). Bounded; a failure is the caller's to log."""
+    ti = inp.get("tool_input")
+    if not isinstance(ti, dict) or not isinstance(ti.get("description"), str):
+        return
+    rows = _read_lines(LAUNCHES_NAME)[-49:] + [{"session": str(inp.get("session_id") or ""), "type": _kind(ti.get("subagent_type")),
+                                                 "desc": ti["description"][:60]}]
+    path = _runs_path(LAUNCHES_NAME)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp%d" % os.getpid()
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+    os.replace(tmp, path)
+
+
+def _description(inp, kind):
+    """The subagent's description: its own meta file when it has one, else the oldest launch noted for this session and type."""
+    t = _transcript(inp)
+    if t:
+        try:
+            with open(t[:-len(".jsonl")] + ".meta.json", encoding="utf-8") as f:
+                d = json.load(f).get("description")
+            if isinstance(d, str) and d:
+                return d[:60]
+        except (OSError, ValueError, AttributeError):
+            pass
+    rows, session = _read_lines(LAUNCHES_NAME), str(inp.get("session_id") or "")
+    for i in range(len(rows) - 1, -1, -1):       # the newest match
+        r = rows[i]
+        if r.get("session") == session and r.get("type") == kind:
+            rest = rows[:i] + rows[i + 1:]
+            path = _runs_path(LAUNCHES_NAME)
+            tmp = path + ".tmp%d" % os.getpid()
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in rest))
+            os.replace(tmp, path)
+            return str(r.get("desc") or "")[:60]
+    return ""
+
+
+def _read_count(path):
+    try:
+        with open(path) as f:
+            return int(f.read().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def record_round(inp):
+    """R-1158: append the finished round to the past-run record. Call it BEFORE the counters are removed. A round with no
+    work call writes nothing."""
+    agent_id = inp.get("agent_id")
+    n = _read_count(_path(agent_id))
+    if n <= 0:
+        return
+    stated = 0
+    try:
+        with open(_path(agent_id) + ".round") as f:
+            stated = int(json.load(f)["b"])
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    stated = stated or _read_count(_path(agent_id) + ".budget")
+    kind = inp.get("agent_type")
+    if not kind:
+        t = _transcript(inp)
+        try:
+            with open(t[:-len(".jsonl")] + ".meta.json", encoding="utf-8") as f:
+                kind = json.load(f).get("agentType")
+        except (OSError, ValueError, AttributeError, TypeError):
+            kind = None
+    kind = _kind(kind)
+    _append(RUNS_NAME, {"type": kind, "desc": _description(inp, kind), "budget": min(stated, MAX_STATED), "calls": n,
+                        "date": time.strftime("%Y-%m-%d"), "owner": str(inp.get("session_id") or "")})
+
+
+def _words(text):
+    return {w for w in re.findall(r"[^\W\d_]{4,}", str(text or "").lower()) if w not in STOP_WORDS}
+
+
+def advice(tool_input):
+    """R-1158: one line before a start when 3 or more past runs of the same agent type share 2 content words with this
+    description. Advice only. None otherwise."""
+    if not isinstance(tool_input, dict) or not isinstance(tool_input.get("description"), str):
+        return None
+    kind, words = _kind(tool_input.get("subagent_type")), _words(tool_input["description"])
+    calls = sorted(int(r["calls"]) for r in _read_lines(RUNS_NAME)
+                   if r.get("type") == kind and isinstance(r.get("calls"), int) and len(_words(r.get("desc")) & words) >= SIMILAR_WORDS)
+    if len(calls) < MIN_SIMILAR:
+        return None
+    n = len(calls)
+    median = calls[n // 2] if n % 2 else math.ceil((calls[n // 2 - 1] + calls[n // 2]) / 2)
+    p80 = calls[math.ceil(n * 0.8) - 1]
+    m = _BRIEF_BUDGET.search(str(tool_input.get("prompt") or ""))
+    stated = int(m.group(1)) if m else None
+    text = "budgit: similar past runs (%d) used median %d, p80 %d calls; your brief says %s" % (n, median, p80, stated if stated else "none")
+    if stated is None or stated < p80:
+        text += "; suggest Budget: %d" % math.ceil(p80 * SUGGEST_FACTOR)
+    return text
+
+
+def over_budget_by_owner(days=7, today=None):
+    """R-1158: {owner session id: (runs over their stated budget, runs)} for the last `days` days of the record."""
+    cutoff = time.strftime("%Y-%m-%d", time.localtime((today or time.time()) - days * 86400))
+    out = {}
+    for r in _read_lines(RUNS_NAME):
+        if str(r.get("date") or "") < cutoff or not r.get("owner"):
+            continue
+        over, total = out.get(r["owner"], (0, 0))
+        b, c = r.get("budget"), r.get("calls")
+        out[r["owner"]] = (over + bool(isinstance(b, int) and b > 0 and isinstance(c, int) and c > b), total + 1)
+    return out
 
 
 def reset(agent_id):
@@ -179,6 +352,10 @@ def _read_round(inp):
         m = _BRIEF_BUDGET.search(text)
         b = int(m.group(1)) if m else 0       # the resume's own line applies; none means the original one
     if new_k > k and k > 0:                   # k == 0 is the first sight of the brief: nothing to zero
+        try:
+            record_round(inp)                 # R-1158: the round that just ended, before its counters go
+        except Exception:
+            sl.log_error("agent round record")
         for suffix in ("", ".waits"):
             try:
                 os.remove(_path(agent_id) + suffix)
@@ -282,6 +459,39 @@ def _card_text(tool_input):
             for o in q.get("options") if isinstance(q.get("options"), list) else []:
                 parts.append(" ".join(str(o.get(k) or "") for k in ("label", "description")) if isinstance(o, dict) else str(o))
     return "\n".join(parts)
+
+
+# R-1152: the one place for the words of a file-like thing and for what counts as a path or link.
+# Strong words always point at a thing to look at; generic words (file, page, image, design) only after a pointing word.
+FILE_WORDS = (r"mock-?ups?|mocks?|maquetas?|bocetos?|capturas?(?:\s+de\s+pantalla)?|screenshots?|pantallazos?|previews?"
+              r"|opci[oó]n\s+\w+\s+dibujada|option\s+\w+\s+drawn")
+GENERIC_WORDS = (r"im[aá]genes|imagen|images?|archivos?|ficheros?|files?|captures?|p[aá]ginas?|pages?"
+                 r"|dise[nñ]os?|designs?")
+_POINT = (r"(?:this|that|these|those|the|my|our|your|a|an|which|esta|este|estos|estas|esa|ese|esos|esas|aquel|aquella|aquellos|aquellas"
+          r"|el|la|los|las|al|del|un|una|unos|unas|mi|tu|nuestro|nuestra)\s+")
+_GENERIC = re.compile(r"(?<![\w/.-])" + _POINT + r"((?:" + GENERIC_WORDS + r")\b)(?!\s+(?:format|type|system|decisions?|choices?|questions?|name|size|limit))", re.I)
+_STRONG = re.compile(r"(?<![\w/.-])(?:" + FILE_WORDS + r")(?![\w/-])", re.I)
+_CARD_REF = re.compile(r"(?:https?://|file://)\S+|(?<![\w:.\-/])~/\S*|\b[A-Za-z]:\\\S+"
+                       r"|(?<![\w:.\-/])/[\w.~-]+(?:/[\w.~-]+)+/?", re.I)
+
+
+def card_ref_missing(tool_input):
+    """R-1152: the file-like word a card names when its whole text holds no path or link; else None."""
+    if not isinstance(tool_input, dict):
+        return None
+    qs = tool_input.get("questions")
+    parts = []
+    for q in qs if isinstance(qs, list) else []:
+        if not isinstance(q, dict):
+            continue
+        parts += [str(q.get("header") or ""), str(q.get("question") or "")]
+        for o in q.get("options") if isinstance(q.get("options"), list) else []:
+            parts.append(" ".join(str(o.get(k) or "") for k in ("label", "description", "preview")) if isinstance(o, dict) else str(o))
+    text = "\n".join(parts)
+    hit = _STRONG.search(text) or _GENERIC.search(text)
+    if not hit or _CARD_REF.search(text):
+        return None
+    return " ".join(hit.group(0).split())
 
 
 def single_source_warning(tool_input):
@@ -475,7 +685,8 @@ def _check(inp, cap):
                     % (stated, n, hard + 1))
         notes = ["budgit: budget read: %d" % stated] if n == 1 else []     # R-750: the agent sees which number applies
         if n == (stated * WARN_PERCENT) // 100 and n < stated:      # R-750: once per round, every subagent
-            notes.append("budgit: report soon: %d of %d calls used." % (n, stated))
+            notes.append("budgit: %d %% of your budget used (%d of %d): stop starting new work; finish the current step, "
+                         "commit green work, and report what is done and what is left." % (WARN_PERCENT, n, stated))
         if is_verifier(inp) and n == stated - REPORT_MARGIN:
             notes.append(_report_note(n, stated))
         return ("note", " ".join(notes)) if notes else None

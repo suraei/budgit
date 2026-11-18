@@ -6,7 +6,7 @@ Every message the user sends (mid-turn ones and the user's answers to your quest
 
 | Command | Use |
 |---|---|
-| `budgit ledger add --src I-n --appetite small|medium|large [--phase P]` | new request — copies the user's literal words |
+| `budgit ledger add --src I-n --appetite small|medium|large --area WORD [--phase P]` (no natural area: `--area triage`) | new request — copies the user's literal words |
 | `budgit ledger link R-n --src I-n` | refines an existing item (no change to its contract) |
 | `budgit ledger link R-n --src I-n --change "what" --why "why"` | the input CHANGES an existing item: logged on it; a `done` item reopens and its old verify report is renamed stale, so the old PASS cannot verify it again. A `doing` item prints its owner session: tell that lane |
 | `budgit ledger match "text"` or `--input I-n` | triage, read-only: up to 3 existing items the input may belong to (open, doing, parked, or closed in the last 14 days) |

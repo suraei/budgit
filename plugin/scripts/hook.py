@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import json
 import os
+import stat
 import time
 import re
 import sys
@@ -67,8 +68,116 @@ def flush():
         sys.stdout.write(json.dumps(_OUT, ensure_ascii=True))
 
 
+_START = []            # R-1137: the SessionStart sections of this run; _finish_start() fits them to the role's budget and emits ONE context
+_NEXT_TAG = [None]
+
+
+def _note_shape(text):
+    """R-1137 item 4: (template, figures). Each figure is (value, slack): memory in GB or MB may drift by 1 GB, a percent by 25,
+    any other number not at all. A drift inside the slack is the same note; anything else is a new one."""
+    figs = []
+
+    def take(m):
+        n, unit = float(m.group(1)), (m.group(2) or "").strip()
+        if unit == "MB":
+            figs.append((n / 1024.0, 1.0))
+        elif unit == "GB":
+            figs.append((n, 1.0))
+        elif unit == "%":
+            figs.append((n, 25.0))
+        else:
+            figs.append((n, 0.0))
+        return "#" + unit
+    return re.sub(r"(\d+(?:\.\d+)?)(\s*(?:MB|GB|%))?", take, text), figs
+
+
+def _note_unseen(session, text):
+    """True when this advisory note should be emitted: not yet said in this session. Any error, a link or no session id: emit."""
+    try:
+        name = re.sub(r"[^A-Za-z0-9_-]", "", str(session or ""))[:80]
+        if not name:
+            return True
+        folder = os.path.join(sl.home_state(), "notes-seen")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, name)
+        import stat
+        if stat.S_ISLNK(os.lstat(folder).st_mode):
+            return True
+        try:
+            mode = os.lstat(path).st_mode
+            if not stat.S_ISREG(mode):
+                return True
+        except FileNotFoundError:
+            pass
+        template, figs = _note_shape(text)
+        key = hashlib.sha1(template.encode("utf-8")).hexdigest()[:16]
+        lines = []
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except FileNotFoundError:
+            pass
+        kept = []
+        for line in lines:
+            head, _, rest = line.partition(" ")
+            if head != key:
+                kept.append(line)
+                continue
+            old = [float(x) for x in rest.split(",") if x]
+            if len(old) == len(figs) and all(abs(o - f[0]) <= f[1] for o, f in zip(old, figs)):
+                return False
+        sl.atomic_write(path, "\n".join(kept[-20:] + ["%s %s" % (key, ",".join("%g" % f[0] for f in figs))]) + "\n", 0o600)
+        cutoff = time.time() - 2 * 86400
+        for other in os.listdir(folder):
+            p = os.path.join(folder, other)
+            st = os.lstat(p)
+            if stat.S_ISREG(st.st_mode) and st.st_mtime < cutoff:
+                os.unlink(p)
+        return True
+    except Exception:
+        return True
+
+
 def _context(event, text):
+    if event == "SessionStart":                  # collected, never emitted piece by piece: the role's start budget applies to the sum
+        _START.append(__import__("startbudget").section(_NEXT_TAG[0] or "notice", text))
+        _NEXT_TAG[0] = None
+        return
     emit({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}})
+
+
+def _start(tag, text):
+    """One SessionStart section under its tag (see startbudget.TAGS)."""
+    _NEXT_TAG[0] = tag
+    _context("SessionStart", text)
+
+
+def _start_role(inp, project):
+    """The role key of startbudget.TABLE: subagent, TM, PM or lane; a session with no known role takes the lane row."""
+    if inp.get("agent_id") or inp.get("agent_type"):
+        return "subagent"
+    try:
+        import roles
+        return (roles.detect(inp.get("session_id"), project) or {}).get("role") or "lane"
+    except Exception:
+        sl.log_error("session-start: role for the budget")
+        return "lane"
+
+
+def _finish_start(inp, project):
+    """R-1137: the one place that turns the collected sections into the SessionStart additionalContext. A failure here
+    emits the sections whole (never silent: logged) rather than none."""
+    if not _START:
+        return
+    parts, _START[:] = list(_START), []
+    try:
+        import startbudget
+        text, _report = startbudget.fit(_start_role(inp if isinstance(inp, dict) else {}, project), parts)
+    except Exception:
+        sl.log_error("session-start: budget fit")
+        text = "\n".join(s["text"] for s in parts)
+    emit({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}})
 
 
 TRUST_PROMPTS = {"/budgit-trust work": "work", "/budgit-trust revoke": "revoke"}
@@ -101,6 +210,21 @@ def on_trust_prompt(inp):
     else:
         had = sl.revoke_trust(project)
         emit({"systemMessage": i18n.t("trust.revoked" if had else "trust.revoked_none", project=project)})
+
+
+def local_time_context(event):
+    """R-1159: one line with the machine's real local time, first in the context of every prompt and session start, so no
+    session writes a guessed time. Called once from main() for every UserPromptSubmit; peer cross-session messages and
+    subagent hand-backs fire UserPromptSubmit too (seen live), so they get it. Clock only: no subprocess, no file read. Any error skips the line."""
+    try:
+        import i18n
+        lang = i18n.detect()
+        tm = time.localtime()
+        _context(event, i18n.t("time.local", lang, clock=time.strftime("%H:%M", tm), day=i18n.day_abbr(tm.tm_wday, lang),
+                               date=tm.tm_mday, month=i18n.MONTHS_SHORT[lang][tm.tm_mon - 1], year=tm.tm_year,
+                               zone=time.strftime("%Z", tm)))
+    except Exception:
+        pass
 
 
 def on_prompt(inp, project):
@@ -193,8 +317,10 @@ def on_tm(event, inp):
     """True when this is the Team Manager chat; its prompt is kept as T-n in the Budgit home. Every prompt of every
     chat passes here, so only the list's `tm` key is read; the portfolio module loads in the TM chat alone."""
     try:
-        with open(os.path.join(sl.home_state(), "portfolio.json"), encoding="utf-8") as f:
-            tm = json.load(f).get("tm")
+        text = read_regular(os.path.join(sl.home_state(), "portfolio.json"), 1 << 20)
+        if text is None:
+            return False
+        tm = json.loads(text).get("tm")
     except (OSError, ValueError, AttributeError):
         return False
     if not tm or tm != inp.get("session_id"):
@@ -469,13 +595,17 @@ def on_pre_tool_use(inp, project, defer=None):
             source_note = agentcap.single_source_warning(inp.get("tool_input"))   # R-929 r4
             if source_note:
                 _context("PreToolUse", source_note)
+            past_note = agentcap.advice(inp.get("tool_input"))     # R-1158: advice from similar past runs, never a refusal
+            if past_note:
+                _context("PreToolUse", past_note)
+            agentcap.note_launch(inp)                              # R-1158: type and description for the round-end record
             import admit
             advice = admit.advice()
-            if advice:
+            if advice and _note_unseen(inp.get("session_id"), advice):
                 _context("PreToolUse", advice)
             import codexlane
             note = codexlane.review_first_note(project, (inp.get("tool_input") or {}).get("subagent_type"))
-            if note:
+            if note and _note_unseen(inp.get("session_id"), note):
                 _context("PreToolUse", note)
         except Exception:
             sl.log_error("agent start")
@@ -670,7 +800,7 @@ def on_post_tool_use(inp, project):
                              "answer", ref=inp.get("tool_use_id"))
     if new_id:
         _context("PostToolUse", "budgit: the user's answer was captured as %s — track it "
-                 "(`budgit ledger add --src %s --phase P --appetite small|medium|large`, `link` or `ack`)." % (new_id, new_id))
+                 "(`budgit ledger add --src %s --phase P --appetite small|medium|large --area WORD`, `link` or `ack`)." % (new_id, new_id))
 
 
 def on_stop(inp, project):
@@ -745,10 +875,19 @@ def _default_keepalive(postupdate):
             return
         import jobs
         postupdate.answer("keepalive", "yes")           # the default counts as the recorded yes
+        task = jobs.covering_task("keepalive")
+        if task:                                        # R-1141: the app scheduled task is its one scheduler: no launch agent, one line
+            _context("SessionStart", "Tell the user once, in their language: " + jobs.say("keepalive", "job.covered", {"task": task}))
+            return                                      # the stored yes means this never repeats
         budgit = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "bin", "budgit")
-        code, _text = jobs.turn_on("keepalive", budgit)
+        code, text = jobs.turn_on("keepalive", budgit)
         if code != 0:
             postupdate.answer("keepalive", "later")     # nothing was set up: try again next session
+            marker = os.path.join(sl.home_state(), "keepalive-refusal-said")
+            if jobs.blocked_where(budgit) and not os.path.exists(marker):      # R-1141: a privacy-folder refusal is said once, not retried silently
+                os.makedirs(sl.home_state(), mode=0o700, exist_ok=True)
+                sl.atomic_write(marker, "said\n")
+                _context("SessionStart", "Tell the user once, in their language: " + text)
             return
         line = ("Tell the user once, in their language: keep-alive (a wake-up of idle project work every 2 hours) is on by default; "
                 "`budgit setup --answer keepalive=no` or `budgit job off keepalive` switches it off.")
@@ -774,11 +913,11 @@ def on_rules_and_questions(inp, project):
         role = "coordinator" if portfolio.is_tm(sid) else ("lead" if project else "plain")
         text = rules.digest(role, off=state["rules"]["off"])
         version = __import__("updatelib").running_version(sl.studio_root()) or "0"
+        _start("rules", text)
         if inp.get("source") != "compact" and state["rules"]["told"] != version:
-            text += ("\nTell the user once, in their language: Budgit team rules are on; `budgit rules off <topic>` "
-                     "turns a part off, `budgit rules list` shows the topics.")
+            _start("notice", "Tell the user once, in their language: Budgit team rules are on; `budgit rules off <topic>` "
+                             "turns a part off, `budgit rules list` shows the topics.")
             postupdate.mark_told(version)
-        _context("SessionStart", text)
     if sl.vendored():
         return False
     _default_keepalive(postupdate)
@@ -791,6 +930,21 @@ def on_rules_and_questions(inp, project):
         return True
     _context("SessionStart", postupdate.question_line(keys))
     return False
+
+
+def read_regular(path, limit=4096):
+    """Text of `path` (at most `limit` bytes) if it is a regular file, else None. Opened O_NONBLOCK and O_NOFOLLOW and checked with fstat on the open fd, so a
+    FIFO or device planted in its place never blocks a hook."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        return os.read(fd, limit).decode("utf-8", "replace")
+    finally:
+        os.close(fd)
 
 
 def no_protected_line(project):
@@ -817,6 +971,7 @@ def _extra(label, fn):
 
 def on_session_start(inp, project, held=True):
     import brain
+    local_time_context("SessionStart")
     sid = inp.get("session_id")
     sl.touch_pointer(sid)
     if held:                                      # with a busy lock the summary is read-only; the next start sweeps
@@ -831,20 +986,22 @@ def on_session_start(inp, project, held=True):
         return tuple(jobs.digest_lines()) if held else ()
     digest = _extra("session-start: stand-up digest", _digest)
     try:
-        summary = sl.session_summary(project, inp.get("session_id"), extra=pointer + conflict + digest,
-                                     full=inp.get("source") in ("compact", "resume"))
+        for tag, text, short in sl.session_summary_sections(project, inp.get("session_id"), extra=pointer + conflict + digest,
+                                                            full=inp.get("source") in ("compact", "resume")):
+            _NEXT_TAG[0] = tag
+            _START.append(__import__("startbudget").section(tag, text, short))      # the summary's own sections, each with its tag
     except Exception as exc:                      # R-1128: a damaged project file must not reach main()'s "enforcement off" path
         sl.log_error("session-start: summary")
-        summary = ("budgit: the project file %s cannot be read (%s). Restore it from git (`git log -p -- %s`) or fix the JSON by hand, "
-                   "then start a new session. Budgit's guards stay on." % (
-                       os.path.join(sl.studio_dir(project), "ledger.json"), sl.oneline(str(exc), 120),
-                       os.path.join(sl.studio_dir(project), "ledger.json")))
-    _context("SessionStart", summary)
+        _start("fence", "budgit: the project file %s cannot be read (%s). Restore it from git (`git log -p -- %s`) or fix the JSON by hand, "
+                        "then start a new session. Budgit's guards stay on." % (
+                            os.path.join(sl.studio_dir(project), "ledger.json"), sl.oneline(str(exc), 120),
+                            os.path.join(sl.studio_dir(project), "ledger.json")))
+    _NEXT_TAG[0] = None
     if inp.get("source") == "compact":           # R-123: the resumed session is pointed at the checkpoint written before the cut
         try:
             line = checkpoint_line(project, inp.get("session_id"))
             if line:
-                _context("SessionStart", line)
+                _start("action", line)
         except Exception:
             sl.log_error("session-start: checkpoint line")
     if inp.get("source") == "clear" and project:   # R-930: a cleared (renewed) chat starts its turn from the pending handoff
@@ -852,14 +1009,14 @@ def on_session_start(inp, project, held=True):
             import handoff
             line = handoff.resume_line(project)
             if line:
-                _context("SessionStart", line)
+                _start("action", line)
         except Exception:
             sl.log_error("session-start: clear resume")
     try:                                         # R-286 task 4: one line when a decision waits; a failure prints nothing
         import triggers
         due = triggers.session_line(project, source=inp.get("source"))
         if due:
-            _context("SessionStart", due)
+            _start("action", due)
     except Exception:
         sl.log_error("session-start: triggers line")
 
@@ -1063,6 +1220,7 @@ def _fallback_after_crash(inp, name):
 def main():
     event = sys.argv[1] if len(sys.argv) > 1 else ""
     inp = None                                     # R-1128 hotfix 1: stays None when the payload cannot be parsed
+    project = None
     try:
         inp = json.load(sys.stdin)
         if os.environ.get("BUDGIT_HOOK_DEBUG") and isinstance(inp, dict) and inp.get("agent_id"):   # R-849: which fields a subagent payload carries
@@ -1083,7 +1241,8 @@ def main():
             if on_tm(event, inp):                      # R-283 S10: the TM's words stay out of every project inbox
                 project = None
         if event == "user-prompt-submit":
-            on_trust_prompt(inp)            # the user's own typed /budgit-trust work|revoke, in every session
+            local_time_context("UserPromptSubmit")   # R-1159: every session, bound or not, lock or no lock; first in the context
+            on_trust_prompt(inp)          # the user's own typed /budgit-trust work|revoke, in every session
             try:                            # R-641: «me voy» sets, the user's next real prompt clears; only from this real event
                 import away
                 import postupdate
@@ -1109,8 +1268,22 @@ def main():
                     asked = "(unreadable question)"
                 _away_note(asked, "ask", inp.get("session_id"), project, inp.get("cwd"))
                 _decision("PreToolUse", "deny", away.REASON)
+            else:
+                try:                    # R-1152: a card about a file-like thing must carry its path or link
+                    import agentcap
+                    import i18n
+                    thing = agentcap.card_ref_missing(inp.get("tool_input"))
+                    if thing:
+                        _decision("PreToolUse", "deny", i18n.t("guard.card_ref", thing=thing))
+                except Exception:
+                    sl.log_error("card ref check")
             return 0
         if event == "user-prompt-submit":  # context nudge runs in EVERY session, zero model tokens
+            try:                                       # R-1178: a new prompt starts the reply-first count again
+                import replyfirst
+                replyfirst.on_prompt(inp.get("session_id"))
+            except Exception:
+                sl.log_error("reply first reset")
             try:
                 note = relay_note(inp)
                 if note:
@@ -1159,9 +1332,7 @@ def main():
                         day = str(sl.today_local())
                         seen = False
                         try:                           # at most once a day per project; a stamp that cannot be read or written never stops the line
-                            if not os.path.islink(stamp) and os.path.isfile(stamp):
-                                with open(stamp, encoding="utf-8") as fh:
-                                    seen = fh.read().strip() == day
+                            seen = (read_regular(stamp) or "").strip() == day
                         except Exception:
                             sl.log_error("session-start: no protected stamp read")
                         if not seen:
@@ -1186,8 +1357,9 @@ def main():
                 done = roles.apply_once()
                 if done:
                     emit({"systemMessage": "budgit: " + done})
-                for text in roles.session_start_texts(inp, project):
-                    _context("SessionStart", text)
+                _role, role_parts = roles.session_start_parts(inp, project)
+                for tag, text in role_parts:
+                    _start(tag, text)
             except Exception:
                 sl.log_error("session-start: roles")
             import general
@@ -1203,12 +1375,12 @@ def main():
                 nudged = on_rules_and_questions(inp, project)
             except Exception:
                 sl.log_error("session-start: rules and questions")
-        if event == "session-start" and not project:   # model rules matter in every session, not only Budgit ones
-            if not nudged and not sl.vendored() and not os.path.exists(os.path.join(sl.home_state(), "config.json")):
+        if event == "session-start":                   # model rules matter in every session, not only Budgit ones
+            if not project and not nudged and not sl.vendored() and not os.path.exists(os.path.join(sl.home_state(), "config.json")):
                 _context("SessionStart", sl.SETUP_NUDGE)   # R-52 E3: first run on a new machine
             import budget
             cur = budget.current()
-            _context("SessionStart", budget.short_line(cur["level"], cur["reason"]))
+            _start("budget", budget.short_line(cur["level"], cur["reason"]))   # R-1137: the ONE budget section (the project summary carries none)
         if event == "post-tool-use-failure":  # introspection runs in EVERY session
             on_post_tool_use_failure(inp, project)
             return 0
@@ -1227,7 +1399,23 @@ def main():
                 sl.log_error("procclose " + event)
         if event == "subagent-stop" and inp.get("agent_id"):  # R-64: the counter goes too in unbound sessions
             import agentcap
+            try:
+                agentcap.record_round(inp)       # R-1158: the finished round goes to the past-run record first
+            except Exception:
+                sl.log_error("agent round record")
             agentcap.reset(inp.get("agent_id"))
+        if event == "pre-tool-use" and not inp.get("agent_id"):   # R-1178: a coordinator answers first and delegates the work
+            try:
+                import replyfirst
+                refusal = replyfirst.browser_refusal(inp, project)
+                if refusal:
+                    _decision("PreToolUse", "deny", refusal)
+                    return 0
+                warn = replyfirst.on_call(inp, project)
+                if warn:
+                    _context("PreToolUse", warn)
+            except Exception:
+                sl.log_error("reply first")
         if event == "pre-tool-use" and inp.get("agent_id"):   # R-63: per-subagent call ceiling, every session
             try:                                # a failure of the call-count bookkeeping must not drop the guards that follow
                 import agentcap
@@ -1329,6 +1517,8 @@ def main():
             emit({"systemMessage": "budgit: hook error in %s — enforcement off this turn; "
                                    "see ~/.budgit/hooks.log" % event})
     finally:
+        if event == "session-start":
+            _finish_start(inp, project)
         flush()
     return 0
 
