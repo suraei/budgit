@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.13.9.13-7d68c4?style=flat-square" alt="Version 0.13.9.13">
+  <img src="https://img.shields.io/badge/version-0.13.9.28-7d68c4?style=flat-square" alt="Version 0.13.9.28">
   <img src="https://img.shields.io/badge/Claude_Code-2.1.292%2B-D97757?style=flat-square&logo=claude&logoColor=white" alt="Claude Code 2.1.292 or newer">
   <img src="https://img.shields.io/badge/Python-3-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3">
   <img src="https://img.shields.io/badge/macOS-tested-000000?style=flat-square&logo=apple&logoColor=white" alt="Tested on macOS">
@@ -52,10 +52,10 @@
   </picture>
 </p>
 
-> The Claude desktop app's Cowork and Customize > Plugins screens cannot install Budgit. Install it from Claude Code with `/plugin install budgit --marketplace OWNER/REPO`, or from a shell with `claude plugin marketplace add OWNER/REPO` then `claude plugin install budgit@budgit-hub`.
+> The Claude desktop app's Cowork and Customize > Plugins screens cannot install Budgit. Install it from Claude Code with `/plugin install budgit --marketplace suraei/budgit`, or from a shell with `claude plugin marketplace add suraei/budgit` then `claude plugin install budgit@budgit-hub`.
 
 ```
-/plugin install budgit --marketplace OWNER/REPO
+/plugin install budgit --marketplace suraei/budgit
 ```
 
 Claude Code 2.1.292+ and Python 3. [Getting started](../../wiki/Getting-started) has the rest.
@@ -216,7 +216,7 @@ A small pet whose mood is your week. He lives above your prompt, and on macOS in
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/wiki/OWNER/REPO/images/brote-float.gif" width="100%" alt="Brote, drawn flat, standing and moving on top of a Claude window">
+  <img src="https://raw.githubusercontent.com/wiki/suraei/budgit/images/brote-float.gif" width="100%" alt="Brote, drawn flat, standing and moving on top of a Claude window">
 </p>
 
 **Floating window (macOS):** `/budgit-brote on` brings him back and `/budgit-brote off` closes him. The floating window runs on macOS only.
@@ -297,6 +297,10 @@ Keep-alive and away mode («me voy») are on by default; switch them off with `b
 
 To switch the daily check off: `"update_check": "off"` in `~/.budgit/config.json`. [Getting started](../../wiki/Getting-started) has the rest.
 
+### Get updates automatically
+
+A third-party marketplace has auto-update off by default. In Claude Code open `/plugin`, choose Marketplaces, pick this marketplace and turn on auto-update. Or update by hand with `claude plugin update`. You get a new copy only when the version changes. Brote's dated looks ship ahead of their day and switch on only on that day.
+
 ## FAQ
 
 Tap a question to open the answer. The short answer is already next to it.
@@ -312,7 +316,7 @@ Tap a question to open the answer. The short answer is already next to it.
 
 <details><summary><b>Can I turn a guard off?</b> → <b>Most of them.</b></summary><p>Most of them, yes. Two have no switch on purpose: only the verifier writes PASS reports, and only the quarantined reader sees raw web results.<br><sub>Depth: <a href="../../wiki/Privacy-and-security">Privacy and security</a></sub></p></details>
 <details><summary><b>Can I use it with one model or one session?</b> → <b>Yes.</b></summary><p>That model fills every helper role, and the rules stay the same.<br><sub>Depth: <a href="../../wiki/FAQ">FAQ</a></sub></p></details>
-<details><summary><b>Will it update by itself?</b> → <b>No.</b></summary><p>It tells you when a new version is out. You choose when to update.<br><sub>Depth: <a href="../../wiki/Getting-started">Getting started</a></sub></p></details>
+<details><summary><b>Will it update by itself?</b> → <b>Only if you turn it on.</b></summary><p>Only when you turn on auto-update for this marketplace (see Get updates automatically); otherwise run `claude plugin update`. It tells you when a new version is out.<br><sub>Depth: <a href="../../wiki/Getting-started">Getting started</a></sub></p></details>
 
 ### Where it runs
 

@@ -565,5 +565,9 @@ FIX('ag_calm',{});
 FIX('ag_return',{});
 FIX('ag_annoyed',{});
 FIX('ag_angry',{});
+
+/* 19 Nov: the flex fidget. The clip exists on that day only (the director gates it by the `men` flag) */
+A('mn_flex',0,'contento',0,0,3,120,1,0,0,0,
+ (S,ft)=>{ S.eyes=ft<6?'open':'happy'; S.mouth=ft<6?'smile':'open'; S.cheeks=ft<6?'c':'C'; S.look=ft%30<15?1:-1; S.armL=ft<6?'side':alt(ft,3)?'flex':'flex2'; S.armR=S.armL; S.dy=ft<6?0:(alt(ft,3)?0:-1); if(ft>=6) sparks(S,ft,3) },{men:1});
 root.PERSONALITY={CAT,POSE,CONF};
 })(typeof globalThis!=='undefined'?globalThis:this);

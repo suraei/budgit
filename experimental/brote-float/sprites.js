@@ -68,6 +68,8 @@ const ARM = {   // tiny nubs, only when he does something
   up:  [[5,19,'o'],[6,18,'o'],[6,19,'b'],[6,20,'o'],[7,18,'b'],[7,19,'o'],[8,18,'o']],
   up2: [[7,19,'o'],[7,20,'o'],[8,18,'b'],[8,19,'b'],[8,20,'o'],[9,18,'o'],[9,19,'o']],
   point:[[8,18,'o'],[8,19,'o'],[8,20,'o'],[9,18,'b'],[9,19,'b'],[9,20,'b'],[9,21,'o'],[10,18,'o'],[10,19,'o'],[10,20,'o']],  // points at the notebook
+  flex: [[5,20,'o'],[5,21,'o'],[6,19,'o'],[6,20,'b'],[6,21,'b'],[6,22,'o'],[7,19,'o'],[7,20,'b'],[7,21,'o'],[8,18,'o'],[8,19,'b'],[8,20,'b'],[8,21,'o'],[9,18,'o'],[9,19,'b'],[9,20,'o'],[10,18,'o'],[10,19,'o']],   // a flexed arm: fist up, bulge at the elbow
+  flex2:[[4,20,'o'],[4,21,'o'],[5,19,'o'],[5,20,'b'],[5,21,'b'],[5,22,'o'],[6,19,'o'],[6,20,'b'],[6,21,'o'],[7,18,'o'],[7,19,'b'],[7,20,'b'],[7,21,'o'],[8,18,'o'],[8,19,'b'],[8,20,'b'],[8,21,'o'],[9,18,'o'],[9,19,'o'],[9,20,'o']],
 };
 const mirror = l => l.map(([r,c,k])=>[r,17-c,k]);
 const THERMO = [...[10,11,12,13,14,15,16,17].map(c=>[11,c,'W']), [10,16,'g'],[10,17,'g'],[12,16,'g'],[12,17,'g'],
@@ -111,32 +113,134 @@ const SHADOW = 'rgba(90,70,120,.14)', SHADOW2 = 'rgba(90,70,120,.06)';
 function mix(a,b,k){ const A=parseInt(a.slice(1),16),B=parseInt(b.slice(1),16),ch=(x,s)=>(x>>s)&255;
   return '#'+[16,8,0].map(s=>Math.round(ch(A,s)+(ch(B,s)-ch(A,s))*k).toString(16).padStart(2,'0')).join('') }
 
+/* ======================= special days: the look is a pure function of the local date ======================= */
+/* digits and three free letters, so the new colours never meet a key of the parts above or of personality.js (a test checks it) */
+const COSPAL = {'1':'#3d2a20','2':'#80604b','3':'#484b6d','4':'#7c80a8','5':'#d9534f','6':'#7fcfc0','7':'#f4c430','8':'#3d63b8','9':'#2e2a3a',
+  'O':'#24140c','i':'#3b2416','M':'#6a4529'};
+for (const k in PALS) Object.assign(PALS[k], COSPAL);
+const p2 = n => (n < 10 ? '0' : '') + n;
+/* date -> look: 'mens' (19 Nov: moustache and a small hat), 'party' (29 Mar: moustache and a party hat), 'flag' (25 Nov: flag and dark curly hair) or null;
+   anything that is not a real date gives null. The date is the user's local one (the caller passes the local year, month and day). */
+function costumeFor(y, m, d){
+  if (![y, m, d].every(Number.isInteger) || y < 1900 || y > 2999 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const t = new Date(Date.UTC(y, m - 1, d));
+  if (t.getUTCMonth() !== m - 1 || t.getUTCDate() !== d) return null;
+  const k = p2(m) + '-' + p2(d);
+  return k === '11-19' ? 'mens' : k === '03-29' ? 'party' : k === '11-25' ? 'flag' : null;
+}
+/* the settings text "YYYY-MM-DD" (a day to preview) -> a clean list of dates (anything else is dropped) */
+function parseDays(s){ return String(s || '').split(/[\s,;]+/).filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x)).slice(0, 64) }
+/* the hats and the hair come with every mood */
+function lookFor(look, state){ return look || null }
+
+const STACHE = px([
+  "..1............1..",
+  "..11..222222..11..",
+  "...111111111111...",
+  ".....111..111.....",
+], 10);
+const BOWLER = px([
+  "......333333......",
+  ".....33433333.....",
+  ".....55555555.....",
+  "..33333333333333..",
+  "...999999999999...",
+], -3);
+function cone(fill){      // a party hat on the head: rows -5..1, 2 wide at the tip and 10 at the base
+  const w = [2,4,4,6,6,8,10], out = [];
+  w.forEach((n, i) => { const c0 = 9 - n / 2; for (let j = 0; j < n; j++) out.push([-5 + i, c0 + j, fill(i, j, n)]) });
+  return out;
+}
+const PARTY = {
+  plain: cone((i, j, n) => (j + 2 * i) % 5 === 1 ? 'p' : '6'),
+  ve:    cone((i, j, n) => i < 2 ? '7' : i < 5 ? ((i === 3 && j === 2) || (i === 4 && (j === 1 || j === 4)) || (i === 2 && j === 1) ? 'W' : '8') : '5'),
+};
+/* the afro: a cloud of curls wider than the head. Each curl is a small ring (dark edge, brown inside, one light glint); the ones drawn
+   later overlap the earlier ones, so the ringlets show and the rim is scalloped. The head sits in front of it; a fringe of curls lies over the forehead. */
+function curls(discs, rings, dirs, clip){
+  const cell = new Map(), key = (r, c) => r + ',' + c, has = (r, c) => cell.has(key(r, c));
+  discs.forEach(([cr, cc, rad]) => { for (let r = Math.floor(cr - rad) - 1; r <= Math.ceil(cr + rad) + 1; r++) for (let c = Math.floor(cc - rad) - 1; c <= Math.ceil(cc + rad) + 1; c++)
+    if (Math.hypot(r - cr, c - cc) <= rad && (!clip || clip(r, c))) cell.set(key(r, c), 'i') });
+  const rim = [...cell.keys()].filter(k => { const [r, c] = k.split(',').map(Number); return dirs.some(([dr, dc]) => !has(r + dr, c + dc)) });
+  rim.forEach(k => cell.set(k, 'O'));
+  rings.forEach(([cr, cc, rad]) => {                  // a curl: a small ring with a glint, drawn over the fill
+    for (let r = Math.floor(cr - rad) - 1; r <= Math.ceil(cr + rad) + 1; r++) for (let c = Math.floor(cc - rad) - 1; c <= Math.ceil(cc + rad) + 1; c++) {
+      const d = Math.hypot(r - cr, c - cc); if (d <= rad && d > rad - 0.9 && cell.get(key(r, c)) === 'i') cell.set(key(r, c), 'O') }
+    const gr = Math.round(cr - rad * 0.45), gc = Math.round(cc - rad * 0.45);
+    [[gr, gc], [gr, gc + 1], [gr + 1, gc]].forEach(([r, c], n) => { if ((n === 0 || has(r, c)) && cell.get(key(r, c)) === 'i') cell.set(key(r, c), 'M') });
+  });
+  const lit = [...cell].filter(([k, v]) => { const [r, c] = k.split(',').map(Number); return v === 'i' && cell.get(key(r - 1, c)) === 'O' && !has(r - 2, c) });   // the light falls on the top of each curl: a lit band just under its rim
+  lit.forEach(([k]) => cell.set(k, 'M'));
+  return [...cell].map(([k, v]) => { const [r, c] = k.split(',').map(Number); return [r, c, v] });
+}
+const sym2 = l => l.concat(l.map(([r, c, d]) => [r, 17 - c, d]));
+const AFRO_BACK = curls(sym2([[8.5,-0.4,2.5],[5.5,-0.8,2.6],[2.5,-0.8,2.6],[-0.5,0.2,2.9],[-3.2,2.6,3.0],[-4.4,5.8,3.0],[-1.5,8.5,3.2],[1.5,1.6,2.6]]).concat([[-4.6,8.5,3.0]]),
+  sym2([[-3.6,3.6,2.2],[-0.6,5.4,2.0],[3.2,-0.6,1.8]]), [[-1,0],[1,0],[0,-1],[0,1]]);
+const AFRO_FRONT = curls(sym2([[1.4,2.8,2.4],[0.4,5.8,2.4]]).concat([[0.9,8.5,2.4]]), sym2([[1.6,2.4,1.7],[0.8,6.2,1.7]]), [[1,0],[0,-1],[0,1]], (r, c) => r >= 0 && r <= 3 && c >= 1 && c <= 16);
+const FLAG = [[-6,1,'g'],[-5,1,'g'],[-4,1,'g'],[-3,1,'g'],[-2,1,'g'],[-6,0,'8'],[-5,0,'8'],[-4,0,'8'],[-6,-1,'W'],[-5,-1,'W'],[-4,-1,'W'],[-6,-2,'5'],[-5,-2,'5'],[-4,-2,'5']];
+const NO_MOUTH = {none:1};                                                 // under the handlebar the mouth is the small dash in its notch
+MOUTH.low = [[13,8,'m'],[13,9,'m']];            // the notch of the handlebar
+const LOOKS = {mens:{head:1, stache:1}, party:{head:1, stache:1}, flag:{head:1, hair:1}};
+
 /* ======================= compose one frame ======================= */
 const W=34, H=28, OX=8, OY=10;
+const offOf=(S,r)=>S.stretch===1?(r<=11?-1:0):S.stretch===-1?(r<=4?1:0):0;
+/* where the body is this frame. With a hat or hair on, the head gear (top row -7, one more when he stretches; hair 3 px wider each side) never leaves the
+   picture: a high hop is a little lower and a slide to the edge a little shorter than without it. */
+function origin(S){ const L=S.costume&&LOOKS[S.costume]; if(!(L&&L.head)) return {ox:OX+S.dx, oy:OY+S.dy+(S.sit?1:0)};
+  return {ox:OX+(L.hair?Math.min(5,Math.max(-4,S.dx)):S.dx), oy:OY+Math.max(S.dy,-(OY-7-(S.stretch===1?1:0)))+(S.sit?1:0)} }
+/* a part is drawn as ONE piece: the stretch and squash of the head shift every cell of it by the offset of its top row, never row by row */
+function placePart(S, list){ const {ox,oy}=origin(S); let top=99; for(const c of list) if(c[0]<top) top=c[0]; const o=offOf(S,top); return list.map(([r,c,k])=>[oy+r+o, ox+c, k]) }
+/* the costume pieces of a frame, already placed: [{id, layer, cells:[[y,x,k]...]}] (compose draws them; the tests measure them).
+   The same function serves every pose, the PC included: only the sleeping cap takes the hat's place. */
+function costumePartsRaw(S){
+  const L=S.costume&&LOOKS[S.costume]; if(!L) return [];
+  const out=[], add=(id,layer,list)=>out.push({id,layer,cells:placePart(S,list)});
+  if(S.costume==='mens'){ if(!S.cap) add('hat','hat',BOWLER) }
+  else if(S.costume==='party'){ if(!S.cap) add('hat','hat',PARTY[S.party||((((S.t||0)/300)|0)%2?'ve':'plain')]) }
+  else if(S.costume==='flag'){ add('afro','back',AFRO_BACK); if(!S.cap){ add('fringe','hat',AFRO_FRONT); add('flag','hat',FLAG) } }   // under the sleeping cap only the hair behind the head shows: no fringe and no flag through the cap
+  if(L.stache) add('stache','face',STACHE);
+  return out;
+}
+/* the placed pieces depend only on these fields, so the same look and pose is placed once (the result is read, never changed) */
+const PARTS_CACHE = new Map();
+function costumeParts(S){
+  if(!(S.costume&&LOOKS[S.costume])) return [];
+  const key=[S.costume,S.cap?1:0,S.party||((((S.t||0)/300)|0)%2),S.stretch,S.sit?1:0,S.dx,S.dy].join();
+  let v=PARTS_CACHE.get(key);
+  if(!v){ if(PARTS_CACHE.size>400) PARTS_CACHE.clear(); v=costumePartsRaw(S); PARTS_CACHE.set(key,v) }
+  return v;
+}
 function compose(S, P){
   const g=Array.from({length:H},()=>Array(W).fill(null));
   const put=(y,x,c)=>{ if(c&&y>=0&&y<H&&x>=0&&x<W) g[y][x]=c };
-  const dy=S.dy+(S.sit?1:0), ox=OX+S.dx, oy=OY+dy;
-  const off=r=>S.stretch===1?(r<=11?-1:0):S.stretch===-1?(r<=4?1:0):0;
-  const at=(r,c,k)=>put(oy+r+off(r), ox+c, P[k]);
+  const L=S.costume&&LOOKS[S.costume], {ox,oy}=origin(S);
+  const at=(r,c,k)=>put(oy+r+offOf(S,r), ox+c, P[k]);
+  /* with a costume on, a face part is drawn as ONE piece (the moustache sits on it); on a normal day it is drawn row by row, exactly as before the costumes */
+  const whole=list=>L?placePart(S,list).forEach(([y,x,k])=>put(y,x,P[k])):list.forEach(([r,c,k])=>at(r,c,k));
+  const parts=costumeParts(S), layer=n=>parts.filter(p=>p.layer===n).forEach(p=>p.cells.forEach(([y,x,k])=>put(y,x,P[k])));
   // ground: shadow and fallen leaf stay put while he hops
-  const lift=Math.max(0,-S.dy), half=Math.max(4,8-Math.round(lift*1.2)), gy=OY+16;
+  const lift=Math.max(0,OY-oy+(S.sit?1:0)), half=Math.max(4,8-Math.round(lift*1.2)), gy=OY+16;
   for(let c=9-half;c<9+half;c++) put(gy, OX+c, (c===9-half||c===8+half)?SHADOW2:SHADOW);
   if(S.fallen) SPR.fallen.forEach((row,i)=>[...row].forEach((ch,j)=>{ if(ch!=='.') put(OY+14+i, OX+21+j, P[ch]) }));
+  layer('back');
   BODY.forEach((row,r)=>{ if(S.stretch===-1&&r===5) return; [...row].forEach((ch,c)=>{ if(ch!=='.') at(r,c,ch) }) });
   if(S.stretch===1) [...BODY[11]].forEach((ch,c)=>{ if(ch!=='.') put(oy+11,ox+c,P[ch]) });
   if(!S.sit) [...FEET[S.feet]].forEach((ch,c)=>{ if(ch!=='.') put(oy+15,ox+c,P[ch]) });
   ARM[S.armR].forEach(([r,c,k])=>at(r,c,k));
   mirror(ARM[S.armL]).forEach(([r,c,k])=>at(r,c,k));
+  layer('hat');
   if(S.cap) CAP.forEach(([r,c,k])=>at(r,c,k));
-  else { LEAF[S.leaf].forEach(([r,c,k])=>at(r,c,k)); if(S.flowers) FLOWERS.forEach(([r,c,k])=>at(r,c,k)) }
+  else { const up=L&&L.head?3:0; LEAF[S.leaf].forEach(([r,c,k])=>at(r-up,c,k)); if(S.flowers&&!up) FLOWERS.forEach(([r,c,k])=>at(r,c,k)) }
   if(S.ice) ICE.forEach(([r,c,k])=>at(r,c,k));
-  if(S.cheeks&&S.eyes!=='heart') CHEEKS[S.cheeks].forEach(([r,c,k])=>at(r,c,k));   // pink cheeks under pink heart eyes run together
+  if(S.cheeks&&S.eyes!=='heart'&&!(L&&L.stache)) whole(CHEEKS[S.cheeks]);   // pink cheeks under pink heart eyes run together; a moustache has no blush beside it
+  layer('face');
   (EYES[S.eyes]||[]).forEach(([r,c,k])=>at(r+S.lookY,c+S.look,k));
-  (MOUTH[S.mouth]||[]).forEach(([r,c,k])=>at(r,c,k));
+  layer('over');
+  whole(MOUTH[L&&L.stache?(NO_MOUTH[S.mouth]?'none':'low'):S.mouth]||[]);
   if(S.tear) at(10,2,'T'), at(11,2,'T');
-  if(S.bubble>=0) BUBBLE[S.bubble].forEach(([r,c,k])=>at(r,c,k));
-  if(S.thermo) THERMO.forEach(([r,c,k])=>at(r,c,k));
+  if(S.bubble>=0) whole(BUBBLE[S.bubble]);
+  if(S.thermo) whole(THERMO);
   S.ex.forEach(([name,r,c,ground])=>{
     const by=ground?OY+r:oy+r, bx=ground?OX+c:ox+c;
     SPR[name].forEach((row,i)=>[...row].forEach((ch,j)=>{ if(ch!=='.') put(by+i,bx+j,P[ch]) }));
@@ -173,7 +277,7 @@ function pokeFace(S, kind, a){
     else { Object.assign(S,{eyes:'happy',cheeks:'c',mouth:'open',dy:[-1,-2,-2,-1,0,0][a-10]??0,armL:'up',armR:'up'}); if(a<13) S.ex.push(['puff',14,7,true]) } }
 }
 class Pet {
-  constructor(state){ Object.assign(this,{state,from:null,k:1,t:Math.floor(Math.random()*60),act:null,actT:0,
+  constructor(state){ Object.assign(this,{state,costume:null,from:null,k:1,t:Math.floor(Math.random()*60),act:null,actT:0,
     held:false,hover:false,lookPin:null,walking:false,h5:0,stale:0,fid:null,nextFid:30+Math.floor(Math.random()*60)}) }
   setState(s){ if(s===this.state) return; this.from=this.pal(); this.state=s; this.k=0; this.fid=null }
   pal(){ const to=PALS[this.state]; if(!this.from||this.k>=1) return to; const o={};
@@ -191,7 +295,7 @@ class Pet {
   spec(){
     const t=this.t, s=this.state, f=this.fid, ft=f?t-f.t0:0, fn=f?f.name:null;
     const S={stretch:0,eyes:'open',mouth:'smile',cheeks:'c',leaf:'up',flowers:false,cap:false,ice:false,
-      feet:'stand',armL:'none',armR:'none',thermo:false,dx:0,dy:0,look:0,lookY:0,sit:false,ex:[],fallen:false,tear:false,bubble:-1};
+      feet:'stand',armL:'none',armR:'none',thermo:false,dx:0,dy:0,look:0,lookY:0,sit:false,ex:[],fallen:false,tear:false,bubble:-1,costume:this.costume||null,t:this.costume?(t>>5)<<5:0};
     const br=p=>((t/p|0)%2), blink=(t%53)<2;
     switch(s){
       case 'radiante':

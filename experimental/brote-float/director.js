@@ -51,6 +51,8 @@ var DIRECTOR = (function () {
                                                                        // The app's body clips (falls, climbs, scoots, walks) keep 1: their art is timed to his real movement
   const WORK_SIT = 450, WORK_BREAK = 300                               // in a long turn he works 45 s at the laptop, closes it and walks for 30 s, then opens it again
   const AMBIENT_POOL = [['am_rope', 3], ['am_cookies', 3], ['am_tea', 3], ['am_code', 2], ['am_pc', 2], ['am_bed', 1]]
+  /* 19 Nov (look 'mens'): the clips that only exist on that day, and how often they come up in free time */
+  const MENS_POOL = [['mn_flex', 3]]
   const AMBIENT_STATES = { radiante: 1, contento: 1, justo: 1, cansado: 1, agotado: 1, enfermo: 1 }
   const READ_VARIANTS = ['bk_read_upside', 'bk_read_squint', 'bk_read_flip', 'bk_read_aha', 'bk_puf']   // two of these, never the same twice, between reading and putting back
   const HELD_BOOK = /^bk[COU]$/                      // the book drawn in his hands: the real book is hidden meanwhile (never two books)
@@ -65,7 +67,7 @@ var DIRECTOR = (function () {
   /* a clip's length in ticks when shown at this tempo */
   function ticksAt(e, rate) { return Math.round(e.dur * 10 / (rate || 1)) }
   /* the local hour, weekday (0 Sunday) and date, for the time-of-day clips */
-  function localClock() { const d = new Date(); return { h: d.getHours(), wd: d.getDay(), day: d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate() } }
+  function localClock() { const t = new Date(); return { h: t.getHours(), wd: t.getDay(), day: t.getFullYear() + '-' + t.getMonth() + '-' + t.getDate(), y: t.getFullYear(), m: t.getMonth() + 1, d: t.getDate() } }
 
   /* the clip for a change of mood (once, when the data line's state changes); waking from dormido is the pet's own 'wake' */
   function moodClip(was, now) {
@@ -106,6 +108,7 @@ var DIRECTOR = (function () {
       this.lastTouch = 0
       this.nextAmbient = AMBIENT_EVERY[this.level] || 0
       this.cool = {}                                     // clip id -> tick it may play again
+      this.lookDay = null                                // a day to preview ("YYYY-MM-DD", from the app's settings); off by default
       this.nudges = { day: this.day(), n: 0 }
       this.pokes = { n: 0, last: -9999, flees: [] }
       this.quiet = false; this.runsOut = false           // from the data line: nothing in progress or next; the week runs out early at today's rate
@@ -123,7 +126,18 @@ var DIRECTOR = (function () {
       this.log = []                                      // last decisions (tests, preview): [tick, text]
     }
     note(s) { this.log.push([this.t, s]); if (this.log.length > 40) this.log.shift() }
-    attach(pet) { this.pet = pet; this.hadFid = false; this.spaceFidget() }
+    attach(pet) { this.pet = pet; this.hadFid = false; this.spaceFidget(); this.dress() }
+    /* the setting: day "YYYY-MM-DD" shows the look of that day (empty or junk: the real local date) */
+    setLookDay(day) { this.lookDay = parseDays(day)[0] || null; this.lk = null; this.dress() }
+    /* today's look (costumeFor in sprites.js): the preview day when one is set, else the user's local date; no date in the clock, no look */
+    look() {
+      if (this.lk && this.lk.t === this.t) return this.lk.v                  // once per tick
+      const c = this.lookDay ? (([y, m, d]) => ({ y, m, d }))(this.lookDay.split('-').map(Number)) : this.clock()
+      const v = typeof costumeFor === 'function' ? costumeFor(c.y, c.m, c.d) : null
+      this.lk = { t: this.t, v }
+      return v
+    }
+    dress() { const p = this.pet; if (p) p.costume = lookFor(this.look(), this.state) }
     spaceFidget() { const p = this.pet; if (p) p.nextFid = p.t + FIDGET_GAP[0] + Math.floor(this.rng() * (FIDGET_GAP[1] - FIDGET_GAP[0])) }
     /* after any clip, act or fidget ends he only breathes and blinks for 6 s (calls never wait) */
     pace() {
@@ -341,6 +355,7 @@ var DIRECTOR = (function () {
     /* ---- the 10 fps step ---- */
     tick() {
       this.t++
+      this.dress()
       Object.keys(this.sessions).forEach(sid => {
         const s = this.sessions[sid]
         if (s.open && this.t - s.last > (s.running ? STALE_RUNNING : STALE_QUIET)) { s.open = false; s.running = 0; this.note('turn timed out') }
@@ -478,7 +493,8 @@ var DIRECTOR = (function () {
       if (!AMBIENT_EVERY[this.level] || this.t < this.nextAmbient || !AMBIENT_STATES[this.state] || !this.idle() || this.reduceMotion || this.calm()) return null
       if (this.markers.length || this.work()) return null
       const h5 = this.pet ? this.pet.h5 | 0 : 0
-      let pool = (this.state === 'agotado' ? AGOTADO_POOL : this.state === 'enfermo' ? ENFERMO_POOL : AMBIENT_POOL).concat(this.situational()).filter(([id]) => (this.cool[id] || 0) <= this.t && this.entry(id))
+      const special = this.look() === 'mens' && this.state !== 'agotado' && this.state !== 'enfermo' ? MENS_POOL : []
+      let pool = (this.state === 'agotado' ? AGOTADO_POOL : this.state === 'enfermo' ? ENFERMO_POOL : AMBIENT_POOL).concat(this.situational(), special).filter(([id]) => (this.cool[id] || 0) <= this.t && this.entry(id))
       if (h5 >= 90 && (this.cool.q_h5_fan || 0) <= this.t && this.entry('q_h5_fan')) pool = [['q_h5_fan', 8]]
       if (this.morningDue && this.state !== 'agotado' && this.state !== 'enfermo' && this.entry('ti_morning')) { pool = [['ti_morning', 1]]; this.morningDue = false }
       if (!pool.length) return null
@@ -494,7 +510,9 @@ var DIRECTOR = (function () {
     entry(id) {
       if (this.bad[id]) return null
       if (!this.index) { this.index = {}; (PERSONALITY.CAT || []).forEach(e => { this.index[e.id] = e }) }
-      return this.index[id] || null
+      const e = this.index[id] || null
+      if (e && e.men && this.look() !== 'mens') return null      // a special-day clip exists only on its day
+      return e
     }
     pickClip() {
       const want = this.desired()
@@ -525,7 +543,7 @@ var DIRECTOR = (function () {
       const e = this.entry(c.id)
       if (!e) return null
       const S = { stretch: 0, eyes: 'open', mouth: 'smile', cheeks: 'c', leaf: 'up', flowers: false, cap: false, ice: false, feet: 'stand', armL: 'none', armR: 'none',
-        thermo: false, dx: 0, dy: 0, look: 0, lookY: 0, sit: false, ex: [], fallen: false, tear: false, bubble: -1 }
+        thermo: false, dx: 0, dy: 0, look: 0, lookY: 0, sit: false, ex: [], fallen: false, tear: false, bubble: -1, costume: this.pet ? this.pet.costume || null : null, t: this.pet && this.pet.costume ? (this.pet.t >> 5) << 5 : 0 }
       if (c.dir) S.dir = c.dir
       try {
         e.f(S, this.frameOf(c))
