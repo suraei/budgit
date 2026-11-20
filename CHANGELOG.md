@@ -2,6 +2,10 @@
 
 To update, ask Claude in any chat to update Budgit: it runs `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, and reports the version. Your next chat uses it. In a terminal session, `/reload-plugins` is an optional extra. The Release notes page of the wiki has the same notes.
 
+## 0.13.9.29
+
+- **An open Brote switches to the new version.** At the next session start after an update, a Brote that is already open closes (keeping its window place) and the new one opens, once per version; if the new one cannot start, the old one comes back.
+
 ## 0.13.9.28
 
 - **Brote dresses up on its days.** Moustache and small hat on 19 Nov, party hat on 29 Mar, flag on 25 Nov; it looks normal on other days. The README explains how to turn on auto-update.

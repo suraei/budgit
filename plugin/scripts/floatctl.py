@@ -629,6 +629,56 @@ def install(ctx, text, version=""):
         shutil.rmtree(stage, ignore_errors=True)
 
 
+def swap_running(ctx, version, want, have, state):
+    """R-1255: the plugin's build is strictly newer than the one float.json records for the running copy, and this version was not tried
+    before: install it beside the old (Brote.app.prev), close the old with SIGTERM (the app saves its window position and state then), start
+    the new. Any failure puts the old copy back and starts it again, so there is never no Brote. Returns True when the new one was started."""
+    recorded = state.get("version")
+    if not recorded or version_tuple(version) <= version_tuple(recorded):
+        return False                                              # equal, newer or unknown: the running one stays
+    if state.get("replaced_for") == version:
+        return False                                              # tried once for this version, whatever came of it: never in a loop
+    first = dict(state)
+    first["replaced_for"] = version
+    write_private(p(ctx, "float.json"), json.dumps(first))        # recorded before the attempt: a crash in the middle is not retried either
+    app, prev = p(ctx, "Brote.app"), p(ctx, "Brote.app.prev")
+    why = None
+    try:
+        install(ctx, want, version)
+    except (Refuse, OSError) as e:
+        log(ctx, f"not replaced: {e}")
+        return False                                              # nothing was swapped (or repair() finishes it next time)
+    try:
+        if running_pid(ctx) is not None and (not stop_app(ctx) or running_pid(ctx) is not None):
+            why = "the running Brote did not close"
+        else:
+            bad = installed_problems(ctx)
+            if bad:
+                why = "; ".join(bad[:2])
+            else:
+                launch(ctx, ctx.root)
+                return True
+    except OSError as e:
+        why = f"{e.__class__.__name__}: {e}"
+    log(ctx, f"not replaced: {why}")
+    if mine_dir(prev):                                            # the old copy goes back, as it was
+        rm_tree(app)
+        os.rename(prev, app)
+        if have is not None:
+            write_private(ctx.installed_lines, have)
+        write_private(p(ctx, "float.json"), json.dumps(first))
+    if running_pid(ctx) is None:
+        try:
+            left = installed_problems(ctx)                            # .prev was not ours or missing: what stands there may be the copy that just failed
+            if left:
+                log(ctx, f"the old Brote did not start again: {'; '.join(left[:2])}")
+            else:
+                launch(ctx, ctx.root)
+        except OSError as e:
+            log(ctx, f"the old Brote did not start again: {e.__class__.__name__}")
+    return False
+
+
 def bring_up(ctx, version, wait=8.0):
     """Make the installed copy current and start it when it is not running. Returns the list of reasons it did not (empty = fine).
     The plugin's own bundle is hashed and checked for quarantine only when something is about to be installed from it."""
@@ -643,13 +693,16 @@ def bring_up(ctx, version, wait=8.0):
         except (OSError, ValueError):
             return ["MISSING MANIFEST.sha256"]
         have = read_small(ctx.installed_lines) if lstat(ctx.exe) is not None else None
+        swapped = False
         if have != want:
             bad = plugin_bundle_problems(ctx)
             if bad:
                 return bad
             state = read_json_file(p(ctx, "float.json")) or {}
             if running_pid(ctx) is not None:
-                pass                                              # a newer build waits for the next quiet start
+                swapped = swap_running(ctx, version, want, have, state)    # a newer build replaces the running one, once per version
+                if swapped or running_pid(ctx) is None:
+                    return []                                     # swap_running already started a Brote (new, or the old one put back)
             elif have is not None and version_tuple(state.get("version")) > version_tuple(version):
                 return ["the plugin build is older than the installed one; not replaced"]
             else:
@@ -822,7 +875,9 @@ def cmd_on(ctx, args):
             return 4
         bw_create(ctx)
         before = read_json_file(p(ctx, "float.json"))
-        write_private(p(ctx, "float.json"), json.dumps({"float": "on", "version": (before or {}).get("version") or version, "turned_on": int(time.time())}))
+        tried = (before or {}).get("replaced_for")                    # a version that failed to replace the running one stays tried
+        keep = {"replaced_for": tried} if tried else {}
+        write_private(p(ctx, "float.json"), json.dumps({"float": "on", "version": (before or {}).get("version") or version, "turned_on": int(time.time()), **keep}))
         try:
             if os.environ.get("CLAUDE_CODE_SESSION_ID"):            # run from inside a session: that session counts, or he would leave after 2 minutes
                 register_session(ctx, claude_pid(args), os.environ["CLAUDE_CODE_SESSION_ID"], os.getcwd())
@@ -839,7 +894,10 @@ def cmd_on(ctx, args):
             return 4
         kept = (before or {}).get("version")
         newest = kept if kept and version_tuple(kept) > version_tuple(version) else version       # the downgrade guard never moves back
-        write_private(p(ctx, "float.json"), json.dumps({"float": "on", "version": newest, "turned_on": int(time.time())}))
+        now = read_json_file(p(ctx, "float.json")) or {}              # bring_up may have recorded a try meanwhile
+        tried = now.get("replaced_for") or (before or {}).get("replaced_for")
+        keep = {"replaced_for": tried} if tried else {}
+        write_private(p(ctx, "float.json"), json.dumps({"float": "on", "version": newest, "turned_on": int(time.time()), **keep}))
     except Refuse as e:
         print(say("refused", why=str(e)))
         return 4
