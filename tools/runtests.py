@@ -1444,6 +1444,7 @@ def run_pool(mods, n, flag_n, record, base, live, outcomes_out=None, kind="full"
     warm_env = dict(os.environ)
     warm_env.pop("PYTHONDONTWRITEBYTECODE", None)
     warm_env["PYTHONPYCACHEPREFIX"] = os.path.join(base, "pycache")
+    _admission()                      # puts plugin/scripts on sys.path, where safepath lives
     import safepath                   # R-1149: 3.11+ gets -P; the cwd is this checkout either way
     subprocess.run([sys.executable] + safepath.flags() + ["-m", "compileall", "-q", os.path.join(ROOT, "plugin", "scripts")],
                    env=warm_env, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
