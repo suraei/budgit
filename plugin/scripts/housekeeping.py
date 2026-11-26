@@ -146,6 +146,28 @@ def live_cwds():
         return None
 
 
+def worktree_roots(config=None):
+    """R-1322: the linked worktree folders of the plain (not protected, not private) projects, never their main checkout; None when
+    they cannot be read. A test server whose folder is inside one of them qualifies for the process sweep without a session marker."""
+    try:
+        config = config if config is not None else sl.load_config()
+        if not sl.protected_dirs_readable(config):               # an entry that cannot be resolved: no folder can be told to be outside
+            return None
+        private = []
+        paths, _left = projects(config, private_out=private)
+        private = [os.path.realpath(p) for p in private]
+        roots = []
+        for path in paths:
+            for w in worktrees(path)[1:]:
+                real = os.path.realpath(w["path"])
+                if sl.protected_dir(real, config) or any(_inside(real, p) for p in private):    # inside a protected or private folder: never a root
+                    continue
+                roots.append(real)
+        return roots
+    except Exception:
+        return None
+
+
 REGENERABLE = ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules", ".venv", ".DS_Store")
 
 
@@ -296,14 +318,17 @@ def flow(project, now, hours=IDLE_HOURS):
 
 # ---------------------------------------------------------------- the projects
 
-def projects(config=None):
-    """-> (paths, left_alone). One path per repo; protected and private projects are counted, never listed."""
+def projects(config=None, private_out=None):
+    """-> (paths, left_alone). One path per repo; protected and private projects are counted, never listed. `private_out`, when
+    given, receives the folder of each private project (for a caller that must keep out of them)."""
     import livework
     config = config if config is not None else sl.load_config()
     found = livework.all_projects(sessions=[], cap=1 << 20)
     left, paths, repos = found["skipped"], [], set()
     for row in found["projects"]:
         path = row["path"]
+        if row.get("private") and private_out is not None:
+            private_out.append(path)
         if row.get("private") or sl.protected_dir(path, config):
             left += 1
             continue

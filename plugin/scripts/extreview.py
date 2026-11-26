@@ -17,9 +17,12 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 import codexlimit
+import extuse
+import i18n
 import procclose
 
 DEFAULT_TIMEOUT_S = 600         # a review that has not answered in 10 minutes is not coming
@@ -27,7 +30,9 @@ HARD_CAP_S = 1800                # --timeout may lower the default, never raise 
 KILL_GRACE_S = 3.0               # between TERM to the group and KILL
 EXIT_OK, EXIT_USAGE, EXIT_NO_TOOL, EXIT_TIMEOUT, EXIT_UNAVAILABLE, EXIT_FAILED = 0, 2, 3, 4, 5, 6
 EXIT_PROTECTED = 7
-TOOLS = ("codex", "gemini")     # the order `auto` tries
+TOOLS = ("gemini", "codex")     # the command-line reviewers, in the order `auto` tries them
+AUTO_ORDER = TOOLS + ("openrouter",)     # R-1254: the full order; a reviewer not set up, out of quota or locked is skipped
+HTTP_DEADLINE_S = 120           # R-1254: a product deadline for an HTTP review (listing and every try share it); --timeout may change it
 UNAVAILABLE_RE = re.compile(r"quota|\b429\b|\b50[0-4]\b|rate.?limit|resource.?exhausted|too many requests|overloaded", re.I)
 WINDOWS = os.name == "nt"
 POLL_S = 0.2                     # how often a running tool's stderr and stdout are read (R-1051)
@@ -421,7 +426,7 @@ def write_out(out, text):
     os.replace(tmp, out)
 
 
-def review(tool, diff_path, prompt, out, timeout=None, which=shutil.which, environ=None, grace=KILL_GRACE_S, say=print, now=None, cwd=None, debug=False, model=None):
+def review(tool, diff_path, prompt, out, timeout=None, which=shutil.which, environ=None, grace=KILL_GRACE_S, say=print, now=None, cwd=None, debug=False, model=None, purpose="review"):
     """-> exit code. Lines go through `say` (stdout); a stale --out is removed first so no old text passes as a verdict.
     R-853: `auto` skips Codex until the date it reported its usage limit will end (`now` is the clock, a parameter).
     The protected-project refusal is the first thing here, so every caller (CLI, main, any other) passes through it."""
@@ -435,35 +440,382 @@ def review(tool, diff_path, prompt, out, timeout=None, which=shutil.which, envir
             os.unlink(out)
     except OSError:
         pass
-    wanted = TOOLS if tool == "auto" else (tool,)
-    if tool == "auto":
+    if tool in PROVIDERS:
+        return _http_logged(tool, purpose, diff_path, prompt, out, http_deadline(timeout), environ, say, model, cwd, which, now, None)
+    auto = tool == "auto"
+    wanted = TOOLS if auto else (tool,)
+    skipped = []                      # R-1254: (reviewer, why) for every auto reviewer that did not give the verdict
+    if auto:
         until = codexlimit.blocked_until(now)
         if until:
             say("codex skipped: its usage limit ends %s" % codexlimit.when(until))
             wanted = tuple(t for t in wanted if t != "codex")
+            skipped.append(("codex", "usage limit"))
     found = [(t, which(t)) for t in wanted]
+    if auto:
+        skipped += [(t, "not set up") for t, p in found if not p]
     found = [(t, p) for t, p in found if p]
-    if not found:
+    if not found and not auto:
         say("no external reviewer available (looked for: %s; install one or use a Claude reviewer)" % ", ".join(wanted))
-        if tool == "auto":
-            say(codexlimit.FALLBACK_LINE)
         return EXIT_NO_TOOL
     last = EXIT_UNAVAILABLE
     for t, p in found:
+        began = time.monotonic()
         status, text, detail = run_tool(t, p, diff_path, prompt, timeout_s, environ=environ, grace=grace, now=now, debug=debug, model=model)
+        extuse.log(cwd or os.getcwd(), t, purpose, extuse.failure_class(status, detail), time.monotonic() - began)   # R-1358: every attempt
         if status == "ok":
             write_out(out, text)
             say("%s verdict saved: %s" % (t, out))
+            if auto:
+                say(ran_line(t, skipped))
             return EXIT_OK
-        say(detail if status != "unavailable" else "%s (%s)" % (detail, "trying the next tool" if (t, p) != found[-1] and tool == "auto" else "stopping"))
-        if status == "timeout":
-            return EXIT_TIMEOUT
+        say(detail if status != "unavailable" else "%s (%s)" % (detail, "trying the next tool" if auto else "stopping"))
         if status == "failed":
             return EXIT_FAILED
-        last = EXIT_UNAVAILABLE
-    if tool == "auto":
+        if status == "timeout" and not auto:
+            return EXIT_TIMEOUT
+        last = EXIT_TIMEOUT if status == "timeout" else EXIT_UNAVAILABLE      # in auto a timeout also goes on to the next reviewer
+        skipped.append((t, "timed out" if status == "timeout" else "out of quota or unavailable"))
+    if not auto:
+        return last
+    skip = []
+    rc = _http_logged("openrouter", purpose, diff_path, prompt, out, http_deadline(timeout), environ, say, model, cwd, which, now, skip)
+    if rc == EXIT_OK:
+        say(ran_line("openrouter", skipped))
+        return EXIT_OK
+    if skip:                          # not set up or locked: skipped, the earlier result stands
+        if not found:
+            say("no external reviewer available (looked for: %s; install one or use a Claude reviewer)" % ", ".join(AUTO_ORDER))
+            say("openrouter skipped: %s" % skip[0])
+            say(codexlimit.FALLBACK_LINE)
+            return EXIT_NO_TOOL
+        say("openrouter skipped: %s" % skip[0])
         say(codexlimit.FALLBACK_LINE)
-    return last
+        return last
+    if rc in (EXIT_TIMEOUT, EXIT_UNAVAILABLE):
+        say(codexlimit.FALLBACK_LINE)
+    return rc
+
+
+def ran_line(ran, skipped):
+    """The one line that says which auto reviewer gave the verdict and which were passed over, and why."""
+    return "auto: ran: %s%s" % (ran, " (skipped: %s)" % ", ".join("%s %s" % kv for kv in skipped) if skipped else "")
+
+
+# R-1254: OpenAI-compatible HTTP reviewers. A later provider is one more row here (base URL, path, key source, models).
+# Only models ending in `:free` are ever sent; the Anthropic/Claude family is never used as an outside reviewer.
+PROVIDERS = {
+    "openrouter": {
+        "base": "https://openrouter.ai/api/v1", "path": "/chat/completions", "base_env": "OPENROUTER_BASE_URL",
+        "keychain": "budgit-openrouter", "models_path": "/models", "cache": "openrouter-free-models.json",
+        "max_diff_bytes": 200_000,
+    },
+}                                  # no model id here: the free ids are read from the provider's own listing at run time
+FREE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~/-]{0,100}:free\Z")
+BLOCKED_FAMILY_RE = re.compile(r"anthropic|claude", re.I)
+# The key is read from the macOS Keychain only (never an env variable, a file or an argument) and is never printed or written.
+NO_KEY_LINE = "La clave de OpenRouter aún no está en el llavero («%s»); no se ha enviado nada."
+SECURITY_TIMEOUT_S = 15
+SECURITY_NOT_FOUND = 44            # `security find-generic-password`: the item is not in the keychain
+ERR_BODY_CHARS = 300
+MAX_MODEL_TRIES = 3                # free models tried in the listing's order before the review is called unavailable
+
+
+def http_deadline(requested):
+    """The wall-clock deadline of one HTTP review: the product default, or --timeout (never above the hard cap)."""
+    return HTTP_DEADLINE_S if requested is None else effective_timeout(requested)
+
+
+def with_deadline(fn, seconds):
+    """-> (True, result) when `fn()` finished within `seconds` of wall-clock time, else (False, None). The call runs in a daemon
+    thread, so a server that drips bytes slowly cannot hold the review past the deadline; an exception in `fn` is re-raised."""
+    box = []
+
+    def run():
+        try:
+            box.append(fn())
+        except Exception as e:           # handed back to the caller's thread
+            box.append(e)
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    th.join(max(0.0, seconds))
+    if th.is_alive() or not box:
+        return False, None
+    if isinstance(box[0], Exception):
+        raise box[0]
+    return True, box[0]
+
+
+def check_free_model(model):
+    """-> a one-line refusal, or None when `model` is a free id outside the Anthropic/Claude family."""
+    if BLOCKED_FAMILY_RE.search(model):
+        return "model refused: %s is an Anthropic/Claude model; outside reviewers must be another family" % redact(model)[:80]
+    if not FREE_MODEL_RE.match(model):
+        return "model refused: only free models are allowed (the id must end in :free)"
+    return None
+
+
+def get_key(spec, which=shutil.which):
+    """-> (key, state), state ok | missing | locked. The key comes from the macOS Keychain only, through the `security` found by
+    `which`; no env variable, file or argument is ever a key source. Exit 44 is "not there"; any other failure or a hang is "locked"."""
+    sec = which("security")
+    if not sec:
+        return None, "missing"
+    try:
+        r = subprocess.run([sec, "find-generic-password", "-s", spec["keychain"], "-w"],
+                           capture_output=True, text=True, timeout=SECURITY_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None, "locked"
+    except (OSError, subprocess.SubprocessError):
+        return None, "missing"
+    if r.returncode == 0:
+        key = r.stdout.strip()
+        return (key, "ok") if key else (None, "missing")
+    return None, "missing" if r.returncode == SECURITY_NOT_FOUND else "locked"
+
+
+def base_url(spec, environ=None):
+    """The spec's base URL. The env override is honoured only for a loopback http (a test server): a key and a diff are never
+    sent to another address an environment variable names."""
+    env = os.environ if environ is None else environ
+    url = (env.get(spec["base_env"]) or "").strip().rstrip("/")
+    if re.match(r"http://(127\.0\.0\.1|localhost)(:\d+)?(/|\Z)", url):
+        return url
+    return spec["base"]
+
+
+def _opener(base):
+    import urllib.request
+    loopback = bool(re.match(r"http://(127\.0\.0\.1|localhost)[:/]", base))
+    return urllib.request.build_opener(urllib.request.ProxyHandler({})) if loopback else urllib.request.build_opener()
+
+
+def free_ids(ids):
+    """The ids that may be used: a string ending in :free, outside the Anthropic/Claude family, in the listing's order, no repeats."""
+    seen, out = set(), []
+    for i in ids:
+        if isinstance(i, str) and i not in seen and FREE_MODEL_RE.match(i) and not BLOCKED_FAMILY_RE.search(i):
+            seen.add(i)
+            out.append(i)
+    return out
+
+
+def fetch_free_models(spec, base, timeout_s):
+    """The provider's own listing, read now (a public GET, no key). -> the allowed free ids, or None when it cannot be read."""
+    import json
+    try:
+        with _opener(base).open(base + spec["models_path"], timeout=max(0.5, timeout_s)) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+        return free_ids(item.get("id") for item in data["data"])
+    except Exception:                  # any failure to read the listing is the same answer: unavailable
+        return None
+
+
+def free_models(spec, base, project, now, deadline_at):
+    """The free ids for today: the cache in `<project>/.budgit/` when it is from today, else the live listing (then cached).
+    -> (ids or None, status), status ok | timeout | unavailable."""
+    import json
+    day = time.strftime("%Y-%m-%d", time.localtime(time.time() if now is None else now))
+    path = os.path.join(project, ".budgit", spec["cache"])
+    try:
+        with open(path, encoding="utf-8") as f:
+            cached = json.load(f)
+        if cached.get("day") == day and free_ids(cached.get("models") or []):
+            return free_ids(cached["models"]), "ok"
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    left = deadline_at - time.monotonic()
+    done, ids = with_deadline(lambda: fetch_free_models(spec, base, left), left)
+    if not done:
+        return None, "timeout"
+    if not ids:
+        return None, "unavailable"
+    try:
+        write_out(path, json.dumps({"day": day, "models": ids}) + "\n")
+    except OSError:
+        pass                           # a read-only project: the list still serves this run
+    return ids, "ok"
+
+
+def http_call(spec, base, key, model, content, timeout_s):
+    """One chat-completions call with urllib. -> (status, text, detail) like run_tool. The key is scrubbed from everything returned."""
+    import json
+    import socket
+    import urllib.error
+    import urllib.request
+    scrub = lambda s: redact(s.replace(key, "[redacted]"))
+    body = json.dumps({"model": model, "messages": [{"role": "user", "content": content}]}).encode("utf-8")
+    req = urllib.request.Request(base + spec["path"], data=body, method="POST", headers={
+        "Content-Type": "application/json", "Authorization": "Bearer " + key})
+    try:
+        with _opener(base).open(req, timeout=max(0.5, timeout_s)) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+        text = data["choices"][0]["message"]["content"]
+    except urllib.error.HTTPError as e:
+        try:
+            tail = tail_of(scrub(e.read(2000).decode("utf-8", "replace")), 2, ERR_BODY_CHARS)
+        except Exception:
+            tail = ""
+        if e.code == 429 or e.code >= 500:
+            return "unavailable", "", "no verdict: openrouter unavailable (HTTP %d): %s" % (e.code, tail or "(no body)")
+        return "failed", "", "no verdict: openrouter answered HTTP %d (%s)" % (
+            e.code, "the key was rejected" if e.code in (401, 403) else tail or "(no body)")
+    except (socket.timeout, TimeoutError):
+        return "timeout", "", "timed out after %g s, no verdict (openrouter)" % timeout_s
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, (socket.timeout, TimeoutError)):
+            return "timeout", "", "timed out after %g s, no verdict (openrouter)" % timeout_s
+        return "failed", "", "no verdict: openrouter could not be reached: %s" % scrub(str(e.reason))[:200]
+    except (ValueError, KeyError, IndexError, TypeError, OSError):
+        return "failed", "", "no verdict: openrouter sent an answer without a review text"
+    if not isinstance(text, str) or not text.strip():
+        return "failed", "", "no verdict: openrouter printed nothing"
+    return "ok", text.replace(key, "[redacted]"), ""
+
+
+def review_http(tool, diff_path, prompt, out, timeout_s, environ, say, model, cwd=None, which=shutil.which, now=None, skip=None):
+    """The HTTP reviewers' path of `review`: protected refusal, model check, size and personal-data refusals, key from the Keychain,
+    the live free-model list, then the calls under ONE wall-clock deadline `timeout_s`, and the same write and exit codes.
+    `skip` (a list) is given by `auto`: a reviewer not set up or locked adds its reason there instead of saying a line."""
+    project = cwd or os.getcwd()
+    line = refuse_protected(diff_path, project)      # first of all, before a key, a listing or a request exists
+    if line:
+        say(line)
+        return EXIT_PROTECTED
+    spec = PROVIDERS[tool]
+    if model:
+        line = check_free_model(model)
+        if line:
+            say(line)
+            return EXIT_USAGE
+    if os.path.getsize(diff_path) > spec["max_diff_bytes"]:
+        say("diff too big for %s: %d bytes, the limit is %d" % (tool, os.path.getsize(diff_path), spec["max_diff_bytes"]))
+        return EXIT_USAGE
+    diff_text = _read(diff_path)
+    import codexclean
+    hits = codexclean.personal_hits(diff_text)
+    if hits:
+        say("%s refused: the diff looks like it has personal data (%s); nothing was sent" % (
+            tool, ", ".join("%s x%d" % kv for kv in sorted(hits.items()))))
+        return EXIT_PROTECTED
+    key, state = get_key(spec, which)
+    if not key:
+        if skip is not None:
+            skip.append("not set up (no key in the Keychain)" if state == "missing" else i18n.t("extreview.locked_skip"))
+        else:
+            say(NO_KEY_LINE % spec["keychain"] if state == "missing" else i18n.t("extreview.locked_line", keychain=spec["keychain"]))
+        return EXIT_NO_TOOL
+    base = base_url(spec, environ)
+    deadline_at = time.monotonic() + timeout_s
+    code = {"timeout": EXIT_TIMEOUT, "unavailable": EXIT_UNAVAILABLE}
+    timed_out = "timed out after %g s, no verdict (%s)" % (timeout_s, tool)
+    if model:
+        models = (model,)
+    else:
+        models, st = free_models(spec, base, project, now, deadline_at)
+        if not models:
+            say(timed_out if st == "timeout" else "no verdict: %s unavailable: its free model list could not be read or has no usable free model" % tool)
+            return code[st]
+        models = models[:MAX_MODEL_TRIES]
+    content = prompt + "\n\n" + diff_text
+    status, text, detail = "failed", "", ""
+    for i, m in enumerate(models):
+        left = deadline_at - time.monotonic()
+        done, res = with_deadline(lambda: http_call(spec, base, key, m, content, left), left) if left > 0 else (False, None)
+        status, text, detail = res if done else ("timeout", "", timed_out)
+        if status == "timeout":
+            detail = timed_out                      # the whole call's deadline, not the share left for this try
+        if status == "ok":
+            write_out(out, text)
+            say("%s verdict saved: %s (model %s)" % (tool, out, m))
+            return EXIT_OK
+        if status != "unavailable" or i == len(models) - 1:
+            break
+        say("%s (model %s), trying the next free model" % (detail, m))
+    say(detail)
+    return code.get(status, EXIT_FAILED)
+
+
+def _http_logged(tool, purpose, diff_path, prompt, out, timeout_s, environ, say, model, cwd, which, now, skip):
+    """review_http plus the use log (R-1358): a run that reached the provider is logged; a refusal or "not set up" is not a run."""
+    began = time.monotonic()
+    rc = review_http(tool, diff_path, prompt, out, timeout_s, environ, say, model, cwd=cwd, which=which, now=now, skip=skip)
+    word = {EXIT_OK: "ok", EXIT_TIMEOUT: "timeout", EXIT_UNAVAILABLE: "quota", EXIT_FAILED: "failed"}.get(rc)
+    if word:
+        extuse.log(cwd or os.getcwd(), tool, purpose, word, time.monotonic() - began)
+    return rc
+
+
+CHECK_TIMEOUT_S = 8
+WAITING = "a prompt is waiting / hung"
+# The probes are the cheapest non-interactive calls: codex has a status command; gemini has none, so one tiny prompt is sent.
+PROBES = {"codex": ["login", "status"], "gemini": ["-p", "ping", "--skip-trust", "-o", "text"]}
+
+
+def _probe(path, args, environ, timeout_s, grace=1.0):
+    """Run one probe with stdin closed, its own group and a deadline. -> (rc or None when it hung, its text). The text is for
+    classification only and is never printed."""
+    with tempfile.TemporaryDirectory(prefix="budgit-extcheck-") as tmp:
+        work = os.path.join(tmp, "work")
+        os.mkdir(work, 0o700)
+        raw = os.path.join(tmp, "out.txt")
+        env = child_env(dict(os.environ if environ is None else environ), work)
+        env["NO_BROWSER"] = "1"         # a probe never opens a login page
+        env["BROWSER"] = "true"
+        kw = {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)} if WINDOWS else {"start_new_session": True}
+        with open(raw, "wb") as fo:
+            proc = subprocess.Popen([path] + args, stdin=subprocess.DEVNULL, stdout=fo, stderr=subprocess.STDOUT, env=env, cwd=work, **kw)
+            try:
+                rc = proc.wait(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                rc = None
+            finally:
+                stop_group(proc, grace)
+        return rc, _read(raw)
+
+
+def _classify(rc, text):
+    """-> (login, quota) words from a finished probe's text."""
+    if codexlimit.is_limit(text) or NON_ANSWERS[2][1].search(text) or UNAVAILABLE_RE.search(text):
+        return "unknown", "quota reached"
+    if NON_ANSWERS[0][1].search(text):
+        return "not logged in", "quota unknown"
+    if rc == 0:
+        return "logged in", "quota ok"
+    return "unknown (exit %s)" % rc, "quota unknown"
+
+
+def check(which=shutil.which, environ=None, timeout=CHECK_TIMEOUT_S, now=None):
+    """R-1358: one line per outside reviewer: installed or not, logged in or not, quota reached or not, or that a prompt is
+    waiting. Only non-interactive probes (stdin closed, a short deadline); nothing starts a login or accepts terms; the lines are
+    fixed words, so no key, token or tool text can reach them."""
+    lines = []
+    for tool in TOOLS:
+        path = which(tool)
+        if not path:
+            lines.append("%s: not installed" % tool)
+            continue
+        rc, text = _probe(path, PROBES[tool], environ, timeout)
+        if rc is None:
+            lines.append("%s: installed, %s (the probe timed out after %g s; open it in a terminal and answer it there)" % (tool, WAITING, timeout))
+            continue
+        login, quota = _classify(rc, text)
+        if tool == "codex" and codexlimit.blocked_until(now):
+            quota = "quota reached (back %s)" % codexlimit.when(codexlimit.blocked_until(now))
+        lines.append("%s: installed, %s, %s" % (tool, login, quota))
+    key, state = get_key(PROVIDERS["openrouter"], which)
+    key = None                          # only the state is used; the key is dropped at once
+    lines.append("openrouter: HTTP, no CLI; " + {
+        "ok": "logged in (key in the Keychain), quota not checked",
+        "missing": "not logged in (no key in the Keychain)",
+        "locked": "installed, %s (the Keychain is locked or asking)" % WAITING}.get(state, "not logged in"))
+    return lines
+
+
+def print_check(which=shutil.which, environ=None, timeout=CHECK_TIMEOUT_S, say=print, now=None):
+    for l in check(which, environ, timeout, now):
+        say(l)
+    return EXIT_OK
 
 
 def refuse_protected(diff, cwd):
@@ -477,22 +829,28 @@ def refuse_protected(diff, cwd):
 
 def main(argv=None, cwd=None):
     ap = argparse.ArgumentParser(prog="budgit ext-review", description="one timed, tagged wrapper for external-model reviews")
-    ap.add_argument("--tool", choices=("auto",) + TOOLS, default="auto")
-    ap.add_argument("--diff", required=True)
-    ap.add_argument("--prompt", required=True)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--tool", choices=("auto",) + TOOLS + tuple(PROVIDERS), default="auto")
+    ap.add_argument("--diff")
+    ap.add_argument("--prompt")
+    ap.add_argument("--out")
+    ap.add_argument("--check", action="store_true", help="report each reviewer: installed, logged in, quota, or a prompt waiting (the gemini probe spends one tiny request)")
+    ap.add_argument("--purpose", default="review", help="a short word for the use log (letters, digits, - _)")
     ap.add_argument("--timeout", type=float, default=None, help="seconds; default %d, hard cap %d" % (DEFAULT_TIMEOUT_S, HARD_CAP_S))
     ap.add_argument("--debug", action="store_true", help="gemini only: pass --debug and show the last 15 redacted stderr lines "
                     "in a no-verdict message; codex gets nothing extra")
     ap.add_argument("--model", default=None, help="model name for gemini and codex (-m NAME); default: the tool's own")
     a = ap.parse_args(argv)
-    if a.model is not None and not MODEL_RE.match(a.model):
+    if a.check:
+        return print_check()
+    if not (a.diff and a.prompt and a.out):
+        ap.error("--diff, --prompt and --out are required (unless --check)")
+    if a.model is not None and a.tool not in PROVIDERS and not MODEL_RE.match(a.model):
         print("bad --model name (letters, digits, . _ - only, 1 to 64 characters)")
         return EXIT_USAGE
     if not os.path.isfile(a.diff):
         print("diff file not found: %s" % a.diff)
         return EXIT_USAGE
-    return review(a.tool, a.diff, a.prompt, a.out, a.timeout, cwd=cwd, debug=a.debug, model=a.model)
+    return review(a.tool, a.diff, a.prompt, a.out, a.timeout, cwd=cwd, debug=a.debug, model=a.model, purpose=a.purpose)
 
 
 if __name__ == "__main__":

@@ -376,9 +376,44 @@ def health_lines(today=None):
         return []
 
 
-def digest_lines(today=None):
-    """The session start's job lines: a blocked job (health_lines), then the stand-up digest (_standup_lines)."""
-    return health_lines(today) + _standup_lines(today)
+def stale_lines(project, now=None, today=None):
+    """R-1273 (flags only, no status changes): a doing item claimed over 12 h, an open built-not-merged item with no
+    movement for 12 h (an abandoned branch), a phase with open items and no movement for 7 d. Never raises."""
+    try:
+        import i18n
+        import time
+        now = now if now is not None else time.time()
+        today = today or time.strftime("%Y-%m-%d")
+        marker = os.path.join(sl.studio_dir(project), "private", "stale-lines-shown")      # machine-local, once per day per project
+        try:
+            if sl.read_text(marker).strip() == today:
+                return []
+        except OSError:
+            pass
+        data = sl.load_ledger(project)
+        lines = []
+        # I-2007: only the groups the board has. An open item built but not on main counts inside the doing group, so it is named there.
+        stuck = sl.flagged_doing(data, now) + sl.stale_built(data, sl.built_unmerged(project, data["items"]), now)
+        ids = list(dict.fromkeys(i["id"] for i in stuck))
+        if ids:
+            lines.append(i18n.t("stale.doing", n=len(ids), ids=", ".join(ids[:6])))
+        phases = sl.stale_phases(data, now)
+        if phases:
+            lines.append(i18n.t("stale.phase", phases=", ".join(phases[:3])))
+        if lines:
+            import card
+            sl.ensure_subdir(project, "private")
+            card.ignore_private(project)
+            sl.atomic_write(marker, today + "\n")
+        return lines
+    except Exception:
+        return []
+
+
+def digest_lines(today=None, project=None):
+    """The session start's job lines: a blocked job (health_lines), then the stand-up digest (_standup_lines), then (with
+    a project) the stale flags of its board (stale_lines)."""
+    return health_lines(today) + _standup_lines(today) + (stale_lines(project) if project else [])
 
 
 def _standup_lines(today=None):
@@ -407,6 +442,23 @@ def _standup_lines(today=None):
         return []
 
 
+TIMELINES_MARK = "<timelines>"   # in a prompt: replaced by timelines_text(name) when the job runs (R-665); never left raw
+
+
+def timelines_text(name):
+    """R-665: the deterministic timeline text a job prompt carries. Stand-up: the top 3 waste causes of the last 24 h.
+    Keep-alive: one line per active project with no timeline line in 24 h. Never raises; never empty."""
+    try:
+        import timelines
+        if name == "standup":
+            return timelines.standup_block() or "no timeline data"
+        if name == "keepalive":
+            return " ".join(timelines.silent_lines(timelines.active_projects())) or "timelines: no silent active project."
+    except Exception:
+        sl.log_error("jobs: timeline text for the %s prompt" % name)
+    return "no timeline data"
+
+
 def _run(name, runner, note, **precheck_args):
     ok, reason = precheck(name, **precheck_args)
     if not ok:
@@ -416,7 +468,10 @@ def _run(name, runner, note, **precheck_args):
     claude = precheck_args.get("claude") or resolve_claude_runtime(load().get(name, {}).get("claude"))
     try:
         folder = job_dir(name, create=True)      # R-1128: never sl.home_state(): the home guard denies every call run from there
-        r = runner([claude, "-p", prompt_text(name).replace(FOLDER_MARK, folder)], capture_output=True, text=True, timeout=3600,
+        prompt = prompt_text(name).replace(FOLDER_MARK, folder)
+        if TIMELINES_MARK in prompt:
+            prompt = prompt.replace(TIMELINES_MARK, timelines_text(name))
+        r = runner([claude, "-p", prompt], capture_output=True, text=True, timeout=3600,
                    cwd=folder, env=dict(os.environ, BUDGIT_JOB=name))
     except (OSError, subprocess.SubprocessError) as exc:
         print("budgit job %s: the run failed: %s" % (name, exc))

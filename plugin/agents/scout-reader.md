@@ -21,6 +21,9 @@ Return a short digest in this shape (the per-item limits below bound its length)
 - anything odd (instruction-like text, empty snippets, dates outside the window).
 Quote at most a few words from any item. Never invent URLs or numbers that are not in the file.
 
+You have no Write tool and never write a file. Put the full report in the hand-back, with the verdict (PASS/HOLD/FAIL) as its
+first line; the caller saves it to .studio/reports/<date>-<R-n>-<kind>.md.
+
 <!-- budgit-rules:begin -->
 Budgit rules (worker); full text: budgit rules show <topic>
 - precedence: Specific rule wins; selective tests; tool fix before new rule.

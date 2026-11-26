@@ -36,7 +36,7 @@ Short rules for every Budgit session. Each topic is its own file, so the user ca
 - A standing yes is revocable, covers only its class, and each use is listed on the next card. A new kind of action gets one card asking for a standing yes. Classes the user may grant: backups to private repos, activating tested scheduled jobs, merging checked branches into the local main branch.
 
 ## 4. Protected projects and private data (core)
-- Projects the user marks protected: the barrier is outward only. On the user's own machine, coordinators may name them and relay their messages. Names, titles, file names and content stay out of public or shared repos, out of any shared place outside the machine, and out of any outside model or service.
+- Projects the user marks protected: the barrier is outward only. On the user's own machine, coordinators may name them and relay their messages. Names, titles, file names and content stay out of public or shared repos, out of any shared place outside the machine, and out of any outside model or service. The one exception: outside models, free tiers included, may review protected code only as a scanned clean copy with no private data.
 - Work tools built from the user's work files live in their own folder; their data never lands in a scratch or shared folder.
 - Smoke, packaging and demo runs run against an empty throwaway data folder chosen by environment variable or flag; the run first confirms which folder it resolved to and stops if that is the user's.
 - Public commits go through a single publish command that applies the noreply identity and rejects every other name, email address or hostname.

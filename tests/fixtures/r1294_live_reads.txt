@@ -1,0 +1,129 @@
+# R-1294 slice 2 differential: every read form today's live-checkout guard admits (harvested from tests/test_r1199_guards.py,
+# the guard map rows, and the plan list). Format: expected => form => reason (third field optional).
+# VCS stands for the program name; a literal backslash-n is a newline. expected is the decision after the slice: pass or refuse.
+pass => VCS status
+pass => VCS status -sb
+pass => VCS status --porcelain
+pass => VCS log --oneline
+pass => VCS log --oneline -5
+pass => VCS log -n 5 --oneline
+pass => VCS log -n5
+pass => VCS log --stat -3
+pass => VCS log --graph --oneline --all
+pass => VCS log -p -- a.txt
+pass => VCS log --follow -- a.txt
+pass => VCS log --reverse --oneline
+pass => VCS log --decorate --oneline
+pass => VCS log --date=short --format=%ad -3
+pass => VCS log --since=2.days --oneline
+pass => VCS log --author=someone --oneline
+pass => VCS log --grep=fix --oneline
+pass => VCS log --grep='fix it' -3
+pass => VCS log --format='%h %s' -3
+pass => VCS log --format=%D -1
+pass => VCS log --format=%H -1
+pass => VCS log --pretty=format:%h -3
+pass => VCS log --pretty=oneline -3
+pass => VCS log --name-only --format=%H -2
+pass => VCS log main..other --oneline
+pass => VCS log --oneline main...other
+pass => VCS log --cherry-mark --right-only main...other => added to the live table: the friction workaround, read-only
+pass => VCS log --no-pager -1
+pass => VCS --no-pager log
+pass => VCS -C . log --oneline -3
+pass => VCS show HEAD
+pass => VCS show --stat HEAD
+pass => VCS show HEAD:a.txt
+pass => VCS show -s --format=%H HEAD
+pass => VCS show --cc --name-only HEAD => added to the live table: the friction workaround for diff-tree, read-only
+pass => VCS diff
+pass => VCS diff --stat HEAD
+pass => VCS diff --name-only
+pass => VCS diff --name-status HEAD~1
+pass => VCS diff --cached
+pass => VCS diff main other -- a.txt
+pass => VCS diff --word-diff HEAD~1 => added to the live table: a bare display flag
+pass => VCS rev-parse HEAD
+pass => VCS rev-parse --short HEAD
+pass => VCS rev-parse --abbrev-ref HEAD
+pass => VCS rev-parse --show-toplevel
+pass => VCS rev-list HEAD
+pass => VCS rev-list --count HEAD
+pass => VCS rev-list --max-count=3 HEAD
+pass => VCS ls-files
+pass => VCS ls-files -m
+pass => VCS ls-tree HEAD
+pass => VCS ls-tree -r --name-only HEAD
+pass => VCS cat-file -p HEAD
+pass => VCS cat-file -t HEAD
+pass => VCS merge-base main other
+pass => VCS merge-base --is-ancestor main other
+pass => VCS describe --always
+pass => VCS describe --tags --abbrev=7
+pass => VCS blame a.txt
+pass => VCS blame -L 1,3 a.txt
+pass => VCS grep base
+pass => VCS grep -n base
+pass => VCS grep -e base -- a.txt
+pass => VCS shortlog -s
+pass => VCS shortlog -sn
+pass => VCS config --get user.name
+pass => VCS config --list
+pass => VCS config --get-regexp 'alias.*'
+pass => VCS config --local --list
+pass => VCS config --local --list --name-only
+pass => VCS branch
+pass => VCS branch --list
+pass => VCS branch -v
+pass => VCS branch -vv
+pass => VCS branch -a
+pass => VCS branch -r
+pass => VCS branch --show-current
+pass => VCS branch --contains HEAD
+pass => VCS branch --merged main
+pass => VCS branch --list 'x*'
+pass => VCS branch -l 'x*'
+pass => VCS branch --points-at HEAD
+pass => VCS worktree list
+pass => VCS stash list
+pass => VCS remote -v
+pass => VCS --version
+pass => VCS --help
+pass => VCS -h
+pass => VCS for-each-ref
+pass => VCS for-each-ref refs/heads/
+pass => VCS for-each-ref --format='%(refname:short)' refs/heads
+pass => VCS for-each-ref --sort=-committerdate --count=5
+pass => VCS show-ref
+pass => VCS show-ref --heads
+pass => VCS show-ref --verify refs/heads/main
+pass => VCS check-ignore -v a.txt
+pass => VCS cherry -v main other
+pass => VCS diff-tree --cc HEAD
+pass => xcrun -f VCS
+pass => VCS log --format=%h -1 && echo "it's"
+pass => echo "it's" && VCS status
+refuse => echo don't; VCS log -1 => refused today too: the line cannot be read, no new refusal
+pass => VCS diff --no-ext-diff => added to the live table (the plan names it): it only turns the external driver off
+pass => VCS log --no-textconv HEAD => added to the live table (the plan names it): it only turns textconv off
+pass => VCS diff --exit-code => added to the live table: only sets the exit status
+pass => VCS diff --quiet => added to the live table: only sets the exit status
+pass => VCS diff -C HEAD~1 => added to the live table: copy detection, a display letter
+pass => VCS describe --dirty => added to the live table: reads the index state
+pass => VCS cat-file --batch => added to the live table: reads names from stdin, prints objects, no textconv
+pass => VCS cat-file --batch-check => added to the live table: same as --batch, headers only
+pass => VCS rev-list --objects HEAD => added to the live table: lists object names
+pass => VCS rev-parse --git-common-dir => added to the live table: prints a path
+pass => VCS log -S foo => added to the live table: a pickaxe pattern, exempt from the format scan, log only
+pass => VCS log -G foo => added to the live table: a pickaxe pattern, exempt from the format scan, log only
+pass => VCS merge-tree --write-tree main other => R-1360 G1: the exact merge-tree --write-tree shape with 2 plain revisions passes (coordinator only)
+pass => VCSleaks VCS --redact => the literal scanner word with --redact
+pass => /usr/local/bin/VCSleaks VCS --redact => an absolute path in a trusted bin folder
+refuse => ./VCSleaks VCS --redact => a relative path is not the scanner
+refuse => /tmp/VCSleaks VCS --redact => /tmp is not a trusted bin folder
+refuse => VCS log --show-signature -1 => can run the signing program
+refuse => VCS log --format='%GG' -1 => the signature placeholder can run the signing program
+refuse => VCS log --pretty=email -1 => email and aliases read config
+refuse => VCS for-each-ref --format='%(signature)' => the signature atom can run the signing program
+refuse => VCS cat-file --textconv HEAD:a.txt => textconv runs a driver
+refuse => VCS diff --output=/tmp/x => writes a file

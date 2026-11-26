@@ -1,0 +1,54 @@
+# Tests the public export leaves out (they stay in the hub): one per line, `module  # reason`.
+# Part 1: the export's own leak scan found a private name, account, email or home path spelled in the fixture.
+test_away_r641  # fixture spells the owner's account name and home path
+test_builder_role  # fixture spells a private term
+test_codex_clean_copy  # fixture spells account names and home paths
+test_codexlane  # fixture spells protected project names
+test_designcheck  # fixture spells a private project name
+test_export  # the export's own leak fixtures spell private terms, accounts and paths
+test_export_public  # fixture spells the owner's account name
+test_first_run  # fixture spells the owner's account name
+test_float_export  # fixture spells a home path
+test_guard_opaque  # fixture spells a home path
+test_guard_r515  # fixture spells the owner's account name and home path
+test_guard_writes  # fixture spells a home path
+test_guards  # fixture spells accounts and an email
+test_guards2  # fixture spells accounts and an email
+test_introspect  # fixture spells a private term and home path
+test_leak  # the leak gate's own fixtures spell every private class
+test_lint  # fixture spells a home path
+test_lint_hidden  # fixture spells a home path
+test_message_shape  # fixture spells a home path
+test_mvp  # fixture spells a private term
+test_outguard  # fixture spells a home path
+test_protected_names  # fixture spells protected project names
+test_r1000_codex_review_guard  # fixture spells the owner's account name and home path
+test_r1019_add_dir_prompt  # fixture spells the owner's account name and home path
+test_r1051_ext_review  # fixture spells the owner's account name and home path
+test_r1052_lint_scope  # fixture spells the owner's account name and home path
+test_r1110_guard_fp  # fixture spells accounts and an email
+test_r1121_p1_isolated_hooks  # fixture spells the owner's account name
+test_r877_floor  # fixture spells a private project name
+test_r980_r4_tm_commands  # fixture spells the owner's account name and home path
+test_radar  # fixture spells account names
+test_real_data_precision  # fixture spells a private term
+test_registry  # fixture spells the owner's account name and email
+test_relocate  # fixture spells home paths
+test_repoint  # fixture spells the owner's account name and home path
+test_rules_private_safe  # fixture spells private terms
+test_scout  # fixture spells protected project names
+test_setup  # the shared owner-config fixture spells accounts, an email and protected names
+test_watermark  # fixture spells the owner's account name
+test_guards_p6  # fixtures hold hidden Unicode characters on purpose, which the export's hidden-character scan refuses
+test_r1180_not_needed  # fixtures hold hidden Unicode characters on purpose, which the export's hidden-character scan refuses
+test_r1125_filing  # line 163 holds a key-shaped fixture value that the export's gitleaks scan refuses
+# Part 2: imports a module of part 1.
+test_raw_store  # imports test_guards_p6
+test_r708_pathspec  # imports test_guards_p6
+test_away_default  # imports test_away_r641
+test_r332_dirty_info  # imports test_relocate
+test_shipped_owner_words  # imports test_leak, test_setup, test_export
+test_r1128_g1  # imports test_leak, test_setup, test_export
+test_export_r746  # imports test_leak, test_setup, test_export
+test_r1128_jobs_e2e  # imports test_leak, test_setup, test_export
+test_ci_export  # imports test_leak and test_setup; the export tests belong to the hub, where the exporter runs

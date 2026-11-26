@@ -49,6 +49,15 @@ async function floatRun($, arg) {
 }
 /* float:end */
 
+// R-1378: the session's id and model as optional `--session-id` / `--model` flags for the per-session usage log. Each call has its own try and
+// an empty answer leaves its flag out, so a missing call never blanks the line.
+async function who($) {
+  const out = []
+  try { const id = await $.session.id(); if (id) out.push('--session-id', String(id)) } catch {}
+  try { const m = await $.session.model(); if (m) out.push('--model', String(m)) } catch {}
+  return out
+}
+
 // The plan's live 5-hour and weekly windows as JSON ([{kind, percentUsed, resetsAt}]), or '' if unavailable.
 async function liveLimits($) {
   try {
@@ -395,7 +404,7 @@ async function refresh($) {
     const limits = await liveLimits($)
     // R-521: one run at a time; a slow CLI under load is not asked again on top of itself, a second caller waits for the same answer
     if (!refreshing) {
-      refreshing = budgit($, cwd, withLoaded(limits ? ['status', '--line', '--colour', colourMode(), '--limits-json', limits] : ['status', '--line', '--colour', colourMode()]))
+      refreshing = budgit($, cwd, withLoaded(limits ? ['status', '--line', '--colour', colourMode(), '--limits-json', limits, ...(await who($))] : ['status', '--line', '--colour', colourMode()]))
         .finally(() => { refreshing = null })
     }
     const answer = await refreshing
@@ -529,7 +538,7 @@ async function refreshBrote($) {
   try {
     const cwd = await $.session.cwd()
     const limits = await liveLimits($)
-    const raw = await budgit($, cwd, withLoaded(limits ? ['status', '--brote', '--limits-json', limits] : ['status', '--brote']))
+    const raw = await budgit($, cwd, withLoaded(limits ? ['status', '--brote', '--limits-json', limits, ...(await who($))] : ['status', '--brote']))
     if (raw === null) return     // R-521: the run failed or timed out: keep what the last good answer stored
     if (!raw) {                  // no project here (the CLI walks up to find one): nothing to show
       await $.store.delete(KEY + cwd)

@@ -16,8 +16,8 @@ import os
 import re
 
 REASON = "R-940: no Claude attribution in commits or PRs (core rule); remove the trailer."
-ASK_REASON = ("R-1037: no Claude attribution in commits (core rule), and this commit takes its message from a source the "
-              "guard cannot read (%s). Use -m or a regular file with -F, or confirm that the message has no trailer.")
+ASK_REASON = ("R-1037: the guard cannot read this commit message (%s). Door: write the message to an existing file first and "
+              "pass it with -F <file>. Rule: no Claude attribution in commits.")      # hook.py cuts a reason at 200 chars: cause and door first
 _TRAILER = re.compile(r"co-authored-by[ \t]*:[^\n]*(claude|anthropic\.com)", re.I)
 _GENERATED = re.compile(r"generated\s+with\s+(\[[^\]\n]{0,40}\]|[^\n]{0,40}?)\s*claude\s+code", re.I)
 _GH_PR = re.compile(r"\bgh\s+pr\s+(create|edit)\b")
@@ -399,7 +399,10 @@ def _judge(command, cwd):
         if state == "ok":
             texts.append(text)
         else:                                               # missing now is unreadable now: an earlier part may create it
-            asks.append("%s is not a file the guard can read whole" % os.path.basename(full))
+            if state == "missing":
+                asks.append("%s is missing" % os.path.basename(full))
+            else:
+                asks.append("%s is not a file the guard can read whole" % os.path.basename(full))
     return texts, asks
 
 

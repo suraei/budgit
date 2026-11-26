@@ -25,6 +25,7 @@ NOTE_CAP_PER_SESSION = 20        # `away note` entries one session may queue (R-
 MAX_QUEUE = 500                # lines kept; a runaway session cannot fill the disk
 FLAG_NAME = "away.json"
 QUEUE_NAME = "away-queue.jsonl"
+LOCK_NAME = "away-queue"        # home_lock adds ".lock": one writer at a time for the queue file
 
 REASON = ("The user is away: do not wait for them. Take another path, or continue with other unblocked work. "
           "`away note` is for the coordinator; put the question in your hand-back.")
@@ -175,7 +176,13 @@ def project_key(project=None, cwd=None):
 
 def note(text, kind="note", session=None, home=None, project=None, fp=None):
     """Append one question or note to the away queue, tagged with the project and the session that wrote it. With `fp` (a
-    fingerprint of the call, R-901 L4) the same kind + session + fp is queued once: a looping subagent cannot push the user's notes out."""
+    fingerprint of the call, R-901 L4) the same kind + session + fp is queued once: a looping subagent cannot push the user's notes out.
+    R-1293: the queue lock is waited for at most a second; a note is written without it when the lock stays taken, so a hook never stalls."""
+    with sl.home_try_lock(LOCK_NAME, timeout=1.0):
+        return _note_locked(text, kind, session, home, project, fp)
+
+
+def _note_locked(text, kind, session, home, project, fp):
     text = _mask(text, kind)
     if not text:
         return False
@@ -264,6 +271,56 @@ def clear_queue(home=None, project=None):
             os.remove(queue_path(home))
     except OSError:
         pass
+
+
+def expire_kind(kind, home=None, project=None):
+    """R-1293: drop the entries of one kind (a helper's denied ask) and keep every other line as it is, the user's notes and the lines that do
+    not parse included. With `project`, only that project's. Nothing is approved, replayed or run. -> the number removed."""
+    with sl.home_lock(LOCK_NAME):
+        return _expire_locked(kind, home, project)
+
+
+def _expire_locked(kind, home, project):
+    """Works on the raw bytes: a chunk is dropped only when it decodes and parses as a matching entry; every other chunk
+    (invalid UTF-8, blank, CRLF, non-JSON) is written back byte for byte. An OSError while writing propagates to the caller."""
+    want = _proj(project)
+    try:
+        with open(queue_path(home), "rb") as f:
+            raw = f.read()
+    except OSError:
+        return 0
+    keep = []
+    removed = 0
+    for chunk in raw.split(b"\n"):
+        try:
+            entry = json.loads(chunk.decode("utf-8"))
+        except ValueError:
+            entry = None
+        if isinstance(entry, dict) and entry.get("kind") == kind and (not project or entry.get("project") == want):
+            removed += 1
+        else:
+            keep.append(chunk)
+    if not removed:
+        return 0
+    if any(c.strip() for c in keep):
+        _write_bytes(queue_path(home), b"\n".join(keep))
+    else:
+        os.remove(queue_path(home))
+    return removed
+
+
+def _write_bytes(path, data):
+    """Atomic like sl.atomic_write, for raw bytes: a fresh temp file in the same folder, then a rename over the path."""
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=os.path.basename(path) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 def ask_text(tool_input):

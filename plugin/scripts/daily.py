@@ -30,11 +30,9 @@ GIT_BUDGET_S = 6                # one deadline for every git call of the cleanin
 SESSION_BUDGET_MS = 100         # the SessionStart line gives up (and stays silent) when the facts take longer
 DUP_PAIR_CAP = 4000             # candidate pairs judged at most; the rest of a huge ledger is left for the next run
 SESSION_DUP_CAP = 800           # the SessionStart line judges fewer pairs so a large ledger still fits its 100 ms
-SHOW_ORDER = 8                  # lines of the order the text report prints (the JSON has all of them)
+SHOW_ORDER = 10                 # head rows of the order the text report prints, the pins not counted (the JSON has the same rows)
 CACHE = "daily.json"
 
-CLASS_MARK = re.compile(r"\bclass\s*([ab])\b", re.I)
-CLASS_A_WORDS = re.compile(r"\b(?:bugs?|broken|crash\w*|slow|performance|roto|lento|no funciona)\b", re.I)
 FILE = re.compile(r"[\w./-]{0,200}[\w-]\.(?:py|js|ts|tsx|json|md|html|css|sh|txt|yml|yaml|toml|cfg|ini)\b", re.I)
 EXPLICIT = re.compile(r"\b(?:duplicate of|same as|covered by|superseded by)\s+(R-\d+)\b", re.I)
 CLASS_RANK = {"A": 0, "A?": 1, "B": 2}
@@ -50,14 +48,14 @@ def _text(item):
 
 
 # ---------------------------------------------------------------- the pure parts
-def classify(item):
-    """"A" or "B" when the item says `Class A` / `Class B` itself (the first mention wins), "A?" when its title or text
-    looks like a bug, a crash or a slow thing, else "B". Notes never count: they quote other items."""
-    text = _text(item)
-    mark = CLASS_MARK.search(text)
-    if mark:
-        return mark.group(1).upper()
-    return "A?" if CLASS_A_WORDS.search(text) else "B"
+def class_mark(item):
+    """The daily display of ledgerplan.class_info (the one class function, R-1333): "A" when the item is flagged class A,
+    "A?" when only its words say A, else "B" (class B or no signal). It decides nothing itself."""
+    import ledgerplan
+    cls, source = ledgerplan.class_info(item)
+    if cls == "A":
+        return "A" if source == "flagged" else "A?"
+    return "B"
 
 
 FILE_SCAN = 20000                  # characters of an item looked at for file names
@@ -310,6 +308,21 @@ class _Clean:
             return None
         return {"remove": len(plan["remove"]), "delete": len(plan["delete"])}
 
+    def procs(self):
+        """R-1322: how many stale test servers `budgit housekeeping procs` would stop (the same procsweep.run plan), machine-wide;
+        None = not checked (switched off, busy machine, unreadable)."""
+        if not self.enabled:
+            return None
+        if self._busy is None:
+            self._busy = bool(self.busy()[0])
+        if self._busy:
+            return None
+        try:
+            import procsweep
+            return procsweep.count()
+        except Exception:
+            return None
+
 
 # ---------------------------------------------------------------- the report
 NO_COUNTS = ("made", "shut", "pending", "next", "later")
@@ -357,8 +370,18 @@ def _row(path, label, is_priv, names, avoid, now, clean, prefixed):
                       for b in batches(shown_scope, avoid | {"hidden"})]
     committed_open = [i for i in pending if not (i.get("status") == "open" and i.get("phase") == "later")]
     row["duplicates"] = [[rename(a), rename(b)] for a, b in duplicates(committed_open, all_items=items)]
-    ranked = sorted(scope, key=lambda i: CLASS_RANK[classify(i)])           # stable: ledger order inside a class
-    row["order"] = [{"id": rename(i["id"]), "class": classify(i)} for i in ranked]
+    import ledgerorder
+    import ledgerplan
+    try:                                                   # R-1333: the one order (the same call as `ledger top` and the plan)
+        res = ledgerorder.view(path)
+        by_item = {i["id"]: i for i in items}                   # every live item, whatever its phase: the same pins and head rows as `ledger top`
+        pins = {r["id"] for r in res["pinned"]}
+        row["order"] = [dict({"id": rename(r["id"]), "class": class_mark(by_item[r["id"]]), "class_source": ledgerplan.class_info(by_item[r["id"]])[1],
+                              "why": ledgerorder.reason_line(r)}, **({"pinned": True} if r["id"] in pins else {}))
+                        for r in ledgerorder.shown(res) if r["id"] in by_item]
+        row["order_line"] = ledgerorder.daily_line(res)
+    except Exception:
+        sl.log_error("daily: order")                        # no second, next-version-only list is shown under the name «order»
     try:
         import suitetimes
         slow = suitetimes.slow_gate(path)                  # R-961: the last gate run, only when over the limit
@@ -440,8 +463,12 @@ def collect(project=None, all_projects=False, target=None, now=None, git=True, b
             if row.get("_key"):
                 found[row["_key"]] = row["clean"]
             rows.append(row)
+        procs = clean.procs() if rows else None
     _write_cache(time.strftime("%Y-%m-%d", time.localtime(now)), found)
-    return {"projects": rows, "no_project": not rows, "_names": frozenset(names)}      # a frozenset: json.dumps(out) fails, never leaks
+    out = {"projects": rows, "no_project": not rows, "_names": frozenset(names)}      # a frozenset: json.dumps(out) fails, never leaks
+    if git and rows:
+        out["procs"] = procs                        # R-1322: machine-wide, shown once after the worktree preview; None = not checked
+    return out
 
 
 # ---------------------------------------------------------------- output
@@ -499,16 +526,26 @@ def render(out, lang=None):
         for a, b in row["duplicates"]:
             lines.append(t("daily.dup", a=a, b=b))
         if row["order"]:
-            lines.append(t("daily.order", n=len(row["order"])))
-            for o in row["order"][:SHOW_ORDER]:
-                lines.append("    " + t("daily.class." + o["class"].replace("?", "q"), id=o["id"]))
-            if len(row["order"]) > SHOW_ORDER:
-                lines.append("    " + t("daily.more", n=len(row["order"]) - SHOW_ORDER))
+            pins = [o for o in row["order"] if o.get("pinned")]
+            rest = [o for o in row["order"] if not o.get("pinned")]       # R-1333: the pins are a short block of their own and take no slot of the list
+            if pins:
+                lines.append(t("ledger.order_pins", n=len(pins)))
+                for o in pins:
+                    lines.append("    " + t("daily.class." + o["class"].replace("?", "q"), id=o["id"]) + (" | porque: " + o["why"] if o.get("why") else ""))
+            lines.append(t("daily.order", n=len(rest)))
+            for o in rest[:SHOW_ORDER]:
+                lines.append("    " + t("daily.class." + o["class"].replace("?", "q"), id=o["id"]) + (" | porque: " + o["why"] if o.get("why") else ""))
+            if len(rest) > SHOW_ORDER:
+                lines.append("    " + t("daily.more", n=len(rest) - SHOW_ORDER))
+            if row.get("order_line"):
+                lines.append("    " + row["order_line"])                 # R-1333: the daily facts line of the one order
         if row.get("suite"):
             s = row["suite"]
             lines.append(t("daily.suite_slow", secs=s["secs"], limit=s["limit"], slowest=s["slowest"]))
         clean = row.get("clean")
         lines.append(t("daily.clean", remove=clean["remove"], delete=clean["delete"]) if isinstance(clean, dict) else t("daily.clean_unchecked"))
+    if "procs" in out:                                          # R-1322: next to the worktree preview
+        lines.append(t("daily.procs", n=out["procs"]) if isinstance(out["procs"], int) else t("daily.procs_unchecked"))
     return leak.hide("\n".join(lines) + "\n", names)
 
 

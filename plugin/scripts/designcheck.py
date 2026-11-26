@@ -513,6 +513,15 @@ def find_chrome(chrome=None):
                            % (" at %s" % chrome if chrome else ""))
 
 
+def _chrome_argv(chrome, profile):
+    """Chrome's argv. --use-mock-keychain and --password-store=basic keep Chrome off the macOS login keychain
+    (R-1243: under a fake HOME it popped «Llavero no encontrado»)."""
+    return [chrome, "--headless=new", "--remote-debugging-pipe", "--disable-gpu", "--hide-scrollbars",
+            "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--mute-audio",
+            "--use-mock-keychain", "--password-store=basic",
+            "--user-data-dir=" + profile, "about:blank"]
+
+
 class _Chrome:
     """Headless Chrome driven over --remote-debugging-pipe (fd 3 in, fd 4 out; NUL-terminated JSON), the way
     Puppeteer/Playwright do. Viewports are set with Emulation.setDeviceMetricsOverride because --window-size lies in
@@ -528,9 +537,7 @@ class _Chrome:
             a, b = fcntl.fcntl(c_in, fcntl.F_DUPFD, 10), fcntl.fcntl(c_out, fcntl.F_DUPFD, 10)
             os.dup2(a, 3)
             os.dup2(b, 4)
-        argv = [chrome, "--headless=new", "--remote-debugging-pipe", "--disable-gpu", "--hide-scrollbars",
-                "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--mute-audio",
-                "--user-data-dir=" + profile, "about:blank"]
+        argv = _chrome_argv(chrome, profile)
         try:
             self.proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                          stderr=subprocess.DEVNULL, preexec_fn=fds, pass_fds=(3, 4))

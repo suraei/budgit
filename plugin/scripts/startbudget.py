@@ -23,11 +23,13 @@ TAGS = {
     "role": (None, None),                 # role line, hard safety, the rules-file path, a protected-folder warning
     "fence": (None, None),                # BEGIN/END UNTRUSTED PROJECT DATA
     "summary.head": (None, None),         # project, MVP, open-items count
+    "tmnotes": (None, None),              # R-1343 F-2: unread TM notes in their own frame, at most 5 lines + 1; never degraded
     "summary.action": (28, ("a round cap or a decision waits", "budgit status")),
     "summary.untracked": (26, ("input of this session not yet in the ledger", "budgit status")),
     "action": (27, ("a checkpoint, resume or decision waits", "budgit status")),
     "role.rules": (35, ("more role rules", "budgit rules show <topic>")),         # the role's own lines
     "role.common": (38, ("common team rules", "budgit rules show <topic>")),     # the lines every role shares
+    "decisions": (30, ("TM decisions wait in your relay file", "budgit status")),   # degrades after notice (40) and before summary.action (28)
     "notice": (40, ("notices and setup questions", "budgit status")),
     "summary.itemlist": (50, ("open items", "budgit ledger list --open")),
     "summary.progress": (52, ("last checkpoint", "budgit status")),

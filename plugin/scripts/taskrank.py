@@ -48,11 +48,14 @@ def ranked(data, at=None):
     for it in items:
         for ref in _cited(it):
             cited_by[ref] = cited_by.get(ref, 0) + 1
+    import ledgerplan                       # the one class function (R-1333); imported here because ledgerplan imports this module
     rows = []
     for n, it in enumerate(items):
         parts = _parts(it, cited_by, at)
+        cls, source = ledgerplan.class_info(it)
         rows.append({"id": it["id"], "status": it["status"], "title": it.get("title") or sl.oneline(it["text"], 60),
-                     "score": sum(parts.values()), "parts": parts, "rank": it.get("rank"), "_n": n})
+                     "score": sum(parts.values()), "parts": parts, "rank": it.get("rank"), "_n": n,
+                     "class": cls, "class_source": source})
         rows[-1]["due_kind"], rows[-1]["due_days"] = sl.due_state(it)      # R-925: late S/M first, large without a date flagged
     out = sorted((r for r in rows if not r["rank"]),
                  key=lambda r: (0 if r["due_kind"] == "late" else 1, -r["due_days"], -r["score"], r["_n"]))
@@ -94,16 +97,24 @@ def unpin(data, item_id):
     return item
 
 
-def flag(data, item_id, name, on=True):
+def flag(data, item_id, name, on=True, by=None, src=None):
+    """Set or clear a flag. The "visible" flag pulls an item up in the one order, so its setting is logged in the item's changes with
+    the session that set it and an optional I-n (R-1333, security review L3)."""
     if name not in sl.FLAGS:
         raise sl.StudioError("unknown flag %r (use %s)" % (name, ", ".join(sl.FLAGS)))
     item = sl.find_item(data, item_id)
-    flags = [f for f in item.get("flags") or () if f != name] + ([name] if on else [])
+    keep = [f for f in item.get("flags") or () if f != name]
+    if on and name in ("bug", "feature"):           # R-1266: a bug is never a feature; setting one clears the other
+        keep = [f for f in keep if f not in ("bug", "feature")]
+    flags = keep + ([name] if on else [])
     if flags:
         item["flags"] = [f for f in sl.FLAGS if f in flags]
     else:
         item.pop("flags", None)
     item["updated"] = sl.now()
+    if name == "visible":
+        item.setdefault("changes", []).append({"at": sl.now(), "src": [s for s in (src or ()) if isinstance(s, str)],
+                                               "what": "flag visible %s" % ("on" if on else "off"), "why": "set with budgit ledger flag", "by": by})
     return item
 
 

@@ -43,7 +43,7 @@ TEXTS = {
                            "safely (a variable, a substitution, a folder change it cannot follow, a wrapper such as xargs or "
                            "an unclosed quote, a heredoc, `$(...)`, a backtick or a comment). Rule: a command that mentions a search and "
                            "cannot be read safely is refused. Way out: write the root as a plain path inside the project folder, "
-                           "split the command in plain steps, and for a commit use a plain quoted message: `git commit -m \"...\"`, "
+                           "split the command in plain steps, and for a commit write the message to a file and use `git commit -F <file>`, "
                            "without a heredoc or `$(...)`.",
         "why_disk": "the whole disk",
         "why_home": "the home folder",
@@ -60,8 +60,8 @@ TEXTS = {
                            "seguir, un envoltorio como xargs, una comilla sin cerrar, un heredoc, `$(...)`, una comilla invertida o un "
                            "comentario). Regla: un comando que menciona una busqueda y no se puede leer con seguridad se "
                            "rechaza. Salida: escribe la raiz como una ruta normal dentro de la carpeta del proyecto, divide "
-                           "el comando en pasos simples y, para un commit, usa un mensaje simple entre comillas: "
-                           "`git commit -m \"...\"`, sin heredoc ni `$(...)`.",
+                           "el comando en pasos simples y, para un commit, escribe el mensaje en un archivo y usa "
+                           "`git commit -F <archivo>`, sin heredoc ni `$(...)`.",
         "why_disk": "todo el disco",
         "why_home": "la carpeta personal",
         "why_above": "una carpeta por encima del proyecto o de la carpeta personal",

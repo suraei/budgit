@@ -132,7 +132,7 @@ def drift(project, scope, now=None, window_days=DRIFT_WINDOW_DAYS):
         shallow = subprocess.run(git + ["rev-parse", "--is-shallow-repository"], capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
         out["shallow"] = shallow.stdout.strip() == "true"
         # no --since and no -n: either stops the walk at an old commit that sits above newer ones; the window is applied below
-        r = subprocess.run(git + ["log", "refs/heads/" + branch, "--format=%H%x1f%ct%x1f%s%x00", "--"],
+        r = subprocess.run(git + ["log", "refs/heads/" + branch, "--format=%H%x1f%ct%x1f%P%x1f%s%x00", "--"],
                            capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         out["git"] = "timed-out"
@@ -147,15 +147,17 @@ def drift(project, scope, now=None, window_days=DRIFT_WINDOW_DAYS):
     newest = {}
     for rec in r.stdout.split("\x00"):
         sha, _, rest = rec.strip().partition("\x1f")
-        stamp, _, subject = rest.partition("\x1f")
+        stamp, _, rest = rest.partition("\x1f")
+        parents, _, subject = rest.partition("\x1f")
         try:
             age = now - int(stamp)
         except ValueError:
             continue
         if not sha or age <= DRIFT_GRACE_S or age > window_days * 86400 or not _SAYS_DONE.search(subject):
             continue
-        for n in dict.fromkeys(ITEM_ID.findall(subject)):
-            i = "R-" + n
+        import mergereconcile                  # one function reads which items a merge names
+        named_ids = mergereconcile.item_ids(subject) if len(parents.split()) > 1 else ["R-" + n for n in dict.fromkeys(ITEM_ID.findall(subject))]
+        for i in named_ids:
             if i in candidates and (i not in newest or age < newest[i][0]):
                 newest[i] = (age, sha[:8], subject)
     out["drift"] = [(i, v[1], v[2]) for i, v in sorted(newest.items(), key=lambda kv: int(kv[0][2:]))]

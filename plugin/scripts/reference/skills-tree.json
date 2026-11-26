@@ -1,0 +1,237 @@
+{
+  "version": 2,
+  "note": "R-1358: profiles (folder name to types) are never shipped here; they live in the user's own overlay file skills-tree.local.json in the Budgit home. The single source for which skills serve which task type. Hooks and the brief check only read it and only advise, never deny. Per type: `pick` = 1 to 3 skills in order (what a brief asks for and the router names); `also` = optional extras, each with the condition `when`; `signals.words` (Spanish and English) and `signals.files` (globs) pick the type from a prompt; `outside` = which outside tool to call and when. `pick` holds concrete names; `also` may hold a prefix ending in *. Every installed skill is in a type or in unused (skills coverage prints the rest). A word of 3 letters or less matches as a whole word, a longer one as a word start.",
+  "types": {
+    "build-code": {
+      "pick": ["superpowers:test-driven-development"],
+      "also": [
+        {"skill": "engineering:architecture", "when": "the change picks between designs or adds a component"},
+        {"skill": "simplify", "when": "after the build, to trim the diff"}
+      ],
+      "signals": {
+        "words": ["implement", "implementa", "new feature", "nueva función", "nueva funcion", "añade una", "refactor", "refactoriza"],
+        "files": []
+      },
+      "outside": [
+        {"tool": "openrouter", "role": "overflow", "when": "the Claude budget is tight"}
+      ]
+    },
+    "fix-bug": {
+      "pick": ["superpowers:systematic-debugging", "engineering:debug"],
+      "also": [],
+      "signals": {
+        "words": ["bug", "bugs", "stack trace", "traceback", "no funciona", "doesn't work", "does not work", "crash", "fallo", "flaky", "exception", "excepción"],
+        "files": []
+      },
+      "outside": [
+        {"tool": "openrouter", "role": "overflow", "when": "the Claude budget is tight"}
+      ]
+    },
+    "write-tests": {
+      "pick": ["superpowers:test-driven-development", "engineering:testing-strategy"],
+      "also": [],
+      "signals": {
+        "words": ["write tests", "escribe tests", "unit test", "pruebas unitarias", "cobertura", "coverage", "tdd", "regression test", "e2e"],
+        "files": ["test_*.py", "*.test.*", "*.spec.*"]
+      },
+      "outside": [
+        {"tool": "openrouter", "role": "overflow", "when": "the Claude budget is tight"}
+      ]
+    },
+    "verify": {
+      "pick": ["superpowers:verification-before-completion", "code-review"],
+      "also": [
+        {"skill": "superpowers:receiving-code-review", "when": "review feedback has to be applied"},
+        {"skill": "engineering:code-review", "when": "a diff or PR needs a security and performance read"},
+        {"skill": "pr-review-toolkit:review-pr", "when": "a pull request is open"},
+        {"skill": "playwright-cli", "when": "the check needs a real browser run"}
+      ],
+      "signals": {
+        "words": ["verifica", "verify", "verification", "antes de entregar", "pull request", "review this pr", "code review", "revisa el código", "revisa el codigo"],
+        "files": []
+      },
+      "outside": [
+        {"tool": "gemini", "role": "fallback reviewer", "when": "the Codex reviewer is unavailable"}
+      ]
+    },
+    "security-review": {
+      "pick": ["security-review", "engineering:code-review"],
+      "also": [],
+      "signals": {
+        "words": ["security", "seguridad", "vulnerab", "owasp", "secretos", "secrets", "injection", "inyección", "inyeccion", "autenticación", "autenticacion", "authentication", "login", "xss"],
+        "files": [".env", ".env.*"]
+      },
+      "outside": [
+        {"tool": "codex", "role": "second reviewer", "when": "the security gate of a release candidate"},
+        {"tool": "gemini", "role": "fallback reviewer", "when": "the Codex reviewer is unavailable"}
+      ]
+    },
+    "research": {
+      "pick": ["anthropic-skills:deep-research"],
+      "also": [
+        {"skill": "watch", "when": "the source is a video"},
+        {"skill": "dataviz", "when": "the answer is a chart or a dashboard"}
+      ],
+      "signals": {
+        "words": ["investiga", "research", "compara", "alternativas", "state of the art", "estado del arte", "mira este vídeo", "mira este video", "gráfico", "chart"],
+        "files": []
+      },
+      "outside": [
+        {"tool": "openrouter", "role": "overflow", "when": "the Claude budget is tight"}
+      ]
+    },
+    "plan-review": {
+      "pick": ["superpowers:writing-plans", "superpowers:brainstorming"],
+      "also": [
+        {"skill": "superpowers:requesting-code-review", "when": "a finished step needs a review before the next"},
+        {"skill": "engineering:architecture", "when": "the plan picks between designs"},
+        {"skill": "budgit-kickoff", "when": "a new project or idea starts"},
+        {"skill": "studio-kickoff", "when": "a new project or idea starts"}
+      ],
+      "signals": {
+        "words": ["plan review", "revisa el plan", "architecture", "arquitectura", "brainstorm", "roadmap", "propuesta de diseño"],
+        "files": []
+      },
+      "outside": [
+        {"tool": "gemini", "role": "fallback reviewer", "when": "the Codex reviewer is unavailable"}
+      ]
+    },
+    "frontend-ui": {
+      "pick": ["impeccable", "frontend-design:frontend-design"],
+      "also": [
+        {"skill": "taste-v2", "when": "a public page (landing, marketing site, portfolio)"},
+        {"skill": "web-design-guidelines", "when": "a review or audit of existing UI"},
+        {"skill": "gsap-core", "when": "package.json has gsap"},
+        {"skill": "gsap-frameworks", "when": "package.json has gsap"},
+        {"skill": "gsap-performance", "when": "package.json has gsap"},
+        {"skill": "gsap-plugins", "when": "package.json has gsap"},
+        {"skill": "gsap-react", "when": "package.json has gsap"},
+        {"skill": "gsap-scrolltrigger", "when": "package.json has gsap"},
+        {"skill": "gsap-timeline", "when": "package.json has gsap"},
+        {"skill": "gsap-utils", "when": "package.json has gsap"},
+        {"skill": "design-taste-frontend", "when": "asked by name; it loads about 22k tokens"},
+        {"skill": "high-end-visual-design", "when": "asked for a premium or award-level look"},
+        {"skill": "frontend-slides", "when": "the output is an HTML slide deck"},
+        {"skill": "diagram-design", "when": "the output is a diagram"},
+        {"skill": "design:accessibility-review", "when": "an accessibility audit"},
+        {"skill": "design:design-critique", "when": "structured feedback on a design"},
+        {"skill": "design:design-handoff", "when": "handing a design to build"},
+        {"skill": "design:design-system", "when": "tokens, components or a design system"},
+        {"skill": "design:research-synthesis", "when": "user research notes to sum up"},
+        {"skill": "design:user-research", "when": "a research plan or interviews"},
+        {"skill": "design:ux-copy", "when": "button, error or empty-state text"},
+        {"skill": "playwright-cli", "when": "the result is checked in a real browser"}
+      ],
+      "signals": {
+        "words": ["ui", "pantalla", "interfaz", "página", "pagina", "landing", "dashboard", "diseño", "bonito", "feo", "layout", "tipografía", "tipografia", "accesibilidad", "a11y", "componente", "formulario", "onboarding", "screen", "look better", "redesign", "rediseña", "css", "frontend", "front-end"],
+        "files": ["*.css", "*.scss", "*.tsx", "*.jsx", "*.vue", "*.svelte", "*.html", "tailwind.config.*"]
+      },
+      "outside": [
+        {"tool": "gemini", "role": "images", "when": "the page needs an image or a mockup picture"},
+        {"tool": "gemini", "role": "fallback reviewer", "when": "the Codex reviewer is unavailable"}
+      ]
+    },
+    "docs": {
+      "pick": ["engineering:documentation", "stop-slop"],
+      "also": [
+        {"skill": "docs", "when": "a shared document"},
+        {"skill": "diagram-design", "when": "the document needs a diagram"}
+      ],
+      "signals": {
+        "words": ["readme", "documenta", "documentación", "documentacion", "documentation", "docstring", "diagrama", "diagram"],
+        "files": ["README*"]
+      },
+      "outside": []
+    },
+    "release": {
+      "pick": ["engineering:deploy-checklist", "superpowers:verification-before-completion", "legal-eu-es-fr"],
+      "also": [],
+      "signals": {
+        "words": ["release", "publicar", "publish", "rollback", "deploy", "desplegar", "hotfix", "changelog", "bump version"],
+        "files": ["CHANGELOG*"]
+      },
+      "outside": [
+        {"tool": "codex", "role": "second reviewer", "when": "the release gate, after the Claude reviewer"},
+        {"tool": "gemini", "role": "fallback reviewer", "when": "the Codex reviewer is unavailable"}
+      ]
+    },
+    "finance-accounting": {
+      "pick": ["fiscal-es-fr", "finance:financial-statements"],
+      "also": [
+        {"skill": "finance:journal-entry", "when": "an accounting entry"},
+        {"skill": "finance:journal-entry-prep", "when": "entries prepared for a close"},
+        {"skill": "finance:reconciliation", "when": "matching a ledger to a bank or another source"},
+        {"skill": "finance:variance-analysis", "when": "actual against budget"},
+        {"skill": "finance:close-management", "when": "a period close"},
+        {"skill": "finance:audit-support", "when": "an audit request"},
+        {"skill": "finance:sox-testing", "when": "control testing"},
+        {"skill": "legal-eu-es-fr", "when": "a law question (GDPR, VAT, terms, licences) beside the tax figures"}
+      ],
+      "signals": {
+        "words": ["plusvalía", "plusvalia", "fifo", "irpf", "modelo 100", "modelo 130", "modelo 303", "modelo 721", "iva", "tva", "autónomo", "autonomo", "contabilidad", "asiento contable", "conciliación", "conciliacion", "balance sheet", "p&l", "tax", "impuesto", "accounting", "reconcil", "journal entry", "capital gain", "cost basis", "déclaration"],
+        "files": ["FISCAL.md"]
+      },
+      "outside": [
+        {"tool": "openrouter", "role": "overflow", "when": "the Claude budget is tight"}
+      ]
+    },
+    "market-data": {
+      "pick": ["bigdata-com:bigdata-quick-take", "daloopa:tearsheet"],
+      "also": [
+        {"skill": "bigdata-com:*", "when": "news, sector, country or catalyst research on a company or theme"},
+        {"skill": "daloopa:*", "when": "a financial model, comps, DCF or earnings numbers"}
+      ],
+      "signals": {
+        "words": ["ticker", "earnings", "stock price", "cotización", "cotizacion", "valoración de", "valoracion de", "dcf", "comparables", "ipo", "catalyst", "catalizador", "guidance", "price target", "equity research", "market data"],
+        "files": []
+      },
+      "outside": [
+        {"tool": "openrouter", "role": "overflow", "when": "the Claude budget is tight"}
+      ]
+    },
+    "3d": {
+      "pick": ["threejs-fundamentals"],
+      "also": [
+        {"skill": "threejs-*", "when": "the sub-topic: geometry, materials, lighting, textures, loaders, shaders, postprocessing, animation, interaction, performance or react-three-fiber"}
+      ],
+      "signals": {
+        "words": ["3d", "three.js", "threejs", "shader", "gltf", "webgl", "webgpu", "raycast"],
+        "files": ["*.glb", "*.gltf", "*.glsl", "*.wgsl"]
+      },
+      "outside": [
+        {"tool": "gemini", "role": "images", "when": "a texture or reference picture is needed"}
+      ]
+    },
+    "office-docs": {
+      "pick": ["anthropic-skills:docs"],
+      "also": [
+        {"skill": "anthropic-skills:docx", "when": "a Word file is named or edited"},
+        {"skill": "anthropic-skills:xlsx", "when": "a spreadsheet file is the input or output"},
+        {"skill": "anthropic-skills:pdf", "when": "a PDF is read, filled or made"},
+        {"skill": "anthropic-skills:pptx", "when": "a slide deck file is the output"}
+      ],
+      "signals": {
+        "words": ["docx", "xlsx", "pptx", "excel", "word document", "documento word", "pdf", "hoja de cálculo", "hoja de calculo", "spreadsheet", "powerpoint"],
+        "files": ["*.docx", "*.xlsx", "*.xls", "*.pdf", "*.pptx"]
+      },
+      "outside": []
+    }
+  },
+  "profiles": {},
+  "outside": {
+    "tools": {
+      "codex": "second reviewer for the release and security gates",
+      "gemini": "fallback reviewer when Codex is unavailable, and image work",
+      "openrouter": "overflow model when the Claude budget is tight"
+    },
+    "protected": {
+      "clean_copy": "required",
+      "rule": "a protected project goes to any outside tool only as a scanned clean copy, never as its own files"
+    }
+  },
+  "unused": {
+    "investing:*": "investing plugin skills: no type needs them yet",
+    "cowork:*": "cowork plugin skills: desktop-app chores, not technician tasks",
+    "psychologist-analyst": "analysis of people; no technician task type needs it"
+  }
+}

@@ -93,6 +93,10 @@ def _load_notice(load, limit):
 
 def _load_refused(exc):
     import i18n
+    import suitequeue
+    if isinstance(exc, suitequeue.MemoryTooLow):          # a memory refusal says memory (admit's own reason), not a CPU figure
+        print(str(exc))
+        return 4
     print(i18n.t("sq.load_refused", load=round(exc.load, 1), limit=round(exc.limit, 1)))
     return 4
 
@@ -112,12 +116,12 @@ def cmd_admit(args):
         print("budgit admit [lane|suite] [--json]")
         return 64                                  # 2 is the answer "refuse"; a wrong word must not look like one
     project = None
-    if args.kind == "lane":
+    if args.kind == "lane" or args.continuing is not None:
         try:
             project = sl.resolve_project(args.project)
         except sl.StudioError:
             project = None                          # no project here: the machine alone decides
-    got = admit.check(args.kind, project=project)
+    got = admit.check(args.kind, project=project, continuing=args.continuing)
     if args.json:
         print(json.dumps(got, indent=2))
     else:
@@ -226,16 +230,46 @@ def cmd_tm(args):
     import i18n
     import tmlog
     project = sl.resolve_project(args.project)
-    text = " ".join(args.text)
-    if text == "-":
-        text = sys.stdin.read()
     try:
+        import textdoor
+        text = " ".join(args.text) if args.text else None
+        from_stdin = args.text_file is None and text == "-"          # only a "-" on the line means stdin, never a file's text
+        text = textdoor.pick(text, args.text_file, project, "the text")      # R-1359: --text-file instead of the words on the line
+        if text is None:
+            raise sl.StudioError("nothing to log: give the text after `budgit tm log` or --text-file PATH")
+        if from_stdin:
+            text = sys.stdin.read()
         target = tmlog.append(project, text)
     except sl.StudioError as exc:
         print(str(exc))
         return 64
     print(i18n.t("tm.logged", path=target))
     return 0
+
+
+def _cmd_dated_line(args, name):
+    """R-1359: `budgit progress|friction add (--text T | --text-file PATH)`: one dated line on the project's file."""
+    import textdoor
+    project = sl.resolve_project(args.project)
+    try:
+        text = textdoor.pick(args.text, args.text_file, project)
+        if text is None:
+            raise sl.StudioError("give --text or --text-file PATH")
+        with sl.locked(project):
+            target = textdoor.dated_append(project, name, text)
+    except sl.StudioError as exc:
+        print(str(exc))
+        return 64
+    print("budgit: line added to %s" % target)
+    return 0
+
+
+def cmd_progress(args):
+    return _cmd_dated_line(args, "progress.md")
+
+
+def cmd_friction(args):
+    return _cmd_dated_line(args, "friction.md")
 
 
 def cmd_rules(args):
@@ -247,9 +281,12 @@ def cmd_rules(args):
         for t in rules.topics():
             print("%-13s %-3s %s  [%s]" % (t["id"], "off" if t["id"] in state["off"] else "on", t["digest"], ", ".join(t["roles"])))
         return 0
-    if args.action == "show" and args.grep:         # R-1137: only the matching lines, each with its topic
-        for tid, line in rules.grep(args.grep, args.topic):
-            print("%s: %s" % (tid, line))
+    if args.action == "show" and getattr(args, "grep", None):      # R-1183: only the lines holding the word
+        hits = rules.grep(args.grep, args.topic)
+        for tid, line in hits:
+            print(line if args.topic else "%s: %s" % (tid, line))
+        if not hits:
+            print(_t("rules.grep_none", word=args.grep))
         return 0
     if not args.topic:
         print("budgit rules %s <topic>: topics are %s" % (args.action, ", ".join(rules.topic_ids())))
@@ -294,8 +331,29 @@ def cmd_housekeeping(args):
         text = housekeeping.last()
         print(text.rstrip("\n") if text else i18n.t("hk.no_last"))
         return 0 if text else 1
-    report = housekeeping.run(only=args.only, apply_changes=args.apply, hours=args.hours)
+    import procsweep
+    add, remove, listening = (getattr(args, "protect_port", None), getattr(args, "unprotect_port", None),
+                              getattr(args, "protect_listening", False))
+    if add or remove or listening:                 # R-1322: save the ports the sweep never touches (never signals)
+        return procsweep.protect_main(add=add, remove=remove, listening=listening, stop=getattr(args, "stop", False), apply=args.apply)
+    only = args.only
+    if getattr(args, "what", None) == "procs" or (only and set(only) == {"procs"}):     # R-1322: the stale test servers on their own
+        return procsweep.main(stop=args.stop, hours=args.proc_hours, as_json=args.json, apply=args.apply)    # a dry run unless --stop or --apply
+    try:
+        proc_hours = getattr(args, "proc_hours", None)
+        proc_s = None if proc_hours is None else procsweep.hours_to_s(proc_hours)
+    except ValueError as exc:
+        print("budgit housekeeping: %s" % exc, file=sys.stderr)
+        return 2
+    dirs = [o for o in only if o != "procs"] if only else only
+    report = housekeeping.run(only=dirs, apply_changes=args.apply, hours=args.hours)
     text = housekeeping.render(report)
+    try:                                   # R-1322: stale test servers; --apply stops them (SIGTERM only) only when the procs task is selected
+        extra = procsweep.housekeeping_text(args.apply, min_age_s=proc_s, only=only)
+        if extra:
+            text += ("" if not text or text.endswith("\n") else "\n") + extra + "\n"
+    except Exception:
+        sl.log_error("housekeeping: procsweep")
     try:                                   # R-847: the backstop; the dry run only lists, --apply closes under the user's standing yes
         import procclose
         expired = []
@@ -434,10 +492,12 @@ def cmd_activate(args):
                    else "including earlier messages of this session (captured when this turn ends)")
         print("Every input of this session is now captured, %s." % history)
         print("Track each before finishing a turn:")
-        print("  budgit ledger add --src I-n --phase P --appetite small|medium|large --area WORD   # new request (copies your words)")
-        print("  budgit ledger phase mvp|later R-n [R-m ...]  # MVP first: tag the MVP, park the rest")
+        print("  budgit ledger match I-n                      # is it about an existing task?")
+        print("  budgit ledger link R-n --src I-n --directive \"TEXT\"   # a note about an existing task (a property of it)")
         print("  budgit ledger link R-n --src I-n             # refines an existing item")
         print("  budgit ledger ack I-n [I-m ...] --note WHY   # approvals / not a new request")
+        print("  budgit ledger add --src I-n --phase P --appetite small|medium|large --area WORD   # LAST: new actionable work (copies your words)")
+        print("  budgit ledger phase mvp|later R-n [R-m ...]  # MVP first: tag the MVP, park the rest")
         print("  budgit ledger done R-n --evidence PROOF      # close with proof")
         print("  budgit ledger verify R-n                     # needs .budgit/verify/R-n.md starting with PASS")
         print("  budgit status                                # what is pending")
@@ -468,7 +528,7 @@ def _kind_class(kind):
     return "spend" if k == "spend_limit" else "other"
 
 
-def _record_live_limits(raw):
+def _record_live_limits(raw, session=None, model=None):
     """Record the mod's live rateLimits ([{kind, percentUsed, resetsAt?}]) so the line and the team's pacing use current
     numbers. R-522: a window may come with no resetsAt (the figure still counts: it used to be dropped, and the line kept
     an older stored one); a missing five_hour is simply no session window; a kind we do not know is a possible weekly
@@ -478,7 +538,21 @@ def _record_live_limits(raw):
     rows = json.loads(raw)
     if not isinstance(rows, list):
         return
-    windows, others = {}, []
+    windows, others, aliases = {}, [], []
+    try:      # R-1378: the per-session log (H1 evidence); optional ids, and a failure never blocks the reading
+        budget.note_session_feed(session, model, [(w.get("kind"), w.get("percentUsed"), w.get("resetsAt")) for w in rows if isinstance(w, dict)][:32],
+                                 budget.HOST_SRC)
+    except Exception:
+        pass
+    try:      # R-1309: a private debug copy of what the host sent (kind, percentUsed, resetsAt only), overwritten each time, never printed
+        # L-c: the kind is cleaned like the limit-kinds file (64 characters here), any other text is cut to 64, at most 32 rows
+        prim = lambda v: v if v is None or isinstance(v, (int, float, bool)) else budget._clean_name(v, 64)
+        feed = [{"kind": budget.clean_kind(w.get("kind"), 64), "percentUsed": prim(w.get("percentUsed")),
+                 "resetsAt": prim(w.get("resetsAt"))} for w in rows if isinstance(w, dict)][:32]
+        os.makedirs(sl.home_state(), mode=0o700, exist_ok=True)
+        sl.atomic_write(os.path.join(sl.home_state(), "budget-feed-raw.json"), json.dumps(feed, indent=1))
+    except Exception:
+        pass
     for w in rows:
         if not isinstance(w, dict):
             continue
@@ -493,11 +567,19 @@ def _record_live_limits(raw):
         if cls == "five":
             windows["five_hour"] = (float(used), resets)
         elif cls == "week":
-            windows["seven_day"] = (float(used), resets)
+            if re.sub(r"[^a-z0-9]+", "_", str(w.get("kind") or "").lower()).strip("_") == "seven_day":
+                windows["seven_day"] = (float(used), resets)      # R-1309: only the plain weekly kind feeds the weekly window
+            else:
+                aliases.append((str(w.get("kind") or ""), float(used), resets))
         elif cls == "other":
             others.append((str(w.get("kind") or ""), float(used), resets))     # a host label may name a model: never kept
+    if aliases:      # R-1309: a looser name for the weekly counts only when it is the one such row and the plain kind is absent
+        if "seven_day" not in windows and len(aliases) == 1:
+            windows["seven_day"] = aliases[0][1:]
+        else:
+            others.extend(aliases)
     if windows:
-        budget.record(seven_day=windows.get("seven_day"), five_hour=windows.get("five_hour"))
+        budget.record(seven_day=windows.get("seven_day"), five_hour=windows.get("five_hour"), source=budget.HOST_SRC)
     if others:
         budget.note_kinds([o[0] for o in others])
         tight = max(others, key=lambda o: o[1])
@@ -543,16 +625,18 @@ def _live_snapshot(args):
     import time
     if args.limits_json:
         try:
-            _record_live_limits(args.limits_json)
+            _record_live_limits(args.limits_json, getattr(args, "session_id", None), getattr(args, "model", None))
         except Exception:
             pass   # bad input from the mod: fall back to what is recorded
     stored = budget.load()
     fresh = time.time() - (stored.get("seen_at") or 0) <= _LINE_FRESH_S
-    return budget.plan_limits(stored.get("limits") or {}) if fresh else {}, fresh   # R-1104: no 5-hour figure for a plan without one
+    # R-1378: the weekly shown is never below the app's account figure while its window is live
+    return budget.plan_limits(budget.floored(stored.get("limits") or {}, stored, time.time())) if fresh else {}, fresh   # R-1104: no 5-hour figure for a plan without one
 
 
-def _counts(data):
-    return sl.ledger_counts(data)
+def _counts(data, project):
+    """R-1273: the board numbers every status view prints: built-not-merged items count inside the «doing» group."""
+    return sl.ledger_counts(data, project)
 
 
 def _ansi(args):
@@ -627,7 +711,7 @@ def _status_line(args):
             print(_fit_line(sit, lang, args, False, _update_tails(args, lang), _subcap_text(o["used"] if o else None, lang, now)))
             return
         project, data = opened
-        n = _counts(data)
+        n = _counts(data, project)
         o = budget.week_outlook(limits, now=now)
         out = time.localtime(o["runs_out"]) if o and o["runs_out"] else None
         five = limits.get("five_hour")
@@ -694,14 +778,15 @@ def _brote_json(args):
         out.update({"lang": lang, "t": i18n.brote_strings(lang)})   # the mod and the floating window carry no catalog of their own
         item = lambda i: {"id": i["id"], "text": i["text"][:90].replace("\n", " "), "title": sl.item_title(i), "state": sl.claim_state(i)}
         doing = [i for i in data["items"] if i["status"] == "doing"]
-        queue = [i for i in data["items"] if i["status"] == "open" and i.get("phase") != "later"]
+        built = sl.built_unmerged(project, data["items"])               # R-1273: resolved once for this feed
+        queue = [i for i in data["items"] if i["status"] == "open" and i.get("phase") != "later" and i["id"] not in built]
         later = [i for i in data["items"] if i["status"] == "open" and i.get("phase") == "later"]
         newest = lambda items: sorted(items, key=_id_number, reverse=True)   # ids without a number (legacy) sort last
         closed = [i for i in data["items"] if i["status"] in ("done", "verified")]
         out.update({"version": 2, "total": sum(1 for i in data["items"] if i["status"] != "dropped"), "done_total": len(closed),
                     "queue_recent": [item(i) for i in newest(queue)][:8],
                     "done_recent": [{"id": i["id"], "title": sl.item_title(i)} for i in newest(closed)][:3],
-                    "counts": sl.feed_counts(data),
+                    "counts": sl.feed_counts(data, built),
                     "stale": [i["id"] for i in sl.stale_doing(data, at=now)],
                     "idle": [i["id"] for i in doing if sl.claim_state(i) == "idle"],
                     "doing": [item(i) for i in doing][:20], "queue": [item(i) for i in queue][:12],
@@ -822,13 +907,18 @@ def cmd_busy(args):
 def cmd_ext_review(args):
     """R-889a: the one wrapper for external-model reviews (codex, gemini): deadline, own process group, owner tag."""
     import extreview
-    if args.model is not None and not extreview.MODEL_RE.match(args.model):
+    if args.check:                       # R-1358: installed, logged in, quota or a waiting prompt, by non-interactive probes only
+        return extreview.print_check()
+    if not (args.diff and args.prompt and args.out):
+        print("--diff, --prompt and --out are required (unless --check)")
+        return extreview.EXIT_USAGE
+    if args.model is not None and args.tool not in extreview.PROVIDERS and not extreview.MODEL_RE.match(args.model):
         print("bad --model name (letters, digits, . _ - only, 1 to 64 characters)")
         return extreview.EXIT_USAGE
     if not os.path.isfile(args.diff):
         print("diff file not found: %s" % args.diff)
         return extreview.EXIT_USAGE
-    return extreview.review(args.tool, args.diff, args.prompt, args.out, args.timeout, debug=args.debug, model=args.model)
+    return extreview.review(args.tool, args.diff, args.prompt, args.out, args.timeout, debug=args.debug, model=args.model, purpose=args.purpose)
 
 
 def cmd_jobs(args):
@@ -845,6 +935,13 @@ def cmd_jobs(args):
     code, text = repoint.run_real(args.root, args.dry_run)
     print(text)
     return code
+
+
+def cmd_timelines(args):
+    """R-665: `timelines standup` prints the top waste causes of the last 24 h, `timelines silent` the active projects with no line."""
+    import timelines
+    print(timelines.cli_text(args.op))
+    return 0
 
 
 def cmd_job(args):
@@ -1014,6 +1111,9 @@ def cmd_relocate(args):
     args.project = getattr(args, "project", None)
     if args.op == "plan":
         print(relocate.render(relocate.plan(args.root, args.include or (), args.exclude or (), args.private or ())))
+        return 0
+    if args.op == "evicted":                  # R-644: read-only, stat flags only; information, so always 0
+        print("\n".join(relocate.render_evicted(relocate.evicted_listing(args.root, args.include or (), args.private or ()))))
         return 0
     if args.op == "trash":
         import sortdirs
@@ -1493,9 +1593,16 @@ def cmd_status(args):
     if args.waiting:
         return _waiting(args)
     project = sl.resolve_project(args.project)
+    try:                                   # merged work closes its item first, under the project lock (fail-safe)
+        import mergereconcile
+        with sl.try_locked(project, 2.0) as got:
+            if got:
+                mergereconcile.reconcile(project)
+    except Exception:
+        sl.log_error("status: merge reconcile")
     data = sl.load_ledger(project)
     bound = sl.project_for_session(SESSION) == project
-    counts = _counts(data)
+    counts = _counts(data, project)
     print(_t("r1160.status_project", project=project))
     print(_t("r1160.status_bound" if bound else "r1160.status_unbound"))
     print(_t("r1160.status_items", total=len(data["items"]), open=counts["doing"] + counts["next"] + counts["later"]))
@@ -1503,8 +1610,8 @@ def cmd_status(args):
         print(_t("ledger.empty"))
     pending = sl.untracked(project, data)
     if data["items"]:
-        print(sl.mvp_line(data))
-    _top_lines(data)
+        print(sl.mvp_line(data, project))
+    _top_lines(data, project)
     for it in sl.stale_doing(data):
         print("stale doing (not updated for more than 7 days): %s %s" % (it["id"], it["text"][:80].replace("\n", " ")))
     for line in sl.round_cap_lines(project, data):
@@ -1512,6 +1619,17 @@ def cmd_status(args):
     for line in sl.verify_status_lines(project, data):      # R-1136: verify state and the outcome claim, one function
         print(line)
     _published_line(project)
+    try:                                                   # R-1343: the pointer path (the start budget may cut the note text) lists the count
+        import portfolio
+        unread = portfolio.note_counts(project)["unread"]
+        if unread:
+            print("TM notes unread: %d (`budgit portfolio notes <project>` lists them; the PM's next turn prints them)" % unread)
+    except Exception:
+        sl.log_error("status: tm notes")
+    import mergereconcile
+    for line in mergereconcile.waiting_lines(project, data):    # merged, no verifier PASS yet
+        print(line)
+    print(sl.growth_line(data))                            # R-1195: the stand-up reads this line per project
     print(_t("r1160.status_untracked", n=len(pending)))
     for e in pending:
         print("  %s [%s] %s" % (e["id"], (e.get("session") or "?")[:8],
@@ -1567,12 +1685,13 @@ def _waiting(args):
                                   " (%s)" % c["waiting_for"] if c["waiting_for"] else ""))
 
 
-def _top_lines(data):
-    import taskrank
-    rows = taskrank.top(data)
+def _top_lines(data, project=None):
+    import ledgerorder
+    res = ledgerorder.view(project or sl.resolve_project(None), data)       # R-1333: the one order, the same call as `ledger top`
+    rows = ledgerorder.shown(res)
     if rows:
-        print("top %d (budgit ledger top):" % len(rows))
-        for line in taskrank.lines(rows):
+        print("top %d (budgit ledger top):" % (len(rows) - len(res["pinned"])))      # the head rows; the pins are a block of their own
+        for line in ledgerorder.head_lines(res):
             print(line)
 
 
@@ -1598,8 +1717,32 @@ def _inbox_text(project, src):
     return "\n\n".join(texts[s] for s in src)
 
 
+def _ledger_plan(project, data, args):
+    """R-1266: `ledger plan`. Read-only; ledgerplan.build is the one outcome, text and --json both render it."""
+    import ledgerplan
+    lanes, why = args.lanes or 2, None
+    if not args.step0_only:                        # the one admit question, asked here and nowhere else
+        try:
+            import admit
+            lanes, why = ledgerplan.lanes_from_admit(admit.check(kind="lane", project=project), args.lanes)
+        except Exception:
+            sl.log_error("ledger plan: admit")
+    plan = ledgerplan.build(project, data, lanes=lanes, step0=not args.no_step0)
+    plan["header"]["lane_note"] = why
+    if args.step0_only:
+        print(json.dumps(plan["verify_list"], ensure_ascii=False) if args.json else ledgerplan.render_verify(plan))
+        return
+    print(json.dumps(plan, ensure_ascii=False) if args.json else ledgerplan.render(plan))
+
+
 def cmd_ledger(args):
     project = sl.resolve_project(args.project)
+    if getattr(args, "text_file", None) is not None:      # R-1359: the text comes from a file, read before the lock is taken
+        import textdoor
+        if args.op == "link":
+            args.directive = textdoor.pick(args.directive, args.text_file, project, "--directive")
+        else:
+            args.text = textdoor.pick(args.text, args.text_file, project)
     with sl.locked(project):
         if args.op == "accept-edit":
             diff = sl.accept_edit(project)
@@ -1611,14 +1754,18 @@ def cmd_ledger(args):
         data = sl.load_ledger(project)
         batch_failed = False
         if args.op == "top":
-            import taskrank
-            rows = taskrank.top(data, n=args.n)
+            import ledgerorder                      # R-1333: the one order; the plan and the daily call the same function
+            res = ledgerorder.view(project, data)
+            rows = ledgerorder.shown(res, args.n)
             if args.json:
-                print(json.dumps(rows, ensure_ascii=False))
+                print(json.dumps([dict(r, why=ledgerorder.reason_line(r)) for r in rows], ensure_ascii=False, default=str))
                 return
-            print("top %d of %d open items (taskrank.WEIGHTS)" % (len(rows), len(taskrank.ranked(data))))
-            for line in taskrank.lines(rows):
+            print("top %d of %d open items (the one order, ledgerorder.order; the pins are a block of their own)" % (len(rows) - len(res["pinned"]), len(ledgerorder.sequence(res))))
+            for line in ledgerorder.head_lines(res, args.n):
                 print(line)
+            return
+        if args.op == "plan":
+            _ledger_plan(project, data, args)
             return
         if args.op == "match":
             _ledger_match(project, data, args)
@@ -1626,41 +1773,61 @@ def cmd_ledger(args):
         if args.op == "list":
             items = [it for it in data["items"] if (not args.open or it["status"] in ("open", "doing"))
                      and (not args.status or it["status"] == args.status)]
-            # R-1137: filters and counts. A protected name reads "private" in every printed field (livework.shield).
-            # R-1131 (by-area view) is absorbed here; the later joins with research reports belong to R-1112 phase 6.
-            import livework
+            import livework                     # R-1137: a protected name reads "private" in every printed title (livework.shield)
             names = livework.private_names()
-            if args.area:
-                items = [it for it in items if sl.item_area(it) == sl.fold_ascii(args.area).casefold()]
-            if args.phase:
-                items = [it for it in items if it.get("phase", "") == args.phase]
-            if args.text:
-                items = [it for it in items if sl.item_matches_text(it, args.text)]
+            filtered = bool(args.area or args.phase or args.text or args.by_area)
+            items = sl.filter_items(items, args.area, args.phase, args.text)      # R-1183
             if args.by_area:
-                counts = {}
-                for it in items:
-                    counts[sl.item_area(it)] = counts.get(sl.item_area(it), 0) + 1
+                per = sl.counts_by_area(data, items, project)
                 if args.json:
-                    print(json.dumps(counts, ensure_ascii=False))
-                else:
-                    for area in sorted(counts, key=lambda a: (-counts[a], a)):
-                        print("%s %d" % (area, counts[area]))
+                    print(json.dumps({"by_area": per, "totals": sl.ledger_counts(dict(data, items=items), project)}, ensure_ascii=False))
+                    return
+                for a, c in per.items():
+                    print("%-12s doing %d, next %d, later %d, done %d" % (a, c["doing"], c["next"], c["later"], c["done"]))
+                if not per:
+                    print(_t("ledger.list_none"))
                 return
             if args.json:                       # R-288: the agreed fields, for hooks and the card queue
-                print(json.dumps([{"id": it["id"], "status": it["status"], "phase": it.get("phase", ""),
-                                   "area": sl.item_area(it), "title": livework.shield(it.get("title"), names),
-                                   "doing_by": it.get("doing_by"),
-                                   "doing_since": it.get("doing_since"), "blocked": it.get("blocked"),
-                                   "started_at": it.get("started_at"), "appetite": it.get("appetite")}
-                                  for it in items], ensure_ascii=False))
+                rows = [{"id": it["id"], "status": it["status"], "phase": it.get("phase", ""),
+                         "title": livework.shield(it.get("title"), names), "doing_by": it.get("doing_by"),
+                         "doing_since": it.get("doing_since"), "blocked": it.get("blocked"),
+                         "started_at": it.get("started_at"), "appetite": it.get("appetite")}
+                        for it in items]
+                # old callers parse a bare list: only a call with a new filter gets the object carrying `totals`
+                print(json.dumps({"items": rows, "totals": sl.ledger_counts(dict(data, items=items), project)} if filtered else rows,
+                                 ensure_ascii=False))
                 return
             if not data["items"]:
                 print(_t("ledger.empty"))
+            elif filtered and not items:
+                print(_t("ledger.list_none"))
             for it in items:
                 state = sl.claim_state(it)
                 print("%s [%s%s%s] %s" % (it["id"], sl.status_cell(data, it), "/" + state if state else "",
                                           ", blocked" if it.get("blocked") else "",
                                           livework.shield(it["text"][:120].replace("\n", " "), names)))
+            return
+        if args.op == "timeline":           # R-1213: the item's events, oldest first, and the time of each run
+            import livework
+            import runtrack
+            it = sl.find_item(data, args.id)
+            names = livework.private_names()
+            if args.json:
+                print(json.dumps([dict(e, by=livework.shield(e.get("by"), names), text=livework.shield(e.get("text"), names))
+                                  for e in runtrack.ordered(it)], ensure_ascii=False))
+                return
+            for line in runtrack.timeline_lines(it, names=names):
+                print(line)
+            return
+        if args.op == "findings":           # R-1213: open first; --json adds counts by severity, class and state
+            import findings
+            import livework
+            found = findings.listing(data, args.id, names=livework.private_names())
+            if args.json:
+                print(json.dumps({"findings": found, "counts": findings.counts(found)}, ensure_ascii=False))
+            else:
+                for line in findings.lines(found) or [_t("finding.none")]:
+                    print(line)
             return
         if args.op == "show":
             it = sl.find_item(data, args.id)
@@ -1669,6 +1836,8 @@ def cmd_ledger(args):
                 return
             print("%s [%s] %s" % (it["id"], sl.status_cell(data, it), it.get("title") or ""))
             print(it["text"])
+            for d in it.get("directives") or ():
+                print("directive (%s, %s): %s" % (d.get("src"), d.get("at"), d.get("text")))
             for key in ("phase", "src", "doing_by", "assigned_by", "doing_since", "started_at", "appetite", "area", "due", "flags",
                         "evidence"):
                 if it.get(key):
@@ -1719,13 +1888,21 @@ def cmd_ledger(args):
                 if args.text is None:
                     raise sl.StudioError("pass --text \"what you want built\" (or --src I-n for an input already in the inbox)")
                 sl.check_title(args.title)         # a bad --title adds nothing, not even an inbox entry
-                inbox_id = sl.append_inbox(project, sl.redact(args.text), SESSION, "manual")
+                inbox_id = sl.append_inbox(project, sl.shield_text(args.text), SESSION, "manual")
                 if not inbox_id:
                     raise sl.StudioError("item text is empty")
                 src = [inbox_id]
             text = args.text if args.text is not None else _inbox_text(project, src)
+            warning = sl.open_cap_warning(project, data)       # R-1195: warn only in part A
             it = sl.add_item(data, text, src, phase=phase, title=args.title, outcome=args.outcome, area=args.area)
-            if args.outcome is None:            # R-1136: no outcome yet: propose a draft from the linked words
+            if warning:
+                print(warning)
+            if args.over_cap:
+                valid = sl.over_cap_valid(project, args.over_cap, src, SESSION)
+                it["over_cap"] = {"src": args.over_cap, "valid": valid}
+                if not valid:
+                    print("budgit: --over-cap %s recorded as not valid (only the user's own prompt of this session, named in --src, counts)" % args.over_cap)
+            if args.outcome is None:           # R-1136: no outcome yet: propose a draft from the linked words
                 draft = sl.draft_outcome(_inbox_text(project, src) if src != ["legacy"] else text)
                 print(_t("ledger.outcome_draft", id=it["id"], draft=draft or "...") if draft
                       else _t("ledger.outcome_none", id=it["id"]))
@@ -1733,9 +1910,19 @@ def cmd_ledger(args):
                 appetite = sl.guess_appetite(text)
                 print(_t("ledger.guess", size=appetite))
             sl.set_appetite(data, it["id"], appetite, due=args.due)
+            import ledgerplan, taskrank
+            if args.item_class:                # R-1266: the class is set where the item is born, as the same flag
+                taskrank.flag(data, it["id"], args.item_class)
+            elif ledgerplan.item_class(it) == "unknown":
+                print(_t("ledger.class_unknown"))
+            for name in args.item_flags or ():         # R-1333: any other flag set where the item is born (visible)
+                taskrank.flag(data, it["id"], name, by=SESSION or None)
             result = "%s -> open" % it["id"]
         elif args.op == "link":
-            if args.change is not None or args.why is not None:      # R-286: the input changes an item, say what and why
+            if args.directive is not None:
+                it = sl.add_directive(project, data, args.id, args.src, args.directive)
+                result = "%s <- %s (directive; the open count is unchanged)" % (it["id"], ", ".join(args.src))
+            elif args.change is not None or args.why is not None:      # R-286: the input changes an item, say what and why
                 done = sl.link_change(project, data, args.id, args.src, args.change, args.why)
                 result = "%s <- %s (change logged)" % (done["item"], ", ".join(args.src))
                 if done["owner"]:
@@ -1757,6 +1944,19 @@ def cmd_ledger(args):
                                question=args.question, default=args.default, timeout=args.timeout,
                                allowed_by=args.allowed_by)
             result = "%s -> blocked: %s" % (it["id"], it["blocked"]["reason"])
+        elif args.op == "finding":
+            import findings
+            if args.action == "add":
+                if not args.sev or not args.fclass or args.text is None or args.rest:
+                    raise sl.StudioError("finding add R-n --sev HIGH|MED|LOW --class <word> --text \"<one line>\"")
+                fid = findings.add(data, args.id, args.sev, args.fclass, args.text, by=SESSION or None)
+                result = "%s %s -> open" % (args.id, fid)
+            else:
+                if len(args.rest) < 2 or len(args.rest) > 3 or (args.rest[1] != "open") != (len(args.rest) == 3):
+                    raise sl.StudioError("finding set R-n F<n> fixed <sha> | deferred R-m | open")
+                findings.set_state(data, args.id, args.rest[0], args.rest[1], args.rest[2] if len(args.rest) == 3 else None,
+                                   by=SESSION or None, project=project)
+                result = "%s %s -> %s" % (args.id, args.rest[0], args.rest[1])
         elif args.op == "unblock":
             it = sl.unblock_item(project, data, args.id, answer=args.answer)
             result = "%s -> unblocked" % it["id"]
@@ -1766,6 +1966,8 @@ def cmd_ledger(args):
         elif args.op == "area":
             it = sl.set_area(data, args.id, args.word)
             result = "%s -> area %s" % (it["id"], it["area"])
+        elif args.op in ("appetite", "flag") and (args.file or args.id is None or (args.size if args.op == "appetite" else args.name) is None):
+            result, batch_failed = _ledger_batch_value(project, data, args)
         elif args.op == "appetite":
             it = sl.set_appetite(data, args.id, args.size, due=args.due)
             result = "%s -> appetite %s%s" % (it["id"], args.size, ", due " + it["due"] if it.get("due") else "")
@@ -1781,6 +1983,12 @@ def cmd_ledger(args):
             it = sl.add_evidence(project, data, args.id, args.sha, test=args.test, report=args.report,
                                  decision=args.decision, rule=args.rule)
             result = _t("ledger.evidence_added", id=it["id"])
+        elif args.op == "retext":
+            if sl.ledger_tampered(project):
+                raise sl.StudioError("ledger.json was edited by hand: run `budgit ledger accept-edit` first")
+            new_inbox = []                    # F7: an input's file is written only after save_ledger succeeded
+            sl.retext(project, data, args.id, args.text, args.reason, inbox_out=new_inbox)
+            result = "%s -> text rewritten (retext event logged)" % args.id
         elif args.op == "outcome":
             it = sl.set_outcome(data, args.id, args.line)
             result = "%s -> outcome: %s" % (it["id"], it["outcome"])
@@ -1789,7 +1997,9 @@ def cmd_ledger(args):
             result = "%s -> open" % it["id"]
         elif args.op == "flag":
             import taskrank
-            it = taskrank.flag(data, args.id, args.name, on=not args.off)
+            if args.src and not re.fullmatch(r"I-\d+", args.src):
+                raise sl.StudioError("--src takes one inbox id like I-12")
+            it = taskrank.flag(data, args.id, args.name, on=not args.off, by=SESSION or None, src=[args.src] if args.src else None)
             result = "%s -> flags %s" % (it["id"], ", ".join(it.get("flags") or ()) or "(none)")
         elif args.op == "rank":
             import taskrank
@@ -1824,7 +2034,7 @@ def cmd_ledger(args):
             elif args.op == "done":
                 it = _close_one(project, data, args.ids[0], _done_text(args), args.outcome)
             elif args.op == "verify":
-                sl.check_done_proof(args.evidence)
+                sl.check_done_proof(args.evidence, project)      # R-1345: a project with no repo also takes a file hash or a PASS report
                 it = sl.set_status(project, data, args.id, "verified", evidence=args.evidence)
             else:  # drop
                 if bool(args.not_needed) == bool(args.by_user):
@@ -1835,7 +2045,18 @@ def cmd_ledger(args):
                     it = sl.set_status(project, data, args.id, "dropped", by_user=args.by_user)
             result = "%s -> %s" % (it["id"], it["status"])
         sl.save_ledger(project, data)
+        if args.op == "retext" and new_inbox:
+            sl.write_inbox_replace(project, new_inbox[0])
+            result += "\nold copies may remain in ledger.json.prev and in history"
+        if args.op == "add":                  # R-1195: the inbox kind only after the ledger holds the item
+            sl.set_inbox_kind(project, [s for s in src if re.match(r"^I-\d+$", s)], "task")
     print(result)
+    if args.op == "done":                      # R-1313: only after a done proof passed, and only the closed items' own lanes
+        # the signal is the close's own result line: "R-n -> done" (single) or "R-n: ok, done" (batch); R- ids only, never I-n
+        import landprune
+        numbers = landprune.closed_numbers(result)
+        if numbers:
+            _land_prune(project, True, items=numbers)
     if batch_failed:
         sys.exit(1)
 
@@ -1894,6 +2115,38 @@ def _ledger_batch(project, data, args):
         rows = sl.batch_apply(data, entries, lambda i, t: sl.fold_item(project, data, i, args.into, t))
         word = "folded into %s" % args.into
     lines = ["%s: %s" % (i, "ok, " + word if why is None else "refused, " + why) for i, why in rows]
+    bad = sum(1 for _, why in rows if why is not None)
+    lines.append("%d ok, %d refused" % (len(rows) - bad, bad))
+    return "\n".join(lines), bool(bad)
+
+
+def _ledger_batch_value(project, data, args):
+    """R-1195: `ledger appetite` / `ledger flag` with a --file of `id<TAB>value` lines (a third column is ignored). Each line
+    goes through the same call as the single form; a refused line never stops or undoes the others. -> (text, any refused)."""
+    is_size = args.op == "appetite"
+    value = args.size if is_size else args.name
+    if not args.file or args.id is not None or value is not None:
+        raise sl.StudioError("give either id and value, or --file alone (lines of id<TAB>value)")
+    allowed = tuple(sl.APPETITE_DAYS) if is_size else sl.FLAGS
+    entries, values = [], {}
+    for item_id, text, label in sl.parse_batch_file(sl.batch_file_path(project, args.file)):
+        entries.append((item_id, "", label))             # the value stays out of batch_apply: it is never echoed or replaced
+        values.setdefault(item_id, text.partition("\t")[0].strip())
+    if not entries:
+        raise sl.StudioError("the --file has no id<TAB>value lines")
+
+    def one(item_id, _text):
+        v = values[item_id]
+        if v not in allowed:
+            raise sl.StudioError("value must be one of %s" % ", ".join(allowed))
+        if is_size:
+            sl.set_appetite(data, item_id, v, due=args.due)
+        else:
+            import taskrank
+            taskrank.flag(data, item_id, v, on=not args.off)
+
+    rows = sl.batch_apply(data, entries, one)
+    lines = ["%s: %s" % (i, "ok" if why is None else "refused: " + why) for i, why in rows]
     bad = sum(1 for _, why in rows if why is not None)
     lines.append("%d ok, %d refused" % (len(rows) - bad, bad))
     return "\n".join(lines), bool(bad)
@@ -1990,14 +2243,28 @@ def cmd_budget(args):
     elif args.op == "auto":
         budget.clear_override()
     elif args.op == "record":
+        if args.mine and not sys.stdin.isatty():      # R-1378: same check as `away on`; a session without a terminal must ask the user
+            print(_t("r1378.mine_refused"), file=sys.stderr)
+            return 1
         pair = lambda used, resets: (used, resets) if used is not None and resets is not None else None
         budget.record(seven_day=pair(args.seven_day, args.seven_day_resets),
                       five_hour=pair(args.five_hour, args.five_hour_resets),
-                      extra=pair(args.extra_spent, args.extra_limit), authoritative=True,
-                      extra_enabled={"yes": True, "no": False}.get(args.extra_enabled))
+                      extra=pair(args.extra_spent, args.extra_limit), authoritative=True, source="typed",
+                      extra_enabled={"yes": True, "no": False}.get(args.extra_enabled), mine=bool(args.mine))
+    elif args.op == "account":      # R-1378: only the raw get_usage payload, from a file (or stdin with `-`); never a typed number
+        import json
+        try:
+            raw = sys.stdin.read() if args.json == "-" else open(args.json, encoding="utf-8").read()
+            payload = json.loads(raw)
+        except (OSError, ValueError) as exc:
+            raise sl.StudioError("account: refused, the payload cannot be read (%s)" % exc.__class__.__name__)
+        stored = budget.account(payload)
+        print(_t("r1378.account_ok", used=int(stored["used"])))
     cur = budget.current()
     import i18n
     reason = _t("r1160.budget_nodata") if cur["reason"] == i18n.CATALOG["en"]["r1160.budget_nodata"] else cur["reason"]
+    for note in budget.account_notes(i18n.detect()):      # R-1378: line 1 names what the level does not show
+        print(note)
     print(_t("r1160.budget_line", level=cur["level"], source=cur["source"], reason=reason))
     print(budget.policy_text(cur["level"], i18n.detect()))
 
@@ -2074,6 +2341,22 @@ def cmd_reports_sweep(args):
         "would move" if args.dry_run else "moved", len(moved), args.days,
         "(dry run, nothing changed)" if args.dry_run else "to %s" % os.path.relpath(
             os.path.join(sl.studio_dir(project), "archive", "agent-dumps"), project), len(skipped)))
+
+
+def cmd_names_check(args):
+    """R-1366: read-only. The strict names check a push must pass: exit 0 clean, 1 refused. Prints aliases, never a name."""
+    import leak
+    text, code = leak.names_check_cli(os.path.abspath(getattr(args, "project", None) or os.getcwd()), base=args.base)
+    print(text)
+    return code
+
+
+def cmd_ci_snapshot(args):
+    """R-1366: one clean commit of main's tree on the remote's branch, for the CI push; writes a local ref only, never pushes."""
+    import cisnapshot
+    text, code = cisnapshot.snapshot(os.path.abspath(getattr(args, "project", None) or os.getcwd()), branch=args.branch, remote=args.remote)
+    print(text)
+    return code
 
 
 def cmd_githooks(args):
@@ -2335,7 +2618,17 @@ def cmd_merge_close(args):
             mergeclose.demote(out, refused)
             sl.save_ledger(project, data)
     print(json.dumps(out, ensure_ascii=False, indent=2) if args.json else mergeclose.report(out, args.apply))
+    _land_prune(project, args.apply, args.json)
     return 1 if refused else 0
+
+
+def _land_prune(project, apply, to_stderr=False, items=None):
+    """R-1313: the landed lanes' clean worktrees go (a dry run lists them); one call for merge-close (all lanes) and `ledger done`
+    (`items`: only the closed items' own lanes)."""
+    import landprune
+    pruned = landprune.report(landprune.run(project, apply=apply, cwd=os.getcwd(), items=items), apply)
+    if pruned:
+        print(pruned, file=sys.stderr if to_stderr else sys.stdout)
 
 
 def cmd_denies(args):
@@ -2656,11 +2949,48 @@ def cmd_daily(args):
     return 0
 
 
+def _capacity_set(args):
+    """`capacity set N --by I-n` records your lane cap; `capacity set --clear` removes it."""
+    import capacity
+    import time
+    scoped = args.project is not None            # --project sets that project alone; without it the cap is for all projects
+    project = sl.resolve_project(args.project)
+    slug = capacity.slug_of(project) if scoped else None
+    if scoped and slug is None:
+        raise sl.StudioError(_t("capacity.set_unlisted"))
+    where = "project %s" % slug if scoped else "all projects"
+    if args.clear:
+        state = capacity.load_state()
+        old = ((state.get("project_caps") or {}).get(slug) if scoped else state.get("user_cap")) or {}
+        capacity.clear_cap(slug)
+        sl.audit(project, "lane cap of %s cleared (set in %s) for %s at %s" % (
+            old.get("n"), old.get("by"), where, time.strftime("%Y-%m-%d %H:%M:%S")))
+        print(_t("capacity.set_cleared"))
+        return 0
+    if args.n is None or not args.by:
+        raise sl.StudioError(_t("capacity.set_usage", max=capacity.CAP_MAX))
+    asked = {e["id"]: e for e in sl.load_inbox(project)}.get(args.by)
+    if asked is None:
+        raise sl.StudioError("%s is not in the inbox" % args.by)
+    if asked.get("source") == "manual":
+        raise sl.StudioError("%s was added with `ledger add --text`, not typed by the user; cite the input where "
+                             "the user chose the cap" % args.by)
+    rec = capacity.set_cap(args.n, args.by, slug=slug)
+    sl.audit(project, "lane cap set to %d (asked in %s) for %s at %s, per project until %s" % (
+        rec["n"], rec["by"], where, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(rec["at"])),
+        time.strftime("%Y-%m-%d", time.localtime(rec["until"]))))
+    print(_t("capacity.set_ok", n=rec["n"], by=rec["by"], date=time.strftime("%Y-%m-%d", time.localtime(rec["until"]))))
+    return 0
+
+
 def cmd_capacity(args):
     """R-286 task 3: the limit now and how it is shared. Read-only on every ledger; refreshes the cache the live feed reads."""
     import capacity
     import i18n
     import json as _json
+    import time
+    if getattr(args, "action", None) == "set":
+        return _capacity_set(args)
     pic = capacity.compute()
     if args.json:
         slim = {k: v for k, v in pic.items() if k != "skipped"}
@@ -2675,6 +3005,18 @@ def cmd_capacity(args):
     if pic["nodata"]:
         why += "; " + _t("capacity.nodata")
     print(_t("capacity.total", T=pic["T"], level=pic["level"], reason=why))
+    pf = pic.get("portfolio") or {"used": 0, "slots": 0}          # compute() always sets it; a stub picture may not
+    tail = _t("capacity.portfolio_total", used=pf["used"], slots=pf["slots"])
+    if pic.get("user_cap"):
+        uc = pic["user_cap"]
+        print(_t("capacity.user_cap", n=uc["n"], by=uc["by"], date=time.strftime("%Y-%m-%d", time.localtime(uc["until"]))) + " · " + tail)
+    else:
+        if pic.get("cap_expired"):
+            ex = pic["cap_expired"]
+            print(_t("capacity.cap_expired", n=ex.get("n"), by=ex.get("by"),
+                     date=time.strftime("%Y-%m-%d", time.localtime(ex.get("until") or 0))))
+            capacity.ack_expired()
+        print(tail)
     for name, row in pic["projects"].items():
         print(_t("capacity.project", name=name, used=row["used"], slots=row["slots"], free=row["free"],
                  layer=capacity.reason_text(row["free_reason"] if row["free_reason"] in ("stuck",) else row["layer"])))
@@ -2703,6 +3045,23 @@ def cmd_away(args):
     if getattr(args, "clear", False):
         away.clear_queue(project=mine)
         print("away: this project's queue cleared (the flag is untouched)")
+        return 0
+    if args.action == "expire":                      # R-1293: helper asks expire, never approved; the user's notes and the flag stay
+        if not getattr(args, "kind", None):
+            print("budgit away expire: needs --kind subagent-ask", file=sys.stderr)
+            return 2
+        everywhere = bool(getattr(args, "all_projects", False))
+        try:
+            n = away.expire_kind(args.kind, project=None if everywhere else mine)
+        except OSError:
+            print("away: the queue could not be rewritten; nothing was expired", file=sys.stderr)
+            return 1
+        scope = "all projects" if everywhere else "this project"
+        print("away: %d helper asks expired, none approved (%s)" % (n, scope))
+        try:
+            sl.audit(sl.resolve_project(args.project), "away-expire %s %d %s" % (args.kind, n, scope))
+        except sl.StudioError:
+            pass
         return 0
     if args.action == "on":
         if not sys.stdin.isatty():
@@ -2776,6 +3135,7 @@ def cmd_triggers(args):
 def cmd_portfolio(args):
     """R-283: every project in one read-only view; the list lives in the Budgit home, never in a repo."""
     import portfolio
+    import livework
     act = getattr(args, "action", None)
     if act is None:
         out = portfolio.view(by_name=args.by_name)
@@ -2823,6 +3183,33 @@ def cmd_portfolio(args):
         r = rec["routed"]
         print(_t("portfolio.routed", id=rec["id"], project=r["project"], input=r["input"],
                  item=" (%s)" % r["item"] if r["item"] else ""))
+        return 0
+    elif act == "note":                                  # R-1343: TM -> PM file channel; never an input (I-n)
+        path = portfolio.find(portfolio.registry(), args.target)["path"]
+        note_id = portfolio.add_note(path, args.text, item=args.item)
+        entry = portfolio.find(portfolio.registry(), args.target)
+        wait = ("the PM reads it on its next turn" if entry.get("pm")
+                else "no PM registered: the note waits until one is registered")      # F-6: never claim a read that cannot happen
+        print("%s noted%s: %s" % (note_id, " (%s)" % args.item if args.item else "", wait))
+        return 0
+    elif act == "notes":
+        path = portfolio.find(portfolio.registry(), args.target)["path"]
+        counts = portfolio.note_counts(path)
+        if livework.is_private(path):                    # a protected project: counts only, never the words or the name
+            if args.json:
+                print(json.dumps(counts))
+            else:
+                print("TM notes: %d total, %d unread (protected project: counts only)" % (counts["total"], counts["unread"]))
+            return 0
+        recs = [n for n in portfolio.load_notes(path) if args.all or not n.get("read")]
+        if args.json:
+            print(json.dumps(recs, ensure_ascii=False, indent=2))
+            return 0
+        if not recs:
+            print("no %sTM notes" % ("" if args.all else "unread "))
+        for n in recs:
+            print("%s  %s  %s  %s%s" % (n["id"], (n.get("ts") or "")[:16].replace("T", " "), n.get("item") or "-",
+                                        n["text"][:100].replace("\n", " "), "" if n.get("read") else "  (unread)"))
         return 0
     elif act == "priority":
         if args.value is None:
@@ -2914,19 +3301,26 @@ CLI_WRITES = {
     "secrets": ("project", (), ("@",)),                 # --install-hook writes <path>/.git/hooks
     "export": ("project", (), ("@",)),                  # writes OUT, and share-published.json in the hub's own data folder
     "away": ("home", (), ()),                           # on / off / --clear set the flag or erase a project's queue: never for a subagent
-    "away note": ("home-fixed", ("away.json", "away-queue.jsonl"), ()),    # appends to the queue; round 9: coordinator-only, a subagent is denied (see the "away" row)
+    "away note": ("home-fixed", ("away.json", "away-queue.jsonl", "away-queue.lock"), ()),    # appends to the queue; round 9: coordinator-only, a subagent is denied (see the "away" row)
     "away status": ("home-fixed", ("away.json", "away-queue.jsonl"), ()),  # bare `away`: shows the queue
     "ledger match": ("home-fixed", ("triggers.json", "triggers.lock"), ()),    # a parked-item hit is noted in the home
     "ledger show": ("project", (), ()),                 # holds the project lock only
     "ledger list": ("project", (), ()),
     "ledger top": ("project", (), ()),
+    "ledger plan": ("project", (), ()),
+    "ledger timeline": ("project", (), ()),
     "ledger add": ("project", (), ()),                  # R-355: bookkeeping in <project>/.budgit
     "ledger link": ("project", (), ()),
+    "progress": ("project", (), ()),               # R-1359: appends one dated line to <project>/<data folder>/progress.md
+    "friction": ("project", (), ()),               # R-1359: appends one dated line to <project>/<data folder>/friction.md
     "ledger set": ("project", (), ()),
     "ledger phase": ("project", (), ()),
     "ledger done": ("project", (), ()),
     "ledger due": ("project", (), ()),                  # R-1173: re-dates an item in <project>/.budgit
     "ledger evidence": ("project", (), ()),             # R-1173: adds proof to an item in <project>/.budgit
+    "ledger retext": ("home", (), ()),                  # R-1229: rewrites an input's text; coordinator only, a subagent is denied like any "home" verb
+    "ledger finding": ("project", (), ()),              # R-1213: add|set writes findings on an item in <project>/.budgit
+    "ledger findings": ("project", (), ()),             # R-1213: lists findings, reads only
     "ledger outcome": ("project", (), ()),              # R-1136: sets the outcome line of an item in <project>/.budgit, like done
     "ledger ack": ("project", (), ()),
     "ledger verify": ("project", (), ()),
@@ -2950,17 +3344,22 @@ CLI_WRITES = {
     "prepare": ("project", (), ()),                     # R-1014: bare prepare = cmd_prepare (budgit 1737) -> studiolib.run_prepare (8657): reads the home approvals, runs only approved digests, writes <project>/.budgit/verify/prepared.json; `--approve` is judged "home" in studiolib._cli_call
     "varies": ("none", (), ()),                        # R-1014: cmd_varies reads args.file and prints; no write
     "ext-review": ("home-fixed", ("codex-limit.json",), ("--out",)),   # R-1014: extreview.review writes --out (write_out) and a TemporaryDirectory; only a codex usage limit writes codexlimit.record in the home (R-1000)
-    "budget set": ("home", (), ()), "budget auto": ("home", (), ()), "budget record": ("home", (), ()),
+    "rules show": ("none", (), ()),                     # R-1360: cmd_rules show only reads the topic files and prints (a snapshot test in temp dirs proves nothing changes); list, on, off and edit stay under "rules": home
+    "budget set": ("home", (), ()), "budget auto": ("home", (), ()), "budget record": ("home", (), ()), "budget account": ("home", (), ()),
     "status": ("project", (), ()),
     "reports sweep": ("project", (), ()),               # R-1032: moves old agent dumps inside <project>/.budgit (reports/ -> archive/agent-dumps/<date>/, manifest.jsonl); never writes the home, never deletes
     "githooks install": ("project", (), ()),            # R-1042: writes <repo hooks dir>/commit-msg, pre-push (+ .local) of the named repo(s) or core.hooksPath; never the Budgit home (reads portfolio.json, seeds in memory only)
     "legal profile save": ("home", (), ()),             # R-1106: writes the legal home's legal-profile.md; coordinator sessions only, a subagent is denied
-    "githooks status": ("none", (), ()),               # R-1042: reads hooks folders and git config only
+    "names-check": ("none", (), ()),                    # R-1366: reads the config, the repo's tracked files and messages (git ls-tree, cat-file, log) and prints; writes nothing
+    "ci snapshot": ("project", (), ()),                 # R-1366: writes one local branch ref (update-ref) and objects in the repo's .git; never pushes
+    "githooks status": ("none", (), ()),           # R-1042: reads hooks folders and git config only
     "audit-mcp": ("none", (), ("@",)),                  # R-1068: auditmcp.scan opens config files to read (and, with --home, the user's ~/.claude files) and prints; no write at all
+    "skills coverage": ("none", (), ()),                # R-1211: skills.run returns right after listing folders under the given dirs (os.listdir, isfile) and printing; no write (any other `skills` action stays "home")
     "msgshape replay": ("project", (), ("--out",)),     # R-1112: reads this project's transcripts, prints numbers; --out writes one file inside <project>/.budgit/reports only (checked in msgshape_cli.check_out), never the home
     # R-1058: the guard refuses by what a command can write, never because a row is missing. Read-only commands say so here.
     "lint": ("project", (), ("@", "--repo")),           # cmd_lint reads; only `--fix` rewrites, in place, the files it scans: the named paths, the repo's tracked files or default folders (a path or --repo in the home is checked)
-    "humanize-lint": ("none", (), ("@",)),              # cmd_humanize_lint -> humanizelint.main: reads the named files and prints findings, writes nothing
+    "repo-read": ("none", (), ("--repo",)),             # repo_read.py runs the program under a sandbox that denies every write, exec and the network; only verbs and flags of its allowlist
+    "humanize-lint": ("none", (), ("@",)),             # cmd_humanize_lint -> humanizelint.main: reads the named files and prints findings, writes nothing
     "brain lint": ("project", (), ("--repo",)),         # cmd_brain: reads notes, prints; the only write is the append to <repo>/.budgit/brain-queries.jsonl (brain.log_query, index/current/impact/backlinks)
     "brain current": ("project", (), ("--repo",)), "brain impact": ("project", (), ("--repo",)),
     "brain backlinks": ("project", (), ("--repo",)), "brain index": ("project", (), ("--repo",)),
@@ -2975,10 +3374,11 @@ CLI_WRITES = {
     "main-gate": "home", "relocate": "home", "lang": "home", "trace": "home", "brote": "home", "checkpoint": "home",
     "float": "home", "update": "home", "release-check": "home", "chat-link": "home", "migrate-install": "home",
     "reorganize": "home", "colour": "home", "attribution": "home", "rm-guard": "home", "five-hour": "home", "trust": "home", "renew": "home", "upgrade": "home", "sweep": "home",
-    "daily": "home", "capacity": "home", "triggers": "home", "triggers shown": "home",
+    "daily": "home", "capacity": "home", "capacity set": "home", "triggers": "home", "triggers shown": "home",
     "triggers answered": "home", "portfolio": "home", "portfolio add": "home", "portfolio pm": "home",
     "portfolio off": "home", "portfolio on": "home", "portfolio protect": "home", "portfolio tm": "home",
-    "portfolio inbox": "home", "portfolio route": "home", "portfolio priority": "home", "relay handoff": "home",
+    "timelines": "home",
+    "portfolio inbox": "home", "portfolio note": "home", "portfolio notes": "home", "portfolio route": "home", "portfolio priority": "home", "relay handoff": "home",
     "relay echo": "home", "relay done": "home", "relay fail": "home", "relay reset": "home", "relay status": "home",
     "codex review": ("home-fixed", ("codex-limit.json",), ()),     # R-1000: the report goes to <project>/.budgit/reports; only a usage-limit hit writes this cache in the home
     "codex clean-copy-offer": "home", "codex draft": "home", "design-check tokens": "home",
@@ -2988,7 +3388,7 @@ CLI_WRITES = {
 }
 
 
-def build_parser():
+def build_parser(tm_file=False):
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--project", default=argparse.SUPPRESS,
                         help="project dir (default: session binding, then cwd)")
@@ -3040,7 +3440,10 @@ def build_parser():
     bops = b.add_subparsers(dest="op")
     o = bops.add_parser("set", parents=[common], help="your word overrides the automatic level"); o.add_argument("level")
     bops.add_parser("auto", parents=[common], help="release the override; follow the limits again")
-    o = bops.add_parser("record", parents=[common], help="store a snapshot of the plan limits (from /usage or get_usage)")
+    o = bops.add_parser("account", parents=[common], help="store the app's account figure from a raw get_usage payload saved to a file (the sweep's verb; never a typed number)")
+    o.add_argument("--json", required=True, help="the file holding the raw get_usage payload (`-` reads stdin)")
+    o = bops.add_parser("record", parents=[common], help="store the figure you read in the app (a snapshot of the plan limits)")
+    o.add_argument("--mine", action="store_true", help="reserved for the user, from a real terminal: lets the typed figure go below the app's account figure (the way out when the account figure is wrong, e.g. two logins); the lowering lasts only until the next account reading (`budget account`), then the app figure rules again")
     o.add_argument("--extra-spent", type=float, help="USD actually spent on extra usage this month (0 when none; never the limit)")
     o.add_argument("--extra-limit", type=float, help="monthly extra-usage limit in USD")
     o.add_argument("--extra-enabled", choices=("yes", "no"), help="whether extra usage is switched on for the account (omit when unknown)")
@@ -3108,6 +3511,15 @@ def build_parser():
     o = gops.add_parser("status", parents=[common], help="per repo: installed, chained, missing or foreign")
     o.add_argument("--all", action="store_true", help="every project Budgit knows (protected ones included, shown by id)")
     o.set_defaults(func=cmd_githooks)
+    c = sub.add_parser("names-check", parents=[common], help="refuse (exit 1) when a push would carry a protected project name: tracked files and commit messages (R-1366)")
+    c.add_argument("--base", help="also read the messages of the commits after this ref; history before it is not read")
+    c.set_defaults(func=cmd_names_check)
+    c = sub.add_parser("ci", parents=[common], help="CI helpers (R-1366)")
+    cops = c.add_subparsers(dest="op", required=True)
+    o = cops.add_parser("snapshot", parents=[common], help="one clean commit of main's tree on the remote's branch for the first CI push; never pushes")
+    o.add_argument("--branch", default="ci-snapshot", help="local and remote branch name (default ci-snapshot)")
+    o.add_argument("--remote", default="origin", help="remote name (default origin)")
+    o.set_defaults(func=cmd_ci_snapshot)
     c = sub.add_parser("legal", parents=[common], help="the legal-eu-es-fr skill's private profile (R-1106)")
     lops = c.add_subparsers(dest="op", required=True)
     lp = lops.add_parser("profile", parents=[common], help="the legal profile file")
@@ -3261,15 +3673,21 @@ def build_parser():
     s.add_argument("--at", help="with --answer standup=yes (or cleanup): the time of day, HH:MM")
     s.add_argument("--every", help="with --answer keepalive=yes: the period, e.g. 2h, 90m (at least 10m)")
     s.set_defaults(func=cmd_setup)
+    s = sub.add_parser("repo-read", parents=[common], help="read-only repo verbs for helpers: [--repo DIR] status|log|diff|show|merge-base [flags] [-- paths], or grep -e PATTERN [flags] [REV] [-- paths], ls [REV] [-- paths], lines PATH START END (at most 400 lines), lines --count PATH; run under a sandbox")
+    s.add_argument("rest", nargs=argparse.REMAINDER)
+    s.set_defaults(func=lambda a: sys.exit(__import__("repo_read").main(a.rest)))
     s = sub.add_parser("busy", parents=[common], help="is the machine busy? CPU over 85 %% of cores (kernel counters), memory pressure, sustained swap-ins, a full compressor or too little free memory: exit 10, else 0")
     s.add_argument("--window", type=int, default=60, help="seconds of CPU sampling (default 60)")
     s.set_defaults(func=cmd_busy)
     s = sub.add_parser("ext-review", parents=[common],
-                       help="one timed, tagged wrapper for an external-model review (codex, else gemini); exit 3 none, 4 timeout, 5 unavailable")
-    s.add_argument("--tool", choices=("auto", "codex", "gemini"), default="auto")
-    s.add_argument("--diff", required=True, help="file whose text goes to the tool as stdin")
-    s.add_argument("--prompt", required=True)
-    s.add_argument("--out", required=True, help="written only when the tool finished with a verdict")
+                       help="one timed, tagged wrapper for an external-model review (auto: gemini, then codex, then openrouter); exit 3 none, 4 timeout, 5 unavailable")
+    s.add_argument("--tool", choices=("auto", "gemini", "codex", "openrouter"), default="auto",
+                   help="openrouter: free models only (ids ending in :free, read live from its listing), key only from the macOS Keychain item budgit-openrouter; last in auto")
+    s.add_argument("--diff", help="file whose text goes to the tool as stdin")
+    s.add_argument("--prompt")
+    s.add_argument("--out", help="written only when the tool finished with a verdict")
+    s.add_argument("--check", action="store_true", help="report each reviewer: installed, logged in, quota reached, or a prompt waiting / hung (non-interactive probes only; starts no login; the gemini probe spends one tiny request)")
+    s.add_argument("--purpose", default="review", help="a short word for the outside-model use log (default review)")
     s.add_argument("--timeout", type=float, default=None, help="seconds (default 600, hard cap 1800)")
     s.add_argument("--debug", action="store_true", help="gemini only: pass --debug and show 15 redacted lines when there is no verdict; codex gets nothing")
     s.add_argument("--model", default=None, help="model name, passed as -m NAME to gemini and codex (letters, digits, . _ -); default: the tool's own")
@@ -3332,15 +3750,25 @@ def build_parser():
     s = sub.add_parser("admit", parents=[common], help="may the machine take one more lane or suite? go / wait / refuse (exit 0 / 1 / 2)")
     s.add_argument("kind", nargs="?", default="lane", help="lane (default) or suite")
     s.add_argument("--json", action="store_true")
+    s.add_argument("--continuing", metavar="ID", default=None, help="a step of an item already in flight (a gate, a rerun): CPU alone never holds it back; memory still does")
     s.set_defaults(func=cmd_admit)
     s = sub.add_parser("tm", parents=[common], help="the TM's running log: `budgit tm log TEXT` appends one dated line")
     s.add_argument("op", choices=("log",))
-    s.add_argument("text", nargs="+", help="the line to append (or - to read it from stdin)")
+    # `*` lets `--text-file` stand alone, but argparse then matches the empty text before `--`; so it is `*` only when the flag is given
+    s.add_argument("text", nargs="*" if tm_file else "+", help="the line to append (or - to read it from stdin)")
+    s.add_argument("--text-file", metavar="PATH", help="R-1359: read the line from this UTF-8 file instead (not with TEXT)")
     s.set_defaults(func=cmd_tm)
+    for verb, fn, what in (("progress", cmd_progress, "the project's progress file (<data folder>/progress.md)"),
+                           ("friction", cmd_friction, "the project's friction file (<data folder>/friction.md)")):
+        s = sub.add_parser(verb, parents=[common], help="R-1359: `budgit %s add --text-file PATH` appends one dated line to %s" % (verb, what))
+        s.add_argument("op", choices=("add",))
+        s.add_argument("--text", help="the line, on the command line; newlines in it (or in the file) are folded into single spaces: one line per call")
+        s.add_argument("--text-file", metavar="PATH", help="the line, read from this UTF-8 file (not with --text)")
+        s.set_defaults(func=fn)
     s = sub.add_parser("rules", parents=[common], help="the team rules: list, show, off, on, edit a topic")
     s.add_argument("action", choices=("list", "show", "off", "on", "edit"))
     s.add_argument("topic", nargs="?")
-    s.add_argument("--grep", help="with show: only the lines holding this word (case and accent folded); no topic = every topic")
+    s.add_argument("--grep", metavar="WORD", help="show: only the rule lines holding the word (all topics when no topic)")   # R-1183
     s.set_defaults(func=cmd_rules)
     s = sub.add_parser("housekeeping", parents=[common], help="the daily tidy-up: flow count, then merged clean idle worktrees and branches (dry run unless --apply)")
     s.add_argument("--apply", action="store_true", help="remove them (git worktree remove and git branch -d only); without it, only say what would go")
@@ -3351,6 +3779,12 @@ def build_parser():
     s.add_argument("--last", action="store_true", help="show the report of the last --apply run")
     s.add_argument("--schedule", choices=("on", "off", "status"), help="set up, remove or check the daily run (macOS launch agent)")
     s.add_argument("--at", default="09:30", help="with --schedule on: the time of day, HH:MM (default 09:30)")
+    s.add_argument("what", nargs="?", choices=("procs",), help="procs: only the stale local test servers (serve --demo, http.server, your config patterns): a dry run that lists them; --stop sends SIGTERM (never SIGKILL); --apply of the daily job does it too")
+    s.add_argument("--stop", action="store_true", help="with procs: SIGTERM the listed test servers")
+    s.add_argument("--proc-hours", type=float, default=None, metavar="H", help="test servers older than H hours (default 4, or housekeeping.proc_min_age_h of the config)")
+    s.add_argument("--protect-port", action="append", metavar="N", help="with procs: save port N (1-65535) so the sweep never touches it (repeatable; never stops anything)")
+    s.add_argument("--unprotect-port", action="append", metavar="N", help="with procs: remove port N from the saved protected ports (repeatable)")
+    s.add_argument("--protect-listening", action="store_true", help="with procs: save every port a process the sweep would not stop listens on now")
     s.set_defaults(func=cmd_housekeeping)
     s = sub.add_parser("procs", parents=[common], help="close orphaned processes left by Budgit sessions (dry run unless --apply; the user's standing yes)")
     s.add_argument("--apply", action="store_true", help="close them; without it, only list what would close")
@@ -3366,7 +3800,7 @@ def build_parser():
     s.add_argument("op", choices=("on", "off", "status"))
     s.set_defaults(func=cmd_main_gate)
     s = sub.add_parser("relocate", parents=[common], help="move projects to <root>/<name> (default ~/Dev): plan, apply, finish, undo, status, trash (leftovers to the Trash)")
-    s.add_argument("op", choices=("plan", "apply", "finish", "undo", "status", "trash"))
+    s.add_argument("op", choices=("plan", "apply", "finish", "undo", "status", "trash", "evicted"))
     s.add_argument("--root", help="where projects go (default ~/Dev)")
     s.add_argument("--private", action="append", help="treat this folder of the projects root as private for this run: never opened, listed, named or moved (repeatable)")
     s.add_argument("--include", action="append", help="also move this folder of the projects root (repeatable)")
@@ -3473,11 +3907,20 @@ def build_parser():
     s.add_argument("--json", action="store_true", help="as JSON")
     s.set_defaults(func=cmd_daily)
     s = sub.add_parser("capacity", parents=[common], help="how many items may run at once, and how the limit is shared between projects")
+    s.add_argument("action", nargs="?", choices=["set"], help="set N --by I-n: record your lane cap (1 to 8) until the next weekly "
+                   "reset the budget knows, else 7 days from now. With --project P it sets that project alone; without "
+                   "--project it applies to every project, so use that only when your words say all projects. "
+                   "set --clear removes it (--project P: that project's own cap)")
+    s.add_argument("n", nargs="?", type=int, help="set: the lane cap, 1 to 8")
+    s.add_argument("--by", help="set: the input (I-n) where you chose the cap")
+    s.add_argument("--clear", action="store_true", help="set: remove your cap")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_capacity)
     s = sub.add_parser("away", parents=[common], help="the user is away: the flag and the queue of questions kept for their return (on|off|status|note)")
-    s.add_argument("action", nargs="?", default="status", choices=["on", "off", "status", "note"])
+    s.add_argument("action", nargs="?", default="status", choices=["on", "off", "status", "note", "expire"])
     s.add_argument("text", nargs="*", help="note: the question to keep for the user's return")
+    s.add_argument("--kind", choices=["subagent-ask"], help="expire: the kind of queued entry to drop (helper asks; never approved)")
+    s.add_argument("--all-projects", action="store_true", help="expire: every project's entries, not only this project's")
     s.add_argument("--clear", action="store_true", help="clear this project's queue without printing it (the flag is untouched)")
     s.set_defaults(func=cmd_away)
     s = sub.add_parser("triggers", parents=[common], help="the decisions waiting for the user now (max 3 a day, urgent first)")
@@ -3516,10 +3959,21 @@ def build_parser():
     q.add_argument("tm_id")
     q.add_argument("target")
     q.add_argument("--item", help="the item (R-n) it belongs to")
+    q = ps.add_parser("note", help="leave a TM note for a project's PM (file channel, read on its next turn; never the user's words, never an I-n)")
+    q.add_argument("target")
+    q.add_argument("--item", help="the item (R-n) it is about")
+    q.add_argument("text")
+    q = ps.add_parser("notes", help="the TM notes of a project (unread by default); a protected project shows counts only")
+    q.add_argument("target")
+    q.add_argument("--all", action="store_true", help="also the ones already read")
+    q.add_argument("--json", action="store_true")
     q = ps.add_parser("priority", help="the project's weight for the work split: high, normal (default) or low")
     q.add_argument("target")
     q.add_argument("value", nargs="?", choices=("high", "normal", "low"))
     s.set_defaults(func=cmd_portfolio)
+    s = sub.add_parser("timelines", parents=[common], help="the hand-back timelines: standup (top waste causes, last 24 h) or silent (active projects with no line in 24 h)")
+    s.add_argument("op", choices=("standup", "silent"))
+    s.set_defaults(func=cmd_timelines)
     s = sub.add_parser("status", parents=[common])
     s.add_argument("--colour", choices=("on", "off", "auto"), help="with --line: colour on or off; auto follows `budgit colour` (coloured by default)")
     s.add_argument("--ansi", action="store_true", help="with --line: colour each segment (24-bit ANSI); plain without it")
@@ -3531,6 +3985,8 @@ def build_parser():
     s.add_argument("--over", type=_hours, metavar="HOURS", help="with --waiting: only what has waited at least this many hours")
     s.add_argument("--live", action="store_true", help="with --brote: also what is happening now in every project (working, paused, projects, week, watch)")
     s.add_argument("--limits-json", help="with --line/--brote: the mod's live $.session.usage().rateLimits, recorded first")
+    s.add_argument("--session-id", help="optional, with --limits-json: the session's id; only a salted hash is kept, in the per-session usage log")
+    s.add_argument("--model", help="optional, with --limits-json: the session's model name, for the per-session usage log")
     s.add_argument("--loaded", default="", help="with --line/--brote: the plugin version this chat loaded (the mod reads it at start); a different disk version adds the /reload-plugins hint")
     s.add_argument("--probe", action="store_true", help="what the line under the prompt does on this surface and folder (the text of /budgit-bar-probe)")
     s.add_argument("--surface", default="", help="with --probe: the surface the mod runs on")
@@ -3550,9 +4006,15 @@ def build_parser():
     o.add_argument("--appetite", choices=["small", "medium", "large"], help="the item's size; required unless --src legacy (R-940: dates come from size)")
     o.add_argument("--area", help="the area the item belongs to, one lowercase word of 1-24 characters (a-z 0-9 -); required unless --src legacy (R-1157); an item with no natural area takes --area triage")
     o.add_argument("--due", metavar="YYYY-MM-DD", help="a due date set by hand; without it small is due today, medium in 3 days (R-925)")
+    o.add_argument("--class", dest="item_class", choices=("bug", "feature"), help="R-1266: what the item is, bug (class A) or feature (class B: new function, expansion, idea, docs); stored as the same flag as `ledger flag`; without it the plan reads the words")
+    o.add_argument("--flag", action="append", dest="item_flags", choices=sl.FLAGS, help="R-1333: set a flag where the item is born, as `ledger flag R-n NAME` does (for example --flag visible: a fix for something the user sees on screen); repeatable")
+    o.add_argument("--over-cap", metavar="I-n", help="R-1195: record the user's own prompt (I-n) as the reason to add above open_cap; valid only for a prompt entry")
+    o.add_argument("--text-file", metavar="PATH", help="R-1359: the item's text from this UTF-8 file, instead of --text")
     o = ops.add_parser("link", parents=[common]); o.add_argument("id"); o.add_argument("--src", action="append", required=True)
     o.add_argument("--change", help="what the input changes in the item (logged on it; a done item is reopened)")
     o.add_argument("--why", help="why it changes (required with --change)")
+    o.add_argument("--directive", help="R-1195: the input is a note about this item: stored as a directive (a property; the count does not change)")
+    o.add_argument("--text-file", metavar="PATH", help="R-1359: the directive's text from this UTF-8 file, instead of --directive")
     o = ops.add_parser("match", parents=[common], help="which existing items does this input belong to? (read-only; match first, add second)")
     o.add_argument("text", nargs="?", help="the text to match"); o.add_argument("--input", metavar="I-n", help="match an inbox input instead")
     o.add_argument("--json", action="store_true")
@@ -3570,10 +4032,12 @@ def build_parser():
     o = ops.add_parser("phase", parents=[common], help="tag items: mvp (the MVP) | later (parked until it ships) | ''")
     o.add_argument("phase"); o.add_argument("ids", nargs="+")
     o.add_argument("--reason", help="with `later`: why the item is parked; a parked item with a reason is not drift (R-362)")
+    o = ops.add_parser("retext", parents=[common], help="rewrite the stored text of one input (I-n) or item (R-n); logs a retext event with the reason, never the old text")
+    o.add_argument("id"); o.add_argument("--text", help="R-n only: the new text; an input (I-n) takes none, the tool swaps each protected name for \"a protected project\""); o.add_argument("--reason", required=True)
     o = ops.add_parser("outcome", parents=[common], help="set the item's outcome: one line of what the user will see when it works")
     o.add_argument("id"); o.add_argument("line")
     o = ops.add_parser("done", parents=[common], help="close items with proof (every sha must be on main or the latest release); several ids or a --file of id<TAB>proof[<TAB>outcome] lines close many, each judged alone")
-    o.add_argument("ids", nargs="*", metavar="id"); o.add_argument("--evidence", help="the proof; with several ids, the one a line without its own proof takes")
+    o.add_argument("ids", nargs="*", metavar="id"); o.add_argument("--evidence", help="the proof; with several ids, the one a line without its own proof takes. A project with no repo: \"file: PATH sha256: 64HEX\" or \"report: PATH\" (a verify report starting with PASS), plus a test name or check: WHAT (R-1345)")
     o.add_argument("--file", help="lines of id<TAB>proof[<TAB>outcome] (blank lines and # lines skipped); a line without an outcome closes only if its item has one")
     o.add_argument("--outcome", help="one line of what the user will see: records it and closes in one step (an old item with none needs this; one id only)")
     o.add_argument("--decision", metavar="I-n", help="close an item that is a recorded decision or a relayed escalation: the proof is this input, which must exist in the inbox (R-1173)")
@@ -3585,7 +4049,8 @@ def build_parser():
     o.add_argument("id"); o.add_argument("--sha", help="a commit of the project's repo"); o.add_argument("--test"); o.add_argument("--report")
     o.add_argument("--decision", metavar="I-n", help="proof is this recorded input, which must exist in the inbox")
     o.add_argument("--rule", metavar="file:line", help="proof is this rule line; the file must be inside the project and the line in range")
-    o = ops.add_parser("verify", parents=[common]); o.add_argument("id"); o.add_argument("--evidence")
+    o = ops.add_parser("verify", parents=[common]); o.add_argument("id")
+    o.add_argument("--evidence", help="the proof: a commit sha and a test name. A project with no repo: \"file: PATH sha256: 64HEX\" or \"report: PATH [sha256: 64HEX]\" (a verify report starting with PASS), plus a test name or check: WHAT (R-1345)")
     o = ops.add_parser("drop", parents=[common]); o.add_argument("id"); o.add_argument("--by-user")
     o.add_argument("--not-needed", action="store_true"); o.add_argument("--evidence")      # R-1180
     o = ops.add_parser("list", parents=[common]); o.add_argument("--open", action="store_true")
@@ -3595,6 +4060,14 @@ def build_parser():
     o.add_argument("--text", help="R-1137: only items whose title or change notes hold this word (case and accent folded)")
     o.add_argument("--by-area", action="store_true", help="R-1137: counts per area instead of the items")
     o = ops.add_parser("show", parents=[common]); o.add_argument("id"); o.add_argument("--json", action="store_true")
+    o = ops.add_parser("timeline", parents=[common], help="R-1213: the item's events, oldest first, with the time of each run")
+    o.add_argument("id"); o.add_argument("--json", action="store_true")
+    o = ops.add_parser("finding", parents=[common], help="R-1213: add a finding (add R-n --sev --class --text) or move one (set R-n F<n> fixed <sha> | deferred R-m | open)")
+    o.add_argument("action", choices=("add", "set")); o.add_argument("id"); o.add_argument("rest", nargs="*")
+    o.add_argument("--sev", choices=("HIGH", "MED", "LOW")); o.add_argument("--class", dest="fclass"); o.add_argument("--text")
+    o.add_argument("--text-file", metavar="PATH", help="R-1359: add: the finding's text from this UTF-8 file, instead of --text")
+    o = ops.add_parser("findings", parents=[common], help="R-1213: the findings of an item, or of the current phase; open first")
+    o.add_argument("id", nargs="?"); o.add_argument("--json", action="store_true")
     o = ops.add_parser("block", parents=[common], help="the item waits for something; it keeps its status")
     o.add_argument("id"); o.add_argument("--reason"); o.add_argument("--by", help="the input (I-n) it waits on")
     o.add_argument("--replace", action="store_true", help="change the reason of an item already blocked")
@@ -3607,7 +4080,8 @@ def build_parser():
     o.add_argument("--answer", help="the user's answer, kept with the question")
     ops.add_parser("apply-defaults", parents=[common], help="questions to the user whose allowed default is due get it")
     o = ops.add_parser("appetite", parents=[common], help="how big the item is: small (a session), medium (a day), large (a week)")
-    o.add_argument("id"); o.add_argument("size", choices=tuple(sl.APPETITE_DAYS))
+    o.add_argument("id", nargs="?"); o.add_argument("size", nargs="?", choices=tuple(sl.APPETITE_DAYS))
+    o.add_argument("--file", help="R-1195: lines of id<TAB>small|medium|large (blank lines and # lines skipped)")
     o.add_argument("--due", metavar="YYYY-MM-DD", help="a due date set by hand; the size never moves it (R-925)")
     o = ops.add_parser("area", parents=[common], help="the area of the item: one lowercase word (R-1157); fills it on an old item")
     o.add_argument("id"); o.add_argument("word", metavar="WORD")
@@ -3616,14 +4090,20 @@ def build_parser():
     o.add_argument("--reason", help="why; with a --file, the reason a line without its own takes")
     o.add_argument("--file", help="lines of id<TAB>reason (blank lines and # lines skipped)")
     o = ops.add_parser("unfold", parents=[common], help="undo a fold: the item is open again"); o.add_argument("id")
-    o = ops.add_parser("flag", parents=[common], help="what ranks the item: bug (a bug the user sees); waiting on the user is `ledger block`")
-    o.add_argument("id"); o.add_argument("name", choices=sl.FLAGS); o.add_argument("--off", action="store_true")
+    o = ops.add_parser("flag", parents=[common], help="what ranks the item and its class: bug (class A) or feature (class B), which exclude each other; visible (R-1333: the explicit mark of a fix for something the user sees on screen; the order reads no word for it); --off clears the named flag; waiting on the user is `ledger block`")
+    o.add_argument("id", nargs="?"); o.add_argument("name", nargs="?", choices=sl.FLAGS); o.add_argument("--off", action="store_true")
+    o.add_argument("--src", metavar="I-n", help="R-1333: the inbox id (I-n) that is the reason for the flag visible; logged in the item's changes with the setting session")
+    o.add_argument("--file", help="R-1195: lines of id<TAB>bug|feature (blank lines and # lines skipped)")
     o = ops.add_parser("rank", parents=[common], help="pin an item to a position of the top list, with the reason")
     o.add_argument("id"); o.add_argument("pos", nargs="?", type=int)
     g = o.add_mutually_exclusive_group(required=True)
     g.add_argument("--reason"); g.add_argument("--clear", action="store_true", help="rank it by its score again")
     o = ops.add_parser("top", parents=[common], help="the next tasks: score (taskrank.WEIGHTS) and the PM's pins")
     o.add_argument("-n", type=int, default=10); o.add_argument("--json", action="store_true")
+    o = ops.add_parser("plan", parents=[common], help="the order of the open items: taskrank score / measured p50, class A first, area batches (read-only)")
+    o.add_argument("--lanes", type=int); o.add_argument("--json", action="store_true")
+    o.add_argument("--step0-only", action="store_true", help="only the list for a verifier: rows that look built")
+    o.add_argument("--no-step0", action="store_true", help="skip the grep check of each row on main")
     ops.add_parser("accept-edit", parents=[common])
     o = ops.add_parser("repair-done-at", parents=[common], help="move the done_at of old closures earlier, only to a time git proves (dry run unless --apply)")
     o.add_argument("--apply", action="store_true", help="write the repair (a backup is kept and its rollback command printed)")
@@ -3637,7 +4117,10 @@ def main(argv=None):
     if argv and argv[0] == "admit" and "--slots" in argv:    # R-848: `budgit admit --slots N [--kind K] -- <cmd>` runs cmd under the cap
         import admission
         return admission.main(argv[1:])
-    args = build_parser().parse_args(argv or ["status"])
+    if argv and argv[0] == "repo-read":                       # `budgit repo-read [--repo DIR] VERB [flags] [-- paths]`; the validator parses it
+        import repo_read
+        return repo_read.main(argv[1:])
+    args = build_parser(tm_file=bool(argv) and argv[0] == "tm" and "--text-file" in argv).parse_args(argv or ["status"])
     if not hasattr(args, "project"):
         args.project = None
     try:

@@ -510,6 +510,87 @@ def single_source_warning(tool_input):
             "(I-n words, approved designs, code tables) too.")
 
 
+_TASK_LINE = re.compile(r"^[ \t>*\-]*task:[ \t]*(.+)$", re.I | re.M)
+_SKILLS_LINE = re.compile(r"^[ \t>*\-]*skills:[ \t]*(.*)$", re.I | re.M)
+_MD_PATH = re.compile(r"(?<![\w:.\-/])(/[\w.~@+ -]+(?:/[\w.~@+ -]+)*\.md)\b")
+
+
+def _skills_tree():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference", "skills-tree.json")
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+_TASK_SYNONYMS = {"verification": "verify", "tests": "write-tests", "bugfix": "fix-bug"}   # R-1360: a word for a type, not a new type
+
+
+def task_synonym(name, line=""):
+    """R-1360: the canonical task type for a synonym (`review` is security-review when the word security is in the `task:` line, else
+    plan-review); any other word comes back unchanged, so an unknown word still gets the warning with the type list."""
+    key = str(name or "").strip().lower()
+    if key == "review":
+        return "security-review" if "security" in str(line or "").lower() else "plan-review"
+    return _TASK_SYNONYMS.get(key, name)
+
+
+def skillrouter_pick(spec):
+    """R-1358: the 1 to 3 names a type asks for in a brief (its `pick`), never every name the type holds."""
+    import skillrouter
+    return skillrouter.pick_of(spec)
+
+
+def _split_names(text):
+    return [x.strip().strip("`'\"") for x in re.split(r"[,;]", text) if x.strip().strip("`'\"")]
+
+
+def skills_warning(tool_input):
+    """R-1211: one advisory line for a studio:* launch. With `task:` in the brief (prompt or a named absolute .md file)
+    and a `skills:` line that misses a skill the tree gives that type: the expected `skills:` line. Without `task:`:
+    the task types. Names come from the tree only, never from file content. Else None."""
+    import fnmatch
+    if not isinstance(tool_input, dict) or not str(tool_input.get("subagent_type") or "").startswith("studio:"):
+        return None
+    prompt = str(tool_input.get("prompt") or "")
+    text = prompt
+    for m in _MD_PATH.finditer(prompt):
+        p = m.group(1)
+        try:
+            if os.path.isfile(p) and os.path.getsize(p) <= 262144:
+                with open(p, encoding="utf-8", errors="replace") as f:
+                    text += "\n" + f.read()
+        except OSError:
+            continue
+    try:
+        tree = _skills_tree()
+    except (OSError, ValueError):
+        return None
+    types = tree.get("types") or {}
+    task = _TASK_LINE.search(text)
+    if not task:
+        line = "R-1211: no `task:` line in the brief; add `task: <type>` with one of: " + ", ".join(types) + "."
+        import skillrouter                      # R-1358: a type from the brief's own words (signals in the tree), never from file names
+        guess = skillrouter.suggest_type(text, tree)
+        if guess:
+            line += " The brief's words look like `%s`: `task: %s`, `skills: %s`." % (guess, guess, ", ".join(skillrouter.pick_of(types[guess])))
+        return line
+    wanted = []
+    for t in _split_names(task.group(1)):
+        if t not in types:
+            t = task_synonym(t, task.group(1))          # R-1360: before the type check, so a synonym gets no warning
+        for name in skillrouter_pick(types.get(t)):
+            if name not in wanted and not name.endswith("*"):
+                wanted.append(name)
+    if not wanted:
+        return "R-1211: `task:` names no known type; use one of: " + ", ".join(types) + "."
+    have = []
+    for m in _SKILLS_LINE.finditer(text):
+        have += _split_names(m.group(1))
+    missing = [w for w in wanted if not any(fnmatch.fnmatchcase(h, w) or h == w for h in have)]
+    if not missing:
+        return None
+    return "R-1211: the brief's `skills:` line misses " + ", ".join(missing) + "; expected `skills: " + ", ".join(wanted) + "`."
+
+
 def _inside(path, root):
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 

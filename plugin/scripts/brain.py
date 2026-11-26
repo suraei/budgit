@@ -298,8 +298,42 @@ def _cycles(b, graph=None):
     return on
 
 
+PLAN_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+
+
+def _plan_name_issues(repo):
+    """R-1368: a file under <data>/plans is `YYYY-MM-DD-...`, or sits in plans/briefs/. Drafts live in <data>/archive."""
+    out = []
+    for data in sl.DATA_NAMES:
+        top = os.path.join(repo, data, "plans")
+        if not os.path.isdir(top):
+            continue
+        # only files the index lists get an ERROR; not a repo (None) = every file untracked
+        listed = sl._git_listing([], repo, "ls-files", "-z", "--cached", "--", os.path.join(data, "plans")) or []
+        tracked = {os.path.realpath(p) for p in listed}
+        loose = 0
+        for dirpath, dirs, files in os.walk(top):
+            dirs[:] = sorted(d for d in dirs if not d.startswith(".") and not (dirpath == top and d == "briefs"))
+            for f in sorted(files):
+                if f.startswith("."):
+                    continue
+                if dirpath == top and PLAN_NAME.match(f):
+                    continue
+                full = os.path.join(dirpath, f)
+                if os.path.realpath(full) not in tracked:
+                    loose += 1
+                    continue
+                rel = os.path.relpath(full, repo).replace(os.sep, "/")
+                out.append(Issue("ERROR", rel, 1, "plan-name",
+                                 "plan file must be named YYYY-MM-DD-R-n-topic (briefs go in plans/briefs/, drafts in archive/)"))
+        if loose:
+            out.append(Issue("WARN", data + "/plans", 1, "plan-name",
+                             "%d untracked plan file(s) not named YYYY-MM-DD-R-n-topic" % loose))
+    return out
+
+
 def lint(b, only=None):
-    issues = []
+    issues = _plan_name_issues(b.repo)
     inbound = set()
     for nt in b.notes.values():
         issues.extend(nt.issues)

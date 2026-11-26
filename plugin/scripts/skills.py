@@ -703,7 +703,7 @@ def build(path=None, claude=None, write=True):
 
 # --- command line --------------------------------------------------------------------------------------------------
 def add_arguments(p):
-    p.add_argument("action", nargs="?", default="list", help="list, show ID, why, check, build, load-plan")
+    p.add_argument("action", nargs="?", default="list", help="list, show ID, why, check, build, load-plan, coverage")
     p.add_argument("rest", nargs="*")
     p.add_argument("--job", help="why/list: the job, e.g. design/build")
     p.add_argument("--traits", default="", help="why/list: key=value pairs, comma separated (surface, stakes, language, where, author)")
@@ -722,7 +722,50 @@ def main(argv, project=None, lang=None):
     return run(p.parse_args(argv), project, lang)
 
 
+def load_skills_tree():
+    """R-1211: the task-type tree (reference/skills-tree.json beside this file's scripts)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference", "skills-tree.json")
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def default_skill_dirs():
+    """R-1211: the folder holding the plugin's skills (parent of the kickoff skill) and ~/.claude/skills."""
+    dirs = []
+    base = kickoff_dir()
+    if base:
+        dirs.append(os.path.dirname(os.path.realpath(base)))
+    dirs.append(os.path.expanduser("~/.claude/skills"))
+    return dirs
+
+
+def skills_coverage(skill_dirs, tree=None):
+    """R-1211: installed skill names (folders holding SKILL.md under skill_dirs) that match no tree entry
+    and no "unused" entry. Entries are fnmatch patterns (a trailing * is a prefix). Sorted; empty means full coverage."""
+    import fnmatch
+    tree = tree if tree is not None else load_skills_tree()
+    patterns = set()
+    import skillrouter                       # R-1358: version 2 types are objects (pick + also); version 1 were plain lists
+    for spec in (tree.get("types") or {}).values():
+        patterns.update(skillrouter.type_names(spec))
+    patterns.update((tree.get("unused") or {}).keys())
+    installed = set()
+    for d in skill_dirs:
+        try:
+            entries = os.listdir(d)
+        except OSError:
+            continue
+        for name in entries:
+            if os.path.isfile(os.path.join(d, name, "SKILL.md")):
+                installed.add(name)
+    return sorted(n for n in installed if not any(fnmatch.fnmatchcase(n, p) for p in patterns))
+
+
 def run(a, project=None, lang=None):
+    if a.action == "coverage":
+        for name in skills_coverage(a.rest or default_skill_dirs()):
+            print(name)
+        return 0
     registry = load_registry(a.registry)
     out = print
     if a.action == "list":

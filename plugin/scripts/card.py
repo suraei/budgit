@@ -42,7 +42,12 @@ def build(project, data, previous=None, at=None):
             doing.append({"id": it["id"],
                           "age_days": _age_days(it.get("updated") or it.get("created"), at)})
     counts["later"] = sum(1 for it in data.get("items", []) if it.get("status") == "open" and it.get("phase") == "later")
-    card = {"version": VERSION, "written_at": sl.now(), "counts": counts, "doing": doing,
+    built = sl.built_unmerged(project, data.get("items", []))   # R-1273: resolved here, by a process with repo access
+    built_open = {"next": 0, "later": 0}
+    for it in data.get("items", []):
+        if it.get("id") in built and it.get("status") == "open":
+            built_open["later" if it.get("phase") == "later" else "next"] += 1
+    card = {"version": VERSION, "written_at": sl.now(), "counts": counts, "doing": doing, "built_open": built_open,
             "stuck": len(sl.stale_doing(data, at))}      # one total, the ledger's own rule: both views show the same number
     for key in KEEP:
         card[key] = previous.get(key)
@@ -121,11 +126,15 @@ def state(project, at=None):
     return ("old" if ledger_mtime - written > STALE_S else "ok"), age
 
 
-def counts_view(project):
-    """What a protected row may show: the card's counts as the portfolio's task numbers, or None."""
+def counts_view(project, raw=False):
+    """What a protected row may show: the card's counts as the portfolio's task numbers, or None. `raw` (capacity) skips the
+    built-not-merged move."""
     card = read(project)
     if card is None:
         return None
     c = card.get("counts") or {}
-    return {"doing": c.get("doing", 0), "next": c.get("open", 0) - c.get("later", 0), "later": c.get("later", 0),
-            "done": c.get("done", 0) + c.get("verified", 0)}
+    bo = card.get("built_open")                # R-1273: an old card has none: the raw count shows
+    bo = bo if isinstance(bo, dict) and not raw else {}
+    moved_next, moved_later = int(bo.get("next", 0) or 0), int(bo.get("later", 0) or 0)
+    return {"doing": c.get("doing", 0) + moved_next + moved_later, "next": c.get("open", 0) - c.get("later", 0) - moved_next,
+            "later": c.get("later", 0) - moved_later, "done": c.get("done", 0) + c.get("verified", 0)}

@@ -168,7 +168,8 @@ BUSY_PRESSURE_LEVEL = 2                # macOS kern.memorystatus_vm_pressure_lev
 BUSY_PSI_SOME_AVG10 = 10.0             # Linux PSI: some task stalled on memory 10 % of the last 10 s is lag a user feels
 BUSY_WIN_MEMLOAD_PCT = 90              # Windows dwMemoryLoad: under 10 % of RAM available (standby counted) means paging
 BUSY_SWAPIN_MB_S = 1.0                 # swap-ins averaged over the whole window: the working set no longer fits in RAM
-BUSY_COMPRESSOR_RAM_FRACTION = 0.30    # macOS compressor holding 30 % of RAM: the kernel is already squeezing live memory
+BUSY_COMPRESSOR_RAM_FRACTION_WITH_LEVEL = 0.50   # R-1186: while the kernel gives a pressure level below the caller's limit, a busy compressor alone is not busy until 50 %
+BUSY_COMPRESSOR_RAM_FRACTION = 0.30   # macOS compressor holding 30 % of RAM: the kernel is already squeezing live memory
 BUSY_FREE_RAM_FRACTION = 0.03          # the truly-free floor scales with RAM (3 %), never under BUSY_FREE_MB
 FREE_TRUE_ONLY_WITHOUT_PRESSURE = True # free pages stay low by design beside a file cache (a calm Mac, 9 Nov 16:49: 432 MB
                                        # free, pressure normal, 21-34 % CPU), so where the kernel reports pressure it decides
@@ -323,10 +324,34 @@ MEM_KEYS = {"darwin": ("pressure", "free_true_mb", "compressor_mb", "swapins_byt
             "linux": ("psi", "free_true_mb", "swapins_bytes", "total_mb"), "win": ("winload", "total_mb")}
 
 
+def _test_memory(now):
+    """A test-only memory picture. Read only when BUDGIT_TEST_MEM (or STUDIO_TEST_MEM) holds a JSON object: a test that runs the
+    real CLI in a child process then judges that picture instead of the live machine. The picture goes through the same rules
+    (it never switches the memory check off). Unset, not JSON or not an object: None (the real reading)."""
+    raw = os.environ.get("BUDGIT_TEST_MEM") or os.environ.get("STUDIO_TEST_MEM")
+    if not raw:
+        return None
+    try:
+        got = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(got, dict):
+        return None
+    got = dict(got)
+    got.setdefault("t", now())
+    got.setdefault("page", 4096)
+    got.setdefault("unknown", [])
+    return got
+
+
 def mem_reading(platform=sys.platform, run=_run, readfile=None, now=time.monotonic, page=None):
     """One instant memory picture read from the kernel. Keys may be None (unknown, that signal is skipped): pressure (macOS
     level), psi (Linux some avg10), winload (Windows %), free_true_mb (free pages only, never inactive), total_mb,
     compressor_mb, swapins_bytes (cumulative), page; "unknown" lists the signals this OS should give and did not. Never raises."""
+    if run is _run and readfile is None and platform == sys.platform:
+        fixed = _test_memory(now)
+        if fixed is not None:
+            return fixed
     m = dict.fromkeys(("pressure", "psi", "winload", "free_true_mb", "total_mb", "compressor_mb", "swapins_bytes"))
     m["t"], m["page"] = now(), 4096
     kind = "darwin" if platform == "darwin" else "linux" if platform.startswith("linux") else "win" if platform.startswith("win") else None
@@ -414,8 +439,9 @@ def memory_reason(mem, pressure_level=None, kernel_gate=False):
     if rate is not None and rate >= BUSY_SWAPIN_MB_S:
         return "swap-in %.0f pages/s (%.1f MB/s, limit %.1f MB/s)" % (mem.get("swapin_pages_s") or 0, rate, BUSY_SWAPIN_MB_S)
     comp, total = mem.get("compressor_mb"), mem.get("total_mb")
-    if comp is not None and total and comp >= total * BUSY_COMPRESSOR_RAM_FRACTION:
-        return "compressor %.1f GB of %.0f GB RAM (limit %.0f %%)" % (comp / 1024.0, total / 1024.0, BUSY_COMPRESSOR_RAM_FRACTION * 100)
+    comp_limit = BUSY_COMPRESSOR_RAM_FRACTION_WITH_LEVEL if level is not None else BUSY_COMPRESSOR_RAM_FRACTION   # R-1186
+    if comp is not None and total and comp >= total * comp_limit:
+        return "compressor %.1f GB of %.0f GB RAM (limit %.0f %%)" % (comp / 1024.0, total / 1024.0, comp_limit * 100)
     known = any(mem.get(k) is not None for k in ("pressure", "psi", "winload"))
     free = mem.get("free_true_mb")
     if free is not None and not (known and FREE_TRUE_ONLY_WITHOUT_PRESSURE) and free < free_true_limit(total):

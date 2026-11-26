@@ -35,7 +35,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "AskUserQuestion|Bash|SubagentHandback|Edit|Write|MultiEdit",
+        "matcher": "AskUserQuestion|Bash|SubagentHandback|Edit|Write|MultiEdit|Skill",
         "hooks": [
           {
             "type": "command",

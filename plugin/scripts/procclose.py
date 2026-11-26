@@ -225,7 +225,7 @@ def ancestors(table, pid):
 
 
 def same(a, b):
-    return a and b and a["pid"] == b["pid"] and abs(a["start"] - b["start"]) <= START_TOLERANCE_S
+    return a and b and a["pid"] == b["pid"] and abs(b["start"] - a["start"]) <= START_TOLERANCE_S
 
 
 def owned_by(table, session_id, exclude):

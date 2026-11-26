@@ -210,9 +210,8 @@ def stop_reason(state, session, problems):
         return None
     hints = []
     if any(" untracked" in p for p in new):
-        hints.append("Triage each untracked input in one line, then finish your reply: do it now (a small fix in files already open), "
-                     "fold it into an existing item (`budgit ledger link R-n --src I-n`), file it (`budgit ledger add --src I-n --appetite small|medium|large --area WORD`, with a "
-                     "version and a score) or drop it (`budgit ledger ack I-n --note \"covered by R-n\"`).")
+        import i18n
+        hints.append(i18n.ask("r1284.triage"))
     if any(" untracked" not in p for p in new):
         hints.append("Fix the others with the `budgit ledger` CLI.")
     return ("budgit ledger check: %d item(s) need an answer before this reply ends:\n- %s\n%s This asks once per item; an item left as "

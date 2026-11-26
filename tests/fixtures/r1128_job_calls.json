@@ -1,0 +1,14 @@
+{
+  "note": "R-1128: every tool call a shipped scheduled job's prompt tells the model to make. Commands are data, never run. <JOB> is the job's own work folder (jobs.job_dir), outside the Budgit home. The headless run has no session tools: no send_message, no AskUserQuestion. keepalive step 3 (do one item through the normal flow) names no fixed call.",
+  "last_step": {"cleanup": 1, "keepalive": 5, "standup": 5},
+  "calls": [
+    {"job": "cleanup", "step": 1, "tool": "Bash", "input": {"command": "budgit housekeeping --apply --quiet"}},
+    {"job": "keepalive", "step": 1, "tool": "Bash", "input": {"command": "budgit portfolio"}},
+    {"job": "keepalive", "step": 1, "tool": "Bash", "input": {"command": "budgit ledger list"}},
+    {"job": "keepalive", "step": 3, "tool": "Bash", "input": {"command": "budgit budget"}},
+    {"job": "standup", "step": 1, "tool": "Bash", "input": {"command": "budgit portfolio"}},
+    {"job": "standup", "step": 1, "tool": "Bash", "input": {"command": "budgit ledger fold R-2 R-1"}},
+    {"job": "standup", "step": 3, "tool": "Bash", "input": {"command": "mkdir -p <JOB>/standup"}},
+    {"job": "standup", "step": 3, "tool": "Write", "input": {"file_path": "<JOB>/standup/2026-11-15.md", "content": "digest\n"}}
+  ]
+}

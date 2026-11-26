@@ -26,6 +26,7 @@ validate/reaction`). Simulated users skew positive — fight that bias.
 7. End the report with 1 to 5 lines `Hypothesis: <claim a real user could confirm or refute> | confirm
    with: <the real data that would settle it>`. Each is a claim to test, never a finding.
 8. On a refusal by a guard, a hook or a permission prompt: stop and report it. Never reshape the command, split it, or switch tools (for example Bash refused, then Write or Edit) to reach the same effect.
+9. Search: if the Grep or Glob tool is missing, use Bash `grep -rn <pattern> <absolute path>` or `find <absolute path> -name '<glob>'`, one plain command per call. A pattern never contains the version-control program's name; to find a helper whose name holds it, search a distinctive fragment of the name (for example `_config_clean`) or Read the file by line range.
 
 Browser (when you pilot a running app as the user):
 - Read each page as text first, with `read_page` or `get_page_text`, the way the persona would read it.

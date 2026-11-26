@@ -351,20 +351,32 @@ def claude_folders(src, worktrees):
 
 SF_DATALESS = 0x40000000          # macOS: the file's content lives in iCloud and is not on this disk (optimized storage)
 ICLOUD_WALK_CAP = 1000000
+WALK_SECONDS = 5                  # a walk on a slow or iCloud volume stops after this long (monotonic clock) and says incomplete
+GIT_DIR_NAME = ".git"
+_clock = time.monotonic
 
 
 def dataless_count(path, cap=ICLOUD_WALK_CAP):
     """How many files under `path` are evicted to iCloud (dataless), from the stat flags alone: no content is read, so
-    nothing is downloaded, and no name is kept. -> (count, complete). Not complete when the walk hit the cap or something
-    could not be read (an evicted file may be in it). Symlinks are not followed. Where the platform has no such flag the count is 0."""
+    nothing is downloaded, and no name is kept. -> (count, complete). Not complete when the walk hit the cap or the time
+    limit (WALK_SECONDS) or something could not be read (an evicted file may be in it). Symlinks are not followed. A
+    starting folder that is itself evicted counts 1 and is not walked. Where the platform has no such flag the count is 0."""
+    try:
+        if getattr(os.lstat(path), "st_flags", 0) & SF_DATALESS:
+            return 1, True
+    except OSError:
+        return 0, False
+    deadline = _clock() + WALK_SECONDS
     found, seen, complete = 0, 0, True
     stack = [path]
     while stack:
+        if _clock() > deadline:
+            return found, False
         try:
             with os.scandir(stack.pop()) as entries:
                 for e in entries:
                     seen += 1
-                    if seen > cap:
+                    if seen > cap or _clock() > deadline:
                         return found, False
                     try:
                         st = e.stat(follow_symlinks=False)
@@ -378,6 +390,100 @@ def dataless_count(path, cap=ICLOUD_WALK_CAP):
         except OSError:
             complete = False
     return found, complete
+
+
+def _in_limits(real, config, private, base):
+    """True when `real` (a real path) is a protected or private folder or lies inside one: the same checks the listing uses."""
+    import sortdirs
+    cur = real
+    while True:
+        if sortdirs.is_private(cur, config, private, base):
+            return True
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return False
+        cur = parent
+
+
+def _metadata_folder(real):
+    """A folder that looks like git metadata: named .git, or holding a HEAD file."""
+    return os.path.basename(real) == GIT_DIR_NAME or os.path.isfile(os.path.join(real, "HEAD"))
+
+
+def common_git_dir(repo, config=None, private=(), base=None):
+    """R-644: the git dir that holds the objects of `repo`: its own .git folder, or for a worktree (its .git is a small file
+    `gitdir: <path>/worktrees/<name>`) the common dir above that. Only that one small file is read. The answer is a real
+    path (symlinks resolved), and None ("not checked") when it is unknown, when it lies in a protected or private folder
+    other than the repo's own folder (a planted pointer or link must not lead a walk there), or when it is neither named
+    .git nor holds a HEAD file (a pointer to / or to a project root)."""
+    dot = os.path.join(repo, GIT_DIR_NAME)
+    try:
+        if os.path.isdir(dot):
+            gitdir = dot
+        else:
+            with open(dot, "rb") as f:
+                line = f.read(4096).decode("utf-8", "replace").strip()
+            if not line.startswith("gitdir:"):
+                return None
+            gitdir = line[len("gitdir:"):].strip()
+            if not gitdir:
+                return None
+            if not os.path.isabs(gitdir):
+                gitdir = os.path.normpath(os.path.join(repo, gitdir))
+            head, name = os.path.split(gitdir.rstrip(os.sep))
+            if name and os.path.basename(head) == "worktrees":
+                gitdir = os.path.dirname(head)               # <common>/worktrees/<name> -> <common>
+        real = os.path.realpath(gitdir)
+        if not os.path.isdir(real) or not _metadata_folder(real):
+            return None
+        own = os.path.realpath(repo)
+        if not (real == own or real.startswith(own.rstrip(os.sep) + os.sep)):
+            config = config if config is not None else sl.load_config()
+            if _in_limits(real, config, private, base):
+                return None
+    except OSError:
+        return None
+    return real
+
+
+def git_dataless(repo, cap=ICLOUD_WALK_CAP, private=(), base=None):
+    """R-644: (evicted file count under the repo's common git dir, walk complete). Stat flags only: no content is read and
+    nothing is downloaded. An unknown or not-checked git dir gives (0, False): unknown, never a crash."""
+    gitdir = common_git_dir(repo, private=private, base=base)
+    if not gitdir or not os.path.isdir(gitdir):
+        return 0, False
+    return dataless_count(gitdir, cap)
+
+
+def evicted_listing(root=None, include=(), private=(), counter=None):
+    """R-644: [(path, evicted count, complete)] for every project `plan` would look at, hub included. A folder named private
+    is left out altogether; a protected project shows only its hash label and is not opened: (label, None, None)."""
+    import sortdirs
+    config = sl.load_config()
+    pr = config.get("projects_root")
+    base = _real(pr) if pr else None
+    counter = counter or (lambda src: git_dataless(src, private=private, base=base))
+    rows = []
+    for item in discover(root, include):
+        src = item["src"]
+        if item["protected"]:
+            rows.append((label_of(src), None, None))
+        elif sortdirs.is_private(src, config, private, base):
+            continue
+        else:
+            count, complete = counter(src)
+            rows.append((src, count, complete))
+    return rows
+
+
+def render_evicted(rows):
+    lines = []
+    for path, count, complete in rows:
+        if count is None:
+            lines.append("%s  not checked (protected)" % path)
+        else:
+            lines.append("%s  evicted %d  %s" % (path, count, "complete" if complete else "capped or unreadable"))
+    return lines or ["no project folders found"]
 
 
 def analyse(item, root, procs):

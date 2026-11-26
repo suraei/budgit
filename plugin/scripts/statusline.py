@@ -20,19 +20,27 @@ def main():
         pair = lambda k: ((rl[k]["used_percentage"], rl[k].get("resets_at"))
                           if isinstance(rl.get(k), dict) and rl[k].get("used_percentage") is not None else None)
         seven, five = pair("seven_day"), pair("five_hour")
+        try:      # R-1378: the per-session usage log; both keys are optional and a failure is never fatal
+            model = d.get("model")
+            feed = [(k, rl[k].get("used_percentage"), rl[k].get("resets_at")) for k in ("five_hour", "seven_day") if isinstance(rl.get(k), dict)]
+            budget.note_session_feed(d.get("session_id"), model.get("id") if isinstance(model, dict) else None, feed, "statusline")
+        except Exception:
+            pass
         old = budget.load().get("limits", {})
         changed = any(v is not None and (old.get(k) or {}).get("used") != float(v[0])
                       for k, v in (("seven_day", seven), ("five_hour", five)))
         if changed:
-            budget.record(seven_day=seven, five_hour=five)
+            budget.record(seven_day=seven, five_hour=five, source="statusline")
         parts = []
         ctx = (d.get("context_window") or {}).get("used_percentage")
         if ctx is not None:
             parts.append("ctx %d%%" % ctx)
         if five:
             parts.append("5h %d%%" % five[0])
-        if seven:
-            parts.append("wk %d%%" % seven[0])
+        if seven:      # R-1309: the weekly figure shown is the one Budgit keeps (the merge), never the stdin value as it came
+            kept = (budget.load().get("limits") or {}).get("seven_day")
+            if isinstance(kept, dict) and kept.get("used") is not None:
+                parts.append("wk %d%%" % kept["used"])
         if seven or five:
             parts.append(budget.label(budget.current()["level"]))
         sys.stdout.write(" · ".join(parts))

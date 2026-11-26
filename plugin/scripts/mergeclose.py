@@ -233,6 +233,13 @@ def apply(project, data, rows, ref="main"):
     refused = []
     for row in rows:
         note = ""
+        try:
+            import findings
+            findings.done_gate(sl.find_item(data, row["id"]))     # R-1213: an open HIGH finding refuses before anything is copied or written
+        except sl.StudioError as exc:
+            print("budgit: %s" % exc, file=sys.stderr)
+            refused.append(dict(row, reason=str(exc)))
+            continue
         if row.get("source"):
             try:
                 note = " (copied from the sealed report in the worktree %s)" % _copy_in(project, row)

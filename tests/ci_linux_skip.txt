@@ -1,0 +1,4 @@
+# Modules the Linux CI shards skip, one per line: `module  # reason`. Linux only; the count is printed on every run.
+# A module that skips its own macOS tests with skipUnless is NOT listed: it reports them as skipped.
+test_r1110_guard_fp  # builds real folders under /private/tmp/claude-<uid>, a macOS path a Linux runner cannot create
+test_r842_batch  # one test makes /private/tmp/claude-<uid> for real (macOS path); narrow it with a guard to bring the module back

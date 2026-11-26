@@ -5,12 +5,12 @@ One bullet per rule, one line each.
 
 ## Hard safety
 - Never push, publish or post without the user's yes; add no AI attribution trailer to any commit or PR.
-- Protected project names and content never leave the user's Mac: no public or shared repo, no outside model or service.
+- Protected project names and content never leave the user's Mac: no public or shared repo, no outside model or service (the one exception is the clean-copy rule under Common).
 - Never reset --hard, clean, stash or force-push; on a red result stop and report.
 
 ## Common
 - Reply in the user's language; files and commits are in English unless the project says otherwise.
-- Protected projects (the configured list): the barrier is outward only. On the user's own machine, coordinators may name them and relay their messages; protected code reaches an outside model only as a scanned clean copy.
+- Protected projects (the configured list): the barrier is outward only. On the user's own machine, coordinators may name them and relay their messages; outside models, free tiers included, may review protected code only as a scanned clean copy with no private data.
 - Record each decision the user states, with their words, in the project ledger the same turn.
 - Gate by risk tier T0/T1/T2; every gate is measured; review loops are capped: a 3rd failed round on the same check means split the work, name a residual risk, or ask the user, never a 4th patch.
 - Triage every note when written: do it now if tiny, fold it into an existing item, file it with a version and score, or fold it into the covering item (never the `drop` command); never first-in-first-out.

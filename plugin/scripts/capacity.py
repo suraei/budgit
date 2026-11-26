@@ -53,7 +53,7 @@ def total(prev, level, pace, in_use, projected, last_raise, today):
 
 
 # ---------------------------------------------------------------- Layer B
-def split(T, projects):
+def split(T, projects, per_project=None):
     """-> {slug: {slots, floor, cap, weight, reason}}. Floor 1 for a committed project that is not paused; water-filling
     by weight up to cap = min(ready, PROJECT_CAP); round down, leftovers by largest remainder (ties: higher weight).
     When the floors do not fit in T they go by weight, then by the longest wait."""
@@ -69,7 +69,11 @@ def split(T, projects):
             elig.append(p)
     if not elig:
         return out
-    if len(elig) >= T:                    # R-877: the floors do not fit in T (or T is 0): every live project still keeps its one lane
+    if per_project:                       # your cap: every live, unpaused project gets N lanes, the portfolio total is not shared out.
+        for p in elig:                    # Kept: paused and idle (nothing committed) stay at 0. Dropped: the ready-count cap, which
+            out[p["slug"]].update(slots=per_project, cap=per_project, reason="user_cap")   # would shrink slots as items start.
+        return out
+    if len(elig) >= T:                   # R-877: the floors do not fit in T (or T is 0): every live project still keeps its one lane
         for p in elig:
             out[p["slug"]].update(slots=1, reason="floor")
         return out
@@ -136,7 +140,7 @@ def load_state():
         return {}
     if not isinstance(data.get("T"), int) or isinstance(data.get("T"), bool):
         data.pop("T", None)                       # a wrong-typed file reads as empty, never a traceback
-    for name in ("expedite", "projects"):
+    for name in ("expedite", "projects", "user_cap", "user_cap_expired", "project_caps"):
         if not isinstance(data.get(name), dict):
             data.pop(name, None)
     return data
@@ -167,8 +171,69 @@ def budget_inputs(now=None):
     outlook = budget.week_outlook(limits, now=now)
     five = limits.get("five_hour")
     h5 = five["used"] if isinstance(five, dict) and five.get("used") is not None and (five.get("resets_at") or 0) > now else None
+    resets_at = week["resets_at"] if isinstance(week, dict) and (week.get("resets_at") or 0) > now else None
     return {"level": cur["level"], "pace": pace, "projected": outlook["projected"] if outlook else None, "h5": h5,
-            "nodata": cur["reason"].startswith("no budget data")}
+            "nodata": cur["reason"].startswith("no budget data"), "resets_at": resets_at}
+
+
+# ---------------------------------------------------------------- your lane cap
+CAP_MAX = 8
+
+
+def set_cap(n, by, now=None, inputs=None, slug=None):
+    """Record your lane cap once: {n, by, at, until, until_src}. It ends at the next weekly reset the budget knows
+    (until_src "budget"), else now + 7 days ("7d"). `slug` sets that project alone (it wins over the all-projects cap);
+    without it the cap applies to every project. Returns the record."""
+    import budget
+    if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= CAP_MAX:
+        raise sl.StudioError("the lane cap is a whole number from 1 to %d" % CAP_MAX)
+    now = now or time.time()
+    try:
+        resets = (inputs or budget_inputs(now)).get("resets_at")
+    except Exception:
+        resets = None
+    live = resets is not None and resets > now
+    rec = {"n": n, "by": by, "at": int(now), "until": int(resets if live else now + budget.WEEK),
+           "until_src": "budget" if live else "7d"}
+    with sl.home_lock("capacity"):
+        state = load_state()
+        if slug:
+            state["project_caps"] = dict(state.get("project_caps") or {}, **{slug: rec})
+        else:
+            state["user_cap"] = rec
+            state.pop("user_cap_expired", None)
+        save_state(state)
+    return rec
+
+
+def clear_cap(slug=None):
+    """Remove your cap: that project's own cap with `slug`, else the all-projects cap (and any unreported expiry)."""
+    with sl.home_lock("capacity"):
+        state = load_state()
+        if slug:
+            caps = dict(state.get("project_caps") or {})
+            caps.pop(slug, None)
+            state["project_caps"] = caps
+        else:
+            state.pop("user_cap", None)
+            state.pop("user_cap_expired", None)
+        save_state(state)
+
+
+def slug_of(project):
+    """The portfolio slug of a project folder, or None when it is not a managed project of the list."""
+    import livework
+    me = livework.canon(project)
+    rows, _ = portfolio_snapshot()
+    return next((r["slug"] for r in rows if livework.canon(r["path"]) == me), None)
+
+
+def ack_expired():
+    """The report has said once that your cap expired: forget it."""
+    with sl.home_lock("capacity"):
+        state = load_state()
+        if state.pop("user_cap_expired", None) is not None:
+            save_state(state)
 
 
 def _aged(item, now):
@@ -255,7 +320,7 @@ def portfolio_snapshot(now=None, current=None):
                 skipped.append((slug, "unmanaged"))
                 continue
             if path in private:                               # counts from the card, the ledger stays closed
-                tasks, stale = portfolio._tasks(path, True)
+                tasks, stale = portfolio._tasks(path, True, raw=True)
                 tasks = tasks or {"doing": 0, "next": 0, "later": 0}
                 rows.append({"slug": slug, "path": path, "priority": e.get("priority"), "paused": e.get("channel") == "off",
                              "committed": tasks["doing"] + tasks["next"], "ready": tasks["next"], "in_flight": tasks["doing"],
@@ -276,9 +341,20 @@ def compute(now=None, current=None, inputs=None, write=True):
     rows, skipped = portfolio_snapshot(now, current)
     state = load_state()
     in_use = sum(r["in_flight"] for r in rows if not r["paused"])         # a paused project holds no slot and counts for nothing
-    T, reason = total(state.get("T"), inputs["level"], inputs.get("pace"), in_use, inputs.get("projected"),
-                      state.get("last_raise"), _today(now))
-    shares = split(T, rows)
+    cap = state.get("user_cap")
+    cap_live = isinstance(cap, dict) and isinstance(cap.get("n"), int) and (cap.get("until") or 0) > now
+    expired = state.get("user_cap_expired") or (cap if cap and not cap_live else None)
+    if cap_live:                                   # your cap replaces the level ceiling; the split below still applies
+        T, reason = cap["n"], "user_cap"
+    else:
+        T, reason = total(state.get("T"), inputs["level"], inputs.get("pace"), in_use, inputs.get("projected"),
+                          state.get("last_raise"), _today(now))
+    shares = split(T, rows, cap["n"] if cap_live else None)
+    pcaps = {k: v for k, v in (state.get("project_caps") or {}).items()
+             if isinstance(v, dict) and isinstance(v.get("n"), int) and (v.get("until") or 0) > now}
+    for slug, rec in pcaps.items():                # a project's own cap wins; paused and idle projects stay at 0
+        if slug in shares and shares[slug]["floor"] > 0:
+            shares[slug].update(slots=rec["n"], cap=rec["n"], reason="project_cap")
     projects = {}
     for r in rows:
         s = shares[r["slug"]]
@@ -288,9 +364,13 @@ def compute(now=None, current=None, inputs=None, write=True):
                                "cap": s["cap"], "weight": s["weight"], "layer": s["reason"], "free_reason": why,
                                "paused": r["paused"], "private": r["private"], "path": r["path"]}
     out = {"T": T, "reason": reason, "level": inputs["level"], "nodata": inputs["nodata"], "h5": inputs.get("h5"),
-           "projects": projects, "skipped": skipped}
+           "projects": projects, "skipped": skipped, "user_cap": cap if cap_live else None, "cap_expired": expired,
+           "project_caps": pcaps,       # the real portfolio total: what runs now of what the slots allow, paused projects aside
+           "portfolio": {"used": sum(v["used"] for v in projects.values() if not v["paused"]),
+                         "slots": sum(v["slots"] for v in projects.values() if not v["paused"])}}
     if write and rows:
         new = {"T": T, "level": inputs["level"], "at": int(now), "expedite": state.get("expedite"),
+               "user_cap": cap if cap_live else None, "user_cap_expired": expired, "project_caps": pcaps,
                "last_raise": _today(now) if state.get("T") is not None and T > state["T"] else state.get("last_raise"),
                "projects": {k: {"used": v["used"], "slots": v["slots"]} for k, v in projects.items()}}
         if new != {k: state.get(k) for k in new}:

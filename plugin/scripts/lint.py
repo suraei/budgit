@@ -67,12 +67,12 @@ def _build_candidates():
     if start is not None:
         ranges.append((start, prev))
     esc = lambda c: "\\u%04x" % c if c < 0x10000 else "\\U%08x" % c
-    cls = lambda rs: "[" + "".join(esc(a) if a == b else esc(a) + "-" + esc(b) for a, b in rs) + "]"
+    charset = lambda rs: "[" + "".join(esc(a) if a == b else esc(a) + "-" + esc(b) for a, b in rs) + "]"
     bmp = [(a, min(b, 0xFFFF)) for a, b in ranges if a < 0x10000]
     astral = [(max(a, 0x10000), b) for a, b in ranges if b >= 0x10000]
     # two classes: the regex engine turns a class of 16-bit characters into a bitmap, but walks a class that holds astral
     # characters range by range; the lookahead keeps that walk to the rare astral character
-    return re.compile(cls(bmp) + "|(?=[\U00010000-\U0010ffff])" + cls(astral))
+    return re.compile(charset(bmp) + "|(?=[\U00010000-\U0010ffff])" + charset(astral))
 
 
 class _Lazy:

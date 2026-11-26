@@ -66,10 +66,15 @@ class _TooBig(Exception):
     """A glob or a command line past its cap: the guard asks instead of walking further."""
 
 
+_HOME_UNKNOWN = "/budgit-home-unknown-r1300"       # stands for a HOME expansion on a line that can change HOME first
+
+
 def _hit(piece, dirs):
-    """True when this word, as it stands or resolved, names a persistence target."""
+    """True when this word, as it stands or resolved, names a persistence target. A word that holds the unknown-HOME stand-in is a hit."""
     if not piece or piece in ("-", "--"):
         return False
+    if _HOME_UNKNOWN in piece or sl._dir_tilde(piece):    # a directory tilde (~+ ~- ~N) is unknown on any line
+        return True
     pieces = [piece] + [p for p in sl._PIECES.split(piece) if p]
     for p in list(pieces):
         if p.startswith("-") and not p.startswith("--") and len(p) > 2:
@@ -273,8 +278,11 @@ def _expand(tokens, redirs, dirs, depth):
                 yield from _expand(sub, [], dirs, depth + 1)
 
 
-def _walk(command, dirs0, depth=0):
-    text = re.sub(r"\$\{HOME\}|\$HOME(?![\w])", os.path.expanduser("~"), re.sub(r"\\\r?\n", "", command))
+def _walk(command, dirs0, depth=0, home=None):
+    """`home` replaces the real home as the text a HOME expansion is rewritten to (the unknown-HOME stand-in, on a line that can change HOME)."""
+    text = re.sub(r"\$\{HOME\}|\$HOME(?![\w])", home or os.path.expanduser("~"), re.sub(r"\\\r?\n", "", command))
+    if home:                                             # the stand-in pass: a tilde word (~, ~+, ~-, ~name) is unknown too
+        text = re.sub(r"(?<![^\s=:;&|(<>])~[\w.+-]*", home, text)
     parts = sl._shell_parts(text)
     if parts is None:
         raise _Unreadable()
@@ -299,7 +307,11 @@ def _bash_text(command, dirs0):
     except _Unreadable:
         return bool(_PERSIST_PATH.search(sl._fold(command.replace("\\", "/"))) or _PERSIST_CODE.search(command)) and \
             bool(re.search(r">|\btee\b|\bcp\b|\bmv\b|\bsed\b|\bln\b|\binstall\b|\bdd\b|\btouch\b|\bchmod\b", command))
-    return any(_segment_asks(t, r, d, " ".join(t), command) for t, r, d in items)
+    if any(_segment_asks(t, r, d, " ".join(t), command) for t, r, d in items):
+        return True
+    if sl._home_expansion_risky(command):               # R-1300: the shell may expand HOME to something else; judge the target as unknown
+        return any(_segment_asks(t, r, d, " ".join(t), command) for t, r, d in _walk(command, dirs0, home=_HOME_UNKNOWN))
+    return False
 
 
 _ASK_PERSIST = ("budgit guard: this call writes where code is run later (git hooks, shell startup files, tool or agent "
@@ -413,19 +425,157 @@ _COARSE_GIT = re.compile(
     r"reflog\s+(?:expire|delete)|update-ref\s+-d|filter-branch|prune\b)")
 
 
+# The same pattern with an expansion-bearing word in place of the program's name (used only when the walk cannot read the line)
+_COARSE_EXP = re.compile(_COARSE_GIT.pattern.replace(r"\bgit\b", r"[^\s;&|]*[$`{][^\s;&|]*", 1))
+
+
+# every verb `_destructive_why` branches on (a test reads that function's source and checks this set covers it)
+_DESTRUCTIVE_VERBS = {"reset", "checkout", "switch", "restore", "clean", "stash", "branch", "tag", "push", "reflog", "update-ref", "prune",
+                      "filter-branch", "filter-repo", "replace", "gc", "worktree", "checkout-index", "read-tree"}
+_VERB_VALUE_OPTS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix", "--attr-source")
+
+
+def _verb_index(rest):
+    """Index of the verb word among the words after `git`: the first word that is not an option or an option's value."""
+    for i, t in enumerate(rest):
+        if not t.startswith("-") and (i == 0 or rest[i - 1] not in _VERB_VALUE_OPTS):
+            return i
+    return None
+
+
+def _brace_text_why(text):
+    """R-1301 M1: a brace group anywhere on a line (behind sudo, env, nohup, xargs, eval, sh -c, a here-string ...) may spell the program and a
+    destructive verb. Each segment that holds a brace is expanded into one list of every alternative; a destructive verb is judged only when
+    an earlier word of the expanded list is the program (R-1307 RPRE: the expanded words decide, not a letters test on the raw segment)."""
+    for seg in re.split(r"[;&|\n]", re.sub(r"[\"']", "", text)):
+        if "{" not in seg:
+            continue
+        if len(seg) > _BRACE_SEG_CAP:           # fail closed on size, without expanding, but only when the segment can name the program
+            if _oversize_may_name(seg):
+                return "a very long line with a brace expansion that may spell the program, so this guard cannot read it exactly"
+            continue
+        toks = []
+        for word in seg.split():
+            alts = _brace_words(word, _BRACE_WORD_CAP - len(toks))
+            if alts is None:
+                return "a brace expansion that makes too many words, so this guard cannot read it exactly"
+            toks.extend(alts)
+        named = [os.path.basename(sl._normal_text(tok, True)) == "git" for tok in toks]
+        for k, tok in enumerate(toks):
+            if tok in _DESTRUCTIVE_VERBS and any(named[:k]):       # only a verb after the program needs the words after it
+                why = _destructive_why(tok, toks[k + 1:])
+                if why:
+                    return "a brace expansion that may spell the program and a destructive verb, so this guard cannot read it exactly (%s)" % why
+    return None
+
+
+_BRACE_SEG_CAP = 4096                           # characters of one segment that holds a brace and the letters g-i-t
+_BRACE_WORD_CAP = 256                           # words one segment may expand into
+
+
+def _brace_split(inner):
+    """Top-level alternatives of a brace group body: split at commas outside nested braces; a range `a..b` is its two ends."""
+    parts, depth, start = [], 0, 0
+    for i, ch in enumerate(inner):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            parts.append(inner[start:i])
+            start = i + 1
+    parts.append(inner[start:])
+    if len(parts) == 1 and ".." in inner:
+        parts = inner.split("..", 1)
+    return parts
+
+
+def _brace_words(word, budget):
+    """Every word `word` expands into (a real cross product of adjacent and nested groups); None when more than the budget of words."""
+    open_at = word.find("{")
+    if open_at < 0:
+        return [word]
+    depth = 0
+    for i in range(open_at, len(word)):
+        depth += 1 if word[i] == "{" else -1 if word[i] == "}" else 0
+        if depth == 0:
+            break
+    else:
+        return [word]                           # an unmatched brace stays a plain word
+    out = []
+    for alt in _brace_split(word[open_at + 1:i]):
+        more = _brace_words(word[:open_at] + alt + word[i + 1:], budget)
+        if more is None:
+            return None
+        out.extend(more)
+        if len(out) > budget:
+            return None
+    return out
+
+
+def _oversize_may_name(text):
+    """The cheap gate for a line too long to read: may it name the program? True when `_may_name_program` is, or when it holds a brace and
+    either `..` or the letters g, i and t (not in a row): a brace group can build the name from a decoy alternative or a range. Linear."""
+    if "{" in text:
+        folded = text.lower()
+        if ".." in text or ("g" in folded and "i" in folded and "t" in folded):
+            return True
+    return sl._may_name_program(text)
+
+
+_OVERSIZE_ASK = "a very long command that may name git, so this guard cannot read it exactly"
+
+
 def _git_text(command):
+    if len(command) > _CMD_CAP:                  # R-1307 RF1: too long to scan; nothing below runs, so the cost does not grow with the line
+        return _OVERSIZE_ASK if _oversize_may_name(command) else None
     text = re.sub(r"\\\r?\n", "", command)
     if sl._SUBST.search(text) and _COARSE_GIT.search(text):
         return "a git command this guard cannot read exactly"
+    why = _brace_text_why(text)
+    if why:
+        return why
     try:
         items = list(_walk(text, [os.getcwd()]))
     except _Unreadable:
-        return "a git command this guard cannot read exactly" if _COARSE_GIT.search(text) else None
+        try:
+            plain = sl._normal_text(text, True)          # R-1301 M2: the line as the shell reads it (g''it, a backslash, an escape)
+        except Exception:
+            plain = text
+        return "a git command this guard cannot read exactly" if (_COARSE_GIT.search(text) or _COARSE_EXP.search(text)
+                                                                  or _COARSE_GIT.search(plain)) else None
     for tokens, _, _ in items:
         if tokens and os.path.basename(tokens[0]).lower() == "git":   # GIT and Git run git on a case-blind disk
             why = _git_segment(tokens)
             if why:
                 return why
+    for words, _redirs in (sl._shell_parts(text) or []):   # a brace command word expands into words that may be the program and a verb
+        if words and "{" in words[0]:                      # any brace in the raw command word (nested, ranged, several groups): judge the verb behind it
+            at = _verb_index(words[1:])
+            why = _destructive_why(words[1:][at], words[1:][at + 1:]) if at is not None else None
+            if why:
+                return "a command word with a brace, so this guard cannot read it exactly (%s)" % why
+        found = re.match(r"^([^{}]*)\{([^{}]*,[^{}]*)\}([^{}]*)$", words[0]) if words else None
+        if found:
+            every = [found.group(1) + part + found.group(3) for part in found.group(2).split(",")] + words[1:]
+            for k in range(len(every)):
+                why = _destructive_why(every[k], every[k + 1:])
+                if why:
+                    return "a command word that is a brace expansion, so this guard cannot read it exactly (%s)" % why
+    for tokens, _, _ in items:          # a command word that is an expansion or a dollar-single-quote word may be the program
+        if tokens and (re.search(r"[$`{]", tokens[0])):
+            rest = tokens[1:]
+            at = _verb_index(rest)
+            why = _destructive_why(rest[at], rest[at + 1:]) if at is not None else None
+            if why:
+                return "a command whose program word is built by an expansion, so this guard cannot read it exactly (%s)" % why
+    if sl._home_expansion_risky(text):                   # R-1300 LOW-4: judge a HOME expansion as unknown (it may be `--hard` by then)
+        for tokens, _, _ in _walk(text, [os.getcwd()], home=_HOME_UNKNOWN):
+            if not tokens or os.path.basename(tokens[0]).lower() != "git" or not any(_HOME_UNKNOWN in t for t in tokens[1:]):
+                continue
+            at = _verb_index(tokens[1:])
+            if (at is not None and _HOME_UNKNOWN in tokens[1:][at]) or any(t in _DESTRUCTIVE_VERBS for t in tokens[1:]):
+                return "a git command whose verb or arguments may be what HOME holds by then, and it can throw work away"
     return None
 
 
@@ -437,11 +587,10 @@ def destructive_git_decision(tool, tool_input):
         command = (tool_input or {}).get("command")
         if not isinstance(command, str):
             why = "a git command this guard could not read"
-        elif "git" not in re.sub(r"[\"'\\\\]", "", command).lower():   # g""it, g\it and GIT are still git
+        elif ("git" not in re.sub(r"[\"'\\\\]", "", command).lower()   # g""it, g\it and GIT are still git
+              and not re.search(r"[$`{]", command) and "\\\n" not in command):   # nor may anything that could build the name
             return None
-        elif len(command) > _CMD_CAP:
-            why = "a very long command that names git"
-        else:
+        else:                                   # over the cap, `_git_text` asks only when `_oversize_may_name` is true (one place decides)
             why = _git_text(command)
     except Exception:
         why = "a git command this guard could not read"

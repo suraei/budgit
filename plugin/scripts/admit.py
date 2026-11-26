@@ -16,6 +16,7 @@ fairshare.py). `budgit suite` asks with kind "suite" (load only); a PM or the TM
 PreToolUse hook asks with "lane" and only adds a line when the answer is not go (advice, never a block).
 Exit codes: 0 go, 1 wait, 2 refuse. A reading that cannot be taken is skipped, never guessed."""
 import os
+import re
 import subprocess
 
 import studiolib as sl
@@ -137,7 +138,14 @@ def thresholds(m, config=None):
     return {"wait_load": wait, "refuse_load": max(refuse, wait), "max_busy": num("max_busy", DEFAULTS["max_busy"])}
 
 
-def decide(m, kind="lane", config=None, share=None):
+def suite_pressure_level():
+    """The macOS pressure level a suite refuses at: the scheduled-job level (jobs.JOB_PRESSURE_LEVEL, critical), because an
+    ordinary laptop reports warn all day. The swap-in rate and compressor limits stay as they are."""
+    import jobs
+    return jobs.JOB_PRESSURE_LEVEL
+
+
+def decide(m, kind="lane", config=None, share=None, continuing=False):
     """-> {"verdict", "reason", "exit", "kind", "measured", "limits", "share", "lane_cap"}. Refusals are checked before waits.
 
     R-402, fair share across projects (`share` from fairshare.share; without it the machine alone decides, as before):
@@ -161,8 +169,19 @@ def decide(m, kind="lane", config=None, share=None):
     blind = isinstance(picture, dict) and not any(picture.get(k) is not None for k in ("pressure", "psi", "winload", "compressor_mb", "free_true_mb"))
     verdict, reason = GO, t("ad.r_go_blind" if blind else "ad.r_go", cpu=pct(load), mem=mem, busy=_n(m.get("busy")))
     import admission                                      # R-889b: the lane refusal reads the same memory signals as busy
-    memory_why = admission.busy_reason(m.get("free_mb"), None, m.get("mem")) if kind == "lane" else None
+    level = suite_pressure_level() if kind == "suite" else None   # a suite is a scheduled-job-sized run: critical, not warn; a lane keeps warn
+    memory_why = admission.busy_reason(m.get("free_mb"), None, m.get("mem"), level)   # every kind reads memory (a suite too), one rule
     short_of_memory = bool(memory_why)
+    cap, over = None, load is not None and load > limits["wait_load"]
+    if continuing:                                        # urgent mode: a step of work already in flight is never held back by CPU alone
+        why_c = admission.busy_reason(m.get("free_mb"), None, m.get("mem"), level)      # memory is not negotiable, for a suite too
+        if why_c:
+            return _answer(REFUSE, t("ad.r_memory", why=why_c), kind, m, limits, share, None, None)
+        if kind == "lane" and m.get("busy") is not None and m["busy"] >= limits["max_busy"]:
+            return _answer(REFUSE, t("ad.r_busy", busy=m["busy"], limit=int(limits["max_busy"])), kind, m, limits, share, None, None)
+        if over:
+            worker_cap = continuing_cap(m.get("cores"))
+            return _answer(GO, t("ad.r_continue", cap=worker_cap, cpu=pct(load), mem=mem), kind, m, limits, share, None, worker_cap)
     if lane and mine == 0 and not short_of_memory:
         reason = t("ad.r_floor", cpu=pct(load), mem=mem)
     elif load is not None and load > limits["refuse_load"]:
@@ -177,11 +196,40 @@ def decide(m, kind="lane", config=None, share=None):
                   else t("ad.r_load_wait", cpu=pct(load), limit=pct(limits["wait_load"]), mem=mem))
     elif lane and mine >= 2 and share["starved"] > 0:
         verdict, reason = WAIT, t("ad.r_starved", lanes=mine, n=share["starved"])
-    cap = None
     if lane:
-        cap = lane_quota(load is not None and load > limits["wait_load"], True, share["starved"])
-    return {"verdict": verdict, "reason": reason, "exit": EXIT[verdict], "kind": kind, "measured": m, "limits": limits,
-            "share": share, "lane_cap": cap}
+        cap = lane_quota(over, True, share["starved"])
+    return _answer(verdict, reason, kind, m, limits, share, cap, None, continuing)
+
+
+def _answer(verdict, reason, kind, m, limits, share, lane_cap, worker_cap, continuing=True):
+    got = {"verdict": verdict, "reason": reason, "exit": EXIT[verdict], "kind": kind, "measured": m, "limits": limits,
+           "share": share, "lane_cap": lane_cap}
+    if continuing:
+        got["worker_cap"] = worker_cap               # the worker cap for the runner (BUDGIT_TEST_WORKERS), or None
+    return got
+
+
+def continuing_cap(cores):
+    """The reduced worker count for a step already in flight on a CPU-busy machine: half the cores, at least 1."""
+    return max(1, (cores or 1) // 2)
+
+
+CONTINUING_ID = re.compile(r"R-[0-9]+")
+
+
+def continuing_refusal(item, project, load=None):
+    """None when `item` is an item id (R, a dash, digits) that the project's ledger holds, else the refusal text. No free pass by typing a word."""
+    import i18n
+    if not isinstance(item, str) or not CONTINUING_ID.fullmatch(item):
+        return i18n.t("ad.r_continue_bad")
+    try:
+        if not project:
+            raise OSError("no project")
+        data = (load or sl.load_ledger)(project)
+        known = {it.get("id") for it in data["items"]}
+    except Exception:
+        return i18n.t("ad.r_continue_unknown")
+    return None if item in known else i18n.t("ad.r_continue_unknown")
 
 
 LANE_FLOOR = 1
@@ -204,8 +252,14 @@ def _n(value):
     return ("%.1f" % value) if isinstance(value, float) else str(value)
 
 
-def check(kind="lane", config=None, project=None):
-    """The answer for this machine now. With `project` (a lane asked for by that project) the fair share is applied too."""
+def check(kind="lane", config=None, project=None, continuing=None, ledger=None):
+    """The answer for this machine now. With `project` (a lane asked for by that project) the fair share is applied too.
+    `continuing` (urgent mode): the id of an item already in flight; a bad or unknown id is refused (exit 64) before any reading."""
+    if continuing is not None:
+        bad = continuing_refusal(continuing, project, ledger)
+        if bad:
+            return {"verdict": REFUSE, "reason": bad, "exit": 64, "kind": kind, "measured": None, "limits": None,
+                    "share": None, "lane_cap": None, "worker_cap": None}
     share = None
     if kind == "lane" and project:
         try:
@@ -213,7 +267,7 @@ def check(kind="lane", config=None, project=None):
             share = fairshare.share(project)
         except Exception:
             share = None
-    return decide(measure(), kind, config, share)
+    return decide(measure(), kind, config, share, continuing=continuing is not None)
 
 
 def advice(config=None, project=None):

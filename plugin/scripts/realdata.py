@@ -60,7 +60,7 @@ _GIT_TREE_VERBS = {"checkout", "switch", "merge", "rebase", "pull", "stash", "cl
 _GIT_READ_EXTRA = {"show-ref", "for-each-ref", "ls-remote", "name-rev", "whatchanged", "reflog", "count-objects",
                    "diff-tree", "diff-index", "diff-files", "check-ignore", "check-attr", "var", "help", "version",
                    "verify-commit", "verify-tag", "cherry", "range-diff", "show-branch"}
-_GIT_BAD_READ_OPT = re.compile(r"^(?:--out|-O|-o$|--open-files-in-pager|--ext-diff|--textconv|--exec|-c$|--paginate|-p$)")
+_GIT_BAD_READ_OPT = re.compile(r"^(?:--out|-O|-o$|--open-files-in-pager|--ext-diff|--textconv|--exec|-c$|--paginate|-p$|--recurse-submodules|--show-signature)")
 _WRITE_WORDS = re.compile(
     r"(?:^|[^\w])(?:rm|rmdir|mv|cp|tee|dd|ln|touch|mkdir|truncate|shred|install|rsync|ditto|chmod|chown|chgrp|unlink|"
     r"patch|tar|unzip|zip|gzip|7z|curl|wget|git\s+(?:clean|checkout|restore|reset|stash|rm|mv|add|commit|merge|rebase|pull|"

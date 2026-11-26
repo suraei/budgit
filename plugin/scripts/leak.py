@@ -9,6 +9,8 @@ user name (lint.PERSONAL) and, in Markdown, «quoted words» of 3+ words (the us
 Deterministic, read-only, stdlib only.
 """
 import os
+import hashlib
+import json
 import unicodedata
 import re
 import subprocess
@@ -18,6 +20,7 @@ import lint
 import studiolib as sl
 
 MIN_LEN = 4
+EXCEPTIONS_PATH = ".studio/names-exceptions.json"      # R-1366 F13: exact-line exceptions for push_check, read from the checked tree
 GENERIC = {"index", "readme", "changelog", "license", "template", "inbox", "processed", "archive", "done",   # names every hub has
            "general"}      # R-578: a common word in code; a project folder of that name says nothing private
 QUOTE = re.compile(r"«(?:[^»\s]+[ \t]+){2,}[^»\s]+»")      # the user's quotes: 3+ words («MVP n/m» is a label)
@@ -155,10 +158,25 @@ def _pattern(found):
     return re.compile(r"(?<![\w-])(?:%s)(?![\w-])" % "|".join(re.escape(w) for w in words), re.I)
 
 
+OS_ACCOUNT = "os account"
+OS_ACCOUNT_TERM = "<os account path>"      # a hit never prints the name
+
+
+def account_pattern(home=None):
+    """The current OS account name in any path form (`/Users/<a>`, `-Users-<a>-` as Claude Code names transcript folders,
+    `\\Users\\<a>`), read at run time from the home path so this file never holds it. None when there is no usable name."""
+    name = os.path.basename(os.path.expanduser(home or "~").rstrip("/\\"))
+    if len(name) < 2 or name.lower() in lint.PLACEHOLDERS:
+        return None
+    a = re.escape(name)
+    return re.compile(r"(?:/Users/%s(?![\w.-])|-Users-%s-|\\+Users\\+%s(?![\w.-]))" % (a, a, a), re.I)      # `\\` too: a path in source code is escaped
+
+
 def scan(root, found=None, allow=()):
     """Every hit under root (file or folder) -> [Hit]. allow: exact 'relpath:term' entries the user approved."""
     found = terms() if found is None else found
     pat = _pattern(found)
+    acct = account_pattern()
     allowed = {a.lower() for a in allow}
     hits = []
     files = [root] if os.path.isfile(root) else [
@@ -177,6 +195,8 @@ def scan(root, found=None, allow=()):
                 got += [(found[m.group(0).lower()], m.group(0)) for m in pat.finditer(line)]
             got += [("home path", m.group(0)) for m in lint.PERSONAL.finditer(line)
                     if m.group(1).lower() not in lint.PLACEHOLDERS]
+            if acct and acct.search(line):
+                got.append((OS_ACCOUNT, OS_ACCOUNT_TERM))
             if md:
                 got += [("quoted words", m.group(0)) for m in QUOTE.finditer(line)]
             for kind, term in got:
@@ -195,6 +215,7 @@ def scan_binary_strings(root, found=None, allow=()):
     found = terms() if found is None else found
     found = {k: v for k, v in found.items() if v != PROTECTED}      # a compiled symbol can hold a folder name by chance
     pat = _pattern(found)
+    acct = account_pattern()
     allowed = {a.lower() for a in allow}
     hits = []
     for d, dirs, names in os.walk(root):
@@ -213,6 +234,8 @@ def scan_binary_strings(root, found=None, allow=()):
                 text = m.group(0).decode("ascii")
                 got = [(found[w.group(0).lower()], w.group(0)) for w in pat.finditer(text)] if pat else []
                 got += [("home path", w.group(0)) for w in lint.PERSONAL.finditer(text) if w.group(1).lower() not in lint.PLACEHOLDERS]
+                if acct and acct.search(text):
+                    got.append((OS_ACCOUNT, OS_ACCOUNT_TERM))
                 for kind, term in got:
                     if ("%s:%s" % (rel, term)).lower() not in allowed:
                         hits.append(Hit(rel, m.start(), kind, term))
@@ -395,14 +418,49 @@ def _hide_pattern(names):
                 continue
             chars = "".join(re.split(r"[\W_]+", folded))
             if len(chars) >= HIDE_SUBSTRING_MIN:       # `QzVkClient.py` and `myqzvk.py` hide a name of 4 or more characters;
-                patterns.append(re.compile(r"[\W_]*".join(re.escape(c) for c in chars)))      # `Qzvkportal` is `Qzvk_Portal` too
+                escaped = [re.escape(c) for c in chars]    # `Qzvkportal` is `Qzvk_Portal` too. R-1366 F8: whitespace is free only where
+                at_sep, n = set(), 0                       # the configured name has its own separator (`qzvk portalx` hits); anywhere else
+                for p in [q for q in re.split(r"[\W_]+", folded) if q][:-1]:   # a match holding whitespace must start and end on
+                    n += len(p)                            # word boundaries (`becomes a structured` is not a 4-letter name).
+                    at_sep.add(n)                          # No rule depends on the length of the name.
+                joined = escaped[0]
+                for i in range(1, len(escaped)):
+                    joined += (r"[\W_]*" if i in at_sep else r"(?:[^\w\s]|_)*") + escaped[i]
+                spaced = r"(?<![^\W_])" + r"[\W_]*".join(escaped) + r"(?![^\W_])"
+                patterns.append(re.compile("(?:%s|%s)" % (joined, spaced)))
             else:                                      # a shorter name is a hit only as a whole word, or `ab` would hide `table`
                 patterns.append(re.compile(r"(?<![^\W_])(?:%s)(?![^\W_])" % r"[\W_]*".join(parts)))
         _hide_cache[key] = tuple(patterns)
     return _hide_cache[key]
 
 
-def hide(text, names, mask=HIDDEN):
+ALLOWED_WORDS = ("vacated", "vacation", "vacations", "vacaciones", "vacacional")   # R-1366 F8: ordinary words only, never a protected name
+_allow_cache = {}
+
+
+def allowed_words(names, extra=()):
+    """R-1366 F8: the folded set of ordinary whole words that pass although a short protected name sits inside them:
+    ALLOWED_WORDS plus `extra` (the config key `names_allow_words`). A word is matched whole, case- and accent-folded, never as
+    part of a longer word. An entry that is not one word, equals a protected name or holds one as a whole word is ignored and
+    logged (without the entry)."""
+    key = (frozenset(n for n in names if isinstance(n, str)), tuple(sorted(w for w in extra if isinstance(w, str))))
+    if key not in _allow_cache:
+        good, dropped = set(), False
+        for word in ALLOWED_WORDS + key[1]:
+            folded, _ = _fold_text(unicodedata.normalize("NFC", word))
+            if not folded or re.search(r"[\W_]", folded):
+                dropped = True
+            elif any(hide(word, [n], whole=True, allow=frozenset()) != word for n in key[0]):
+                dropped = True
+            else:
+                good.add(folded)
+        if dropped:
+            sl.log_error("names allowlist: an entry is not one word, or equals or holds a protected name; ignored")
+        _allow_cache[key] = frozenset(good)
+    return _allow_cache[key]
+
+
+def hide(text, names, mask=HIDDEN, whole=False, allow=None):
     """R-415: `text` with every protected name in `names` replaced by `mask`. Any case, NFC or NFD, any separator (`-`, `_`,
     `.`, space or none between the parts of a name), invisible characters ignored. A name of 4 or more letters and digits
     is hidden inside longer words as well, and with a separator between any two of its characters; a shorter one only as a whole
@@ -414,11 +472,24 @@ def hide(text, names, mask=HIDDEN):
     if not patterns:
         return text
     folded, where = _fold_text(text)
+    if not whole:                                      # R-1366 F8: a hit entirely inside an allowed ordinary whole word passes
+        allow = allowed_words(names) if allow is None else allow
     found = []
     for pattern in patterns:
         for m in pattern.finditer(folded):
             if m.start() == m.end():
                 continue
+            if not whole and allow:
+                lo, hi = m.start(), m.end()
+                while lo > 0 and re.match(r"[^\W_]", folded[lo - 1]):
+                    lo -= 1
+                while hi < len(folded) and re.match(r"[^\W_]", folded[hi]):
+                    hi += 1
+                if folded[lo:hi] in allow:
+                    continue
+            if whole and ((m.start() > 0 and re.match(r"[^\W_]", folded[m.start() - 1]))
+                          or re.match(r"[^\W_]", folded[m.end():m.end() + 1])):
+                continue                               # R-1366 alias: only a whole word is rewritten, never part of a longer one
             start, end = where[m.start()], where[m.end() - 1] + 1
             while end < len(text) and _ignorable(text[end]):
                 end += 1
@@ -436,6 +507,283 @@ def hide(text, names, mask=HIDDEN):
         at = end
     out.append(text[at:])
     return "".join(out)
+
+
+def _alias_names(config=None):
+    """The protected names in alias order. Fail-safe, not fail-closed (R-1366): a writer must never lose the user's text, so
+    an unreadable config still writes, with every name that can be resolved (each readable `protected_dirs` entry on its
+    own), and logs a warning; names that cannot be resolved cannot be hidden."""
+    try:
+        config = config if config is not None else sl.load_config()
+        return sorted(protected_names(config))
+    except ValueError:
+        pass
+    except Exception:
+        sl.log_error("alias names: config unreadable")
+        return []
+    try:
+        sl.log_error("alias names: protected_dirs partly unreadable, aliasing the readable entries")
+        raw = config.get("protected_dirs")
+        return sorted(set().union(*(protected_names({"protected_dirs": [r]})
+                                    for r in (raw if isinstance(raw, (list, tuple)) else ()) if sl.protected_entry(r))))
+    except Exception:
+        sl.log_error("alias names")
+        return []
+
+
+def alias_text(text, config=None):
+    """R-1366: `text` with each protected name written as its alias `protected-1`, `protected-2` ... in the sorted order of
+    protected_names(). Same matcher as hide() (case, accents, separators) but whole words only (`whole=True`): aliasing
+    rewrites the user's stored words, so a name inside a longer word (`zebracorpx`) is left alone here; the strict
+    hide()/_hide_pattern still match it, and the slice 2 pre-push check uses the strict form. A text with no name comes
+    back unchanged.
+    Used where Budgit writes ledger, inbox and progress text, so no protected name reaches the files that leave the Mac."""
+    if not isinstance(text, str) or not text:
+        return text
+    for n, name in enumerate(_alias_names(config), 1):
+        text = hide(text, [name], mask="protected-%d" % n, whole=True)
+    return text
+
+
+def alias_data(value, config=None):
+    """alias_text over every string (keys excluded) of a JSON-like value; returns a copy, the argument is not changed."""
+    names = _alias_names(config)
+    if not names:
+        return value
+
+    def walk(v):
+        if isinstance(v, str):
+            for n, name in enumerate(names, 1):
+                v = hide(v, [name], mask="protected-%d" % n, whole=True)
+            return v
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        return v
+    return walk(value)
+
+
+PushHit = namedtuple("PushHit", "file line alias")      # R-1366: where (path or `<message sha>`, 0 for a path or message) and which alias; never the name
+CHECK_FAILED = "check-failed"
+
+
+class PushHits(list):
+    """The hits of push_check; `.files` is how many tracked files were read."""
+    files = 0
+
+
+def _push_names(config):
+    """The sorted protected names for a push check. Strict, fail closed: an unreadable config file, a protected_dirs that is not
+    a readable list, or a protected_dirs that gives no usable name raises ValueError (a push is outward)."""
+    if config is None:
+        if not sl.config_readable():
+            raise ValueError("config unreadable")
+        config = sl.load_config()
+    names = sorted(protected_names(config))                  # ValueError when protected_dirs is not a readable list
+    if config.get("protected_dirs") and not names:
+        raise ValueError("protected_dirs gives no name")
+    return names
+
+
+def push_check(root, config=None, base=None, rev="HEAD", messages=None, exclude=None):
+    """R-1366: what would leave with a push of `rev` from the git work tree `root`. Every tracked text file at `rev` (and its
+    path) and the messages of the commits in `base..rev` (or the given `messages`, [(sha, text)]) are read with the STRICT
+    hide() pattern, substrings included; history before `base` is not read. -> PushHits of PushHit(file, line, alias): the
+    alias (`protected-N`, as alias_text writes it), never the name, also inside a shown path. Fail closed: an unreadable config,
+    an empty name list with protected_dirs set, a bad base or rev, a non-repo or a failing git gives one PushHit with the alias
+    CHECK_FAILED. No protected_dirs at all gives no hit. No error text is ever returned (it could carry a name)."""
+    out = PushHits()
+    try:
+        names = _push_names(config)
+        if not names:
+            return out
+        if base and exclude is None:
+            exclude = [base]                                 # --base REF: the range mode with REF excluded
+        revs = list(rev) if isinstance(rev, (list, tuple)) else [rev]
+        if not revs:
+            raise ValueError("no rev")
+        if any(str(x).startswith("-") for x in revs + [base or ""] + list(exclude or ())):
+            raise ValueError("bad ref")
+
+        def git(*args, data=None):
+            r = subprocess.run(sl.safe_git_argv(root, *args), capture_output=True, timeout=60, env=sl.safe_git_env(), input=data)
+            if r.returncode:
+                raise RuntimeError("git failed")
+            return r.stdout
+
+        cfg = config if config is not None else sl.load_config()
+        extra = cfg.get("names_allow_words") if isinstance(cfg, dict) else None
+        allow = allowed_words(names, extra if isinstance(extra, (list, tuple)) else ())
+
+        def alias_of(text):
+            return [n for n, name in enumerate(names, 1) if hide(text, [name], allow=allow) != text]
+
+        def shown(path):
+            for n, name in enumerate(names, 1):
+                path = hide(path, [name], mask="protected-%d" % n, allow=allow)
+            return path
+
+        seen = set()
+
+        def add(file, line, n):
+            key = (file, line, n)
+            if key not in seen:
+                seen.add(key)
+                out.append(PushHit(file, line, "protected-%d" % n))
+
+        def load_exceptions():
+            """F13: {(path, sha256)} from .studio/names-exceptions.json at revs[0]. Missing = none; anything odd raises (fail closed)."""
+            if not git("ls-tree", "-z", "--full-tree", revs[0], "--", EXCEPTIONS_PATH):
+                return set()
+            data = json.loads(git("cat-file", "blob", "%s:%s" % (revs[0], EXCEPTIONS_PATH)).decode("utf-8"))
+            if not isinstance(data, dict) or set(data) != {"version", "lines"} or type(data["version"]) is not int \
+                    or data["version"] != 1 or not isinstance(data["lines"], list):
+                raise ValueError("exceptions format")
+            found = set()
+            for item in data["lines"]:
+                if not isinstance(item, dict) or set(item) != {"path", "sha256", "why"} \
+                        or not all(isinstance(item[k], str) for k in item):
+                    raise ValueError("exceptions entry")
+                found.add((item["path"], item["sha256"].lower()))
+            return found
+
+        excepted = load_exceptions()
+
+        def scan_text(path, text):
+            for n in alias_of(text):
+                hit, skipped, kept = False, False, []
+                for number, line in enumerate(text.splitlines(), 1):
+                    if hide(line, [names[n - 1]], allow=allow) != line:
+                        if path != EXCEPTIONS_PATH and (path, hashlib.sha256(line.encode("utf-8")).hexdigest()) in excepted:
+                            skipped = True                   # an exact excepted line: this path and the sha256 of this line
+                            continue
+                        add(shown(path), number, n)
+                        hit = True
+                    kept.append(line)
+                if not hit:                                  # a name split by a line break matches the text, not one line
+                    rest = "\n".join(kept)
+                    if not skipped or hide(rest, [names[n - 1]], allow=allow) != rest:    # F16: an excepted line hides no split name
+                        add(shown(path), 1, n)
+
+        def read_batch(shas):
+            wanted = sorted(set(shas))
+            data = git("cat-file", "--batch", data=("\n".join(wanted) + "\n").encode()) if wanted else b""
+            got, pos = {}, 0
+            while pos < len(data):
+                eol = data.find(b"\n", pos)
+                head = data[pos:eol].split()
+                if eol < 0 or len(head) != 3:
+                    raise RuntimeError("batch")
+                size = int(head[2])
+                got[head[0].decode()] = (head[1].decode(), data[eol + 1:eol + 1 + size])
+                pos = eol + 1 + size + 1
+            return got
+
+        def decode(raw):
+            if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+                return raw.decode("utf-16", "replace")
+            if b"\0" in raw:
+                return None                                  # a compiled binary is out of scope
+            return raw.decode("utf-8", "replace")
+
+        if exclude is not None:                              # range mode: every object that `rev --not exclude` reaches
+            listing = git("rev-list", "--objects", *revs, *(["--not"] + list(exclude) if exclude else []))
+            objs = {}
+            for line in listing.decode("utf-8", "surrogateescape").splitlines():
+                sha, _, path = line.partition(" ")
+                if sha:
+                    objs.setdefault(sha, path)
+            for sha, (kind, raw) in read_batch(objs).items():
+                path = objs[sha]
+                for n in alias_of(path):
+                    add(shown(path), 0, n)
+                if kind == "blob":
+                    out.files += 1
+                    text = decode(raw)
+                    if text is not None:
+                        scan_text(path or "<blob %s>" % sha[:8], text)
+                elif kind == "tree":                         # a second path of the same blob is only named in its tree
+                    idlen, i = len(sha) // 2, 0
+                    while i < len(raw):
+                        z = raw.index(b"\0", i)
+                        entry = raw[i:z].split(b" ", 1)[1].decode("utf-8", "surrogateescape")
+                        for n in alias_of(entry):
+                            add(shown(entry), 0, n)
+                        i = z + 1 + idlen
+                elif kind == "tag":
+                    for n in alias_of(raw.decode("utf-8", "replace")):
+                        add("<tag %s>" % sha[:8], 0, n)
+            fmt = "--format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B"     # -z ends each record with NUL: 6 fields per commit, always
+            tokens = git("log", "-z", fmt, *revs, *(["--not"] + list(exclude) if exclude else [])).decode("utf-8", "replace").split("\0")
+            if tokens and tokens[-1] == "":
+                tokens.pop()                                 # the terminator of the last record
+            if len(tokens) % 6:
+                raise RuntimeError("log fields")             # a wrong field count never skips a record: fail closed
+            for i in range(0, len(tokens), 6):
+                sha, *who, body = tokens[i:i + 6]
+                if not re.fullmatch(r"[0-9a-f]{40,64}", sha.lstrip("\n")):
+                    raise RuntimeError("log sha")
+                sha = sha.lstrip("\n")
+                for field in who:
+                    for n in alias_of(field):
+                        add("<author %s>" % sha[:8], 0, n)
+                for n in alias_of(body):
+                    add("<message %s>" % sha[:8], 0, n)
+
+        entries = []
+        for item in (git("ls-tree", "-r", "-z", "--full-tree", revs[0]).decode("utf-8", "surrogateescape").split("\0") if exclude is None else ()):
+            meta, _, path = item.partition("\t")
+            parts = meta.split()
+            if len(parts) == 3 and parts[1] == "blob":
+                entries.append((parts[0], parts[2], path))
+        if exclude is None:
+            out.files = len(entries)
+        for _mode, _sha, path in entries:
+            for n in alias_of(path):
+                add(shown(path), 0, n)
+        wanted = sorted({sha for mode, sha, _ in entries if mode != "120000"})
+        data = git("cat-file", "--batch", data=("\n".join(wanted) + "\n").encode()) if wanted else b""
+        blobs, pos = {}, 0
+        while pos < len(data):
+            eol = data.find(b"\n", pos)
+            head = data[pos:eol].split()
+            if eol < 0 or len(head) != 3:
+                raise RuntimeError("batch")
+            size = int(head[2])
+            blobs[head[0].decode()] = data[eol + 1:eol + 1 + size]
+            pos = eol + 1 + size + 1
+        for mode, sha, path in entries:
+            raw = blobs.get(sha) if mode != "120000" else None
+            if raw is None:
+                continue
+            text = decode(raw)
+            if text is not None:
+                scan_text(path, text)
+        for sha, text in messages or ():
+            for n in alias_of(text):
+                add("<message %s>" % str(sha)[:8], 0, n)
+    except Exception:                                        # never the text of an error: it may carry a name
+        return PushHits([PushHit("<check>", 0, CHECK_FAILED)])
+    return out
+
+
+def names_report(hits):
+    """The text of a push_check result: `names-check: clean (N files)` or `names-check: REFUSED: K hits` then file:line alias."""
+    if not hits:
+        return "names-check: clean (%d files)" % getattr(hits, "files", 0)
+    if hits[0].alias == CHECK_FAILED:
+        return "names-check: REFUSED: the check could not run (config, base or git unreadable); a push stays stopped"
+    lines = ["%s%s %s" % (h.file, ":%d" % h.line if h.line else "", h.alias) for h in hits[:200]]
+    if len(hits) > 200:
+        lines.append("... %d more" % (len(hits) - 200))
+    return "names-check: REFUSED: %d hits\n%s" % (len(hits), "\n".join(lines))
+
+
+def names_check_cli(root, base=None, config=None):
+    """-> (text, exit code) for `budgit names-check`: 0 clean, 1 refused. Read-only."""
+    hits = push_check(root, config, base)
+    return names_report(hits), 1 if hits else 0
 
 
 def is_protected(path):

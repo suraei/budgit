@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 
 import studiolib as sl
 
@@ -211,21 +212,63 @@ def is_protected(path, home=None):
     return any(_under(low, sl.fold_path(os.path.join(home, sub))) for sub in PROTECTED_HOME)
 
 
-def _config_dir_strings(home):
-    """The `protected_dirs` strings of every Budgit config this user may have: the live one and both home-folder
-    names (.budgit, .studio). Strings only: nothing here touches the folders they name."""
+def _protected_dirs_value(value):
+    """The `protected_dirs` list of one config, or None when the value is present but is not a list of strings (F15: a
+    bare string would otherwise be split into characters or dropped, and the config would look empty)."""
+    if value is None:
+        return []
+    if isinstance(value, list) and all(isinstance(d, str) for d in value):
+        return list(value)
+    return None
+
+
+def _config_dir_scan(home):
+    """(strings, bad): the `protected_dirs` strings of every Budgit config this user may have (the live one and both
+    home-folder names, .budgit and .studio), and `bad`, the paths of the config files that could not be read (R-1229: a
+    missing home file is normal; a file that exists but cannot be read or parsed, or whose `protected_dirs` is not a list
+    of strings, is not). Strings only: nothing here touches the folders."""
     raw = []
+    bad = []
+    live = os.path.join(sl.home_state(), "config.json")
     try:
-        raw += list(sl.load_config().get("protected_dirs") or ())
+        got = _protected_dirs_value(sl.load_config().get("protected_dirs"))
+        if got is None:
+            bad.append(live)
+        else:
+            raw += got
     except Exception:
-        pass
+        bad.append(live)
+    for path in sl.unreadable_config_paths():   # F10: load_config skips a bad file and reads the defaults, so it never says so
+        if path not in bad:
+            bad.append(path)
     for name in (".budgit", ".studio"):
+        path = os.path.join(home, name, "config.json")
         try:
-            with open(os.path.join(home, name, "config.json"), encoding="utf-8") as f:
-                raw += list(json.load(f).get("protected_dirs") or ())
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            if not text.strip():          # an empty legacy file counts as missing
+                continue
+            got = _protected_dirs_value(json.loads(text).get("protected_dirs"))
+            if got is None:
+                bad.append(path)
+            else:
+                raw += got
+        except (FileNotFoundError, NotADirectoryError):
+            continue                      # no such file, or the folder is a file: missing, not unreadable
         except (OSError, ValueError, AttributeError, TypeError):
-            continue
-    return [d for d in raw if isinstance(d, str) and d.strip()]
+            bad.append(path)
+    return [d for d in raw if d.strip()], bad
+
+
+def _config_dir_strings_ok(home):
+    """(strings, ok): _config_dir_scan with a plain flag."""
+    strings, bad = _config_dir_scan(home)
+    return strings, not bad
+
+
+def _config_dir_strings(home):
+    """The `protected_dirs` strings of every Budgit config this user may have (see _config_dir_strings_ok)."""
+    return _config_dir_strings_ok(home)[0]
 
 
 def _config_private_dirs(home):
@@ -259,44 +302,166 @@ GENERIC_DIRS = {"documents", "dev", "desktop", "downloads", "library", "home", "
 
 
 def _norm(text):
-    """Case-folded, every run of punctuation or space one space: `V.A.C.A`, `v-a-c-a` and `V A C A` read alike."""
+    """Case-folded, every run of punctuation or space one space: `K.O.L.A`, `k-o-l-a` and `K O L A` read alike."""
     return " ".join(re.sub(r"[\W_]+", " ", sl.fold_path(text)).split())
+
+
+def _compact(text):
+    """R-1229: NFKC, then case-folded, with every character that is not a letter or digit dropped (punctuation, spaces
+    and format characters such as U+200B), so `zorb.quux`, `zorb-quux` and `zorb<ZWSP>quux` all read `zorbquux`."""
+    folded = unicodedata.normalize("NFKC", str(text)).casefold()
+    return "".join(c for c in folded if c.isalnum() and unicodedata.category(c) != "Cf" and c not in _FILLERS)
+
+
+# F14: Hangul fillers are letters (category Lo) that draw nothing; they split words like a Cf character does
+_FILLERS = frozenset(chr(c) for c in (0x3164, 0xFFA0, 0x115F, 0x1160))
+
+
+def _words(text):
+    """R-1229 (F8): [(word, start, end)] of `text`: NFKC, then case-folded, split on every character that is not a letter
+    or digit and on every Cf character. `start` and `end` index the ORIGINAL text, so a caller can cut a word out of it.
+    A base character and its combining marks are folded together (`e` + an accent reads `é`)."""
+    out = []
+    cur = []
+    start = end = 0
+    i, n = 0, len(text)
+    while i < n:
+        j = i + 1
+        while j < n and unicodedata.category(text[j]).startswith("M"):
+            j += 1
+        folded = unicodedata.normalize("NFKC", text[i:j]).casefold()
+        for c in folded:
+            if c.isalnum() and unicodedata.category(c) != "Cf" and c not in _FILLERS:
+                if not cur:
+                    start = i
+                cur.append(c)
+                end = j
+            elif cur:
+                out.append(("".join(cur), start, end))
+                cur = []
+        i = j
+        # a cluster that folded to nothing but separators ended the word above; one that held a letter continues it
+    if cur:
+        out.append(("".join(cur), start, end))
+    return out
+
+
+def private_names_scan(home=None, paths=()):
+    """(names, bad): private_names plus the paths of the config files that could not be read (R-1229: a caller that must
+    not fail open asks this one, and names `bad` in its refusal)."""
+    home = home or _home()
+    raw_dirs, bad = _config_dir_scan(home)
+    skip = GENERIC_DIRS | {_norm(os.path.basename(home.rstrip(os.sep)))}
+    out = []
+    for raw in list(raw_dirs) + list(paths):
+        name = _norm(os.path.basename(os.path.expanduser(raw).rstrip(os.sep)))
+        if len(name) >= 3 and name not in skip and name not in out:
+            out.append(name)
+    return out, bad
+
+
+def private_names_ok(home=None, paths=()):
+    """(names, ok): private_names plus False when the config could not be read."""
+    names, bad = private_names_scan(home, paths)
+    return names, not bad
 
 
 def private_names(home=None, paths=()):
     """Normalised folder names of the `protected_dirs` entries and of the given private project paths, read from the
     strings alone (the folders are never opened). Names under 3 characters and generic folder names are left out."""
-    home = home or _home()
-    skip = GENERIC_DIRS | {_norm(os.path.basename(home.rstrip(os.sep)))}
-    out = []
-    for raw in list(_config_dir_strings(home)) + list(paths):
-        name = _norm(os.path.basename(os.path.expanduser(raw).rstrip(os.sep)))
-        if len(name) >= 3 and name not in skip and name not in out:
-            out.append(name)
-    return out
+    return private_names_ok(home, paths)[0]
 
 
-def shield(text, names):
-    """"private" for a text that names a protected project, else the text. A name of 4+ characters matches anywhere
-    (`mynotes` hides for `notes`), a 3-letter one only as a whole word."""
+def _joining_mark(gap):
+    """E6: True when the text between two words is only marks that join them: a hyphen or other dash, dot, underscore,
+    slash, a Cf character or a Hangul filler. Any whitespace, or any other character, makes it False."""
+    if not gap:
+        return False
+    for c in gap:
+        if c.isspace():
+            return False
+        if c in "-._/" or c in _FILLERS or unicodedata.category(c) in ("Cf", "Pd"):
+            continue
+        return False
+    return True
+
+
+def shield_spans(text, names):
+    """R-1229 (F8): the (start, end) spans of `text` (original indexes, merged, in order) that name a protected project.
+    The text is split into words (NFKC, case-folded, split on every non-alphanumeric and every Cf character); a name
+    matches when it equals one word or the concatenation of a run of consecutive words (`zorb.quux`, `zorb quux`,
+    `zorb<ZWSP>quux`, `z.o.r`). F13: a name of 4 or more compacted characters also matches inside one longer word
+    (`zorbquuxes`, `zorbquuxApp`), and the span is that whole word; a shorter name never does (`zorbx` for `zor`). It
+    never matches across words that only contain it (`toma pastilla` for `mapa`). E5/E6: for such a name, a run of 2 or
+    more words also matches when the name starts inside the first word and ends inside the last (`zorb-quuxes`,
+    `myzorb-quux`, `myzorb-quuxes`), but only when every join between the words of the run is a mark that is not
+    whitespace (a hyphen, dot, underscore, slash, other dash, or a format or filler character); the span is the run. Across
+    a plain space the glued forms stay uncaught (`map and`, `zorb quuxApp`), so ordinary phrases are not hidden."""
     if not isinstance(text, str) or not names:
-        return text
-    n = _norm(text)
-    padded = " %s " % n
-    for name in names:
-        if (name in n) if len(name) >= 4 else (" %s " % name in padded):
-            return "private"
+        return []
+    words = _words(text)
+    spans = []
+    for key in {_compact(name) for name in names}:
+        if not key:
+            continue
+        if len(key) >= 4:
+            spans += [(w[1], w[2]) for w in words if key in w[0]]
+        for i in range(len(words)):
+            acc = ""
+            for j in range(i, len(words)):
+                acc += words[j][0]
+                if not key.startswith(acc):
+                    break
+                if acc == key:
+                    spans.append((words[i][1], words[j][2]))
+                    break
+        if len(key) < 4:
+            continue
+        for i in range(len(words)):                               # E6: glued across words, only through joining marks
+            joined = words[i][0]
+            for j in range(i + 1, len(words)):
+                if not _joining_mark(text[words[j - 1][2]:words[j][1]]):
+                    break
+                joined += words[j][0]
+                inner = len(joined) - len(words[i][0]) - len(words[j][0])
+                if inner >= len(key):
+                    break
+                pos = joined.find(key)
+                while pos != -1:                                  # the name starts inside the first word and ends inside the last
+                    if pos < len(words[i][0]) and pos + len(key) > len(joined) - len(words[j][0]):
+                        spans.append((words[i][1], words[j][2]))
+                        break
+                    pos = joined.find(key, pos + 1)
+    merged = []
+    for s, e in sorted(spans):
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    return merged
+
+
+ALIAS_TOKEN = re.compile(r"(?<![A-Za-z0-9])protected-\d+(?![A-Za-z0-9])", re.IGNORECASE)     # the form leak.alias_text writes
+
+
+def shield(text, names, alias=False):
+    """"private" for a text that names a protected project (see shield_spans), else the text. alias=True (the feed lists):
+    a `protected-N` alias token, which the ledger save writes in place of a name (R-1366), reads "private" too, so a title
+    that was aliased before it reached the feed is still shielded. The retext callers keep alias=False (they re-read
+    texts that already hold an alias)."""
+    if shield_spans(text, names) or (alias and isinstance(text, str) and ALIAS_TOKEN.search(text)):
+        return "private"
     return text
 
 
 def shield_v2(out, names):
-    """The v2 title lists of `status --brote`: a title or text that names a protected project reads "private"."""
+    """The v2 title lists of `status --brote`: a title or text that names a protected project, or holds its alias, reads "private"."""
     for key in ("queue_recent", "done_recent", "doing", "queue", "later"):
         for i in out.get(key) or ():
             if isinstance(i, dict):
                 for field in ("title", "text"):
                     if field in i:
-                        i[field] = shield(i[field], names)
+                        i[field] = shield(i[field], names, alias=True)
     return out
 
 
@@ -606,7 +771,7 @@ def live_feed(current=None, now=None, v2=None):
         hidden |= {s["session_id"] for s in found["sessions"]
                    if is_private(s["cwd"]) or is_protected(os.path.realpath(s["cwd"]))}
         names = private_names(paths=[r["path"] for r in reg["projects"] if r["private"]])
-        hide = lambda text: shield(text, names)             # a title that names a protected project reads "private"
+        hide = lambda text: shield(text, names, alias=True)     # a title that names a protected project, or holds its alias, reads "private"
         if v2 is not None:
             shield_v2(v2, names)
         projects, claims, done_rows, week_rows, ledgers, loaded = [], [], [], [], [], 0
@@ -623,9 +788,10 @@ def live_feed(current=None, now=None, v2=None):
                 continue
             loaded += 1
             items = data["items"]
-            queue = [i for i in items if i["status"] == "open" and i.get("phase") != "later"]
+            built = sl.built_unmerged(r["path"], items)         # R-1273: resolved once per project for this feed
+            queue = [i for i in items if i["status"] == "open" and i.get("phase") != "later" and i["id"] not in built]
             closed = [i for i in items if i["status"] in ("done", "verified")]
-            row["counts"] = sl.feed_counts(data)
+            row["counts"] = sl.feed_counts(data, built)
             if r["path"] in private:                 # counts only: no title, no id, no path leaves this function
                 row["private"] = True
                 projects.append(row)

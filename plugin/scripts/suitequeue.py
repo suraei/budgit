@@ -22,6 +22,7 @@ A suite that starts a nested run (a test that calls `budgit main-check`) passes 
 BUDGIT_SUITE_QUEUE_HELD, otherwise the child would wait for its own parent forever."""
 import fcntl
 import json
+import math
 import os
 import shlex
 import shutil
@@ -81,6 +82,19 @@ class LoadTooHigh(sl.StudioError):
         self.load, self.limit = load, limit
 
 
+class MemoryTooLow(LoadTooHigh):
+    """A suite refused on a memory signal (admit's reason names it); callers that catch LoadTooHigh catch this too."""
+    def __init__(self, load, limit, reason):
+        super().__init__(load, limit)
+        self.args = (reason,)
+
+
+def read_memory():
+    """The memory picture admit judges: the one shared reader (admission.mem_reading). Tests replace it."""
+    import admission
+    return admission.mem_reading()
+
+
 def load_limit():
     """The load above which a suite does not start (admit's wait threshold: the core count unless the config or
     BUDGIT_SUITE_LOAD_LIMIT says otherwise)."""
@@ -111,16 +125,31 @@ def _holder(fd_path):
         return {}
 
 
+def _fixed_cpu():
+    """R-1201: a test-only reading. Only when BUDGIT_SUITE_TEST_CPU holds a number, admission reads that many busy cores
+    instead of the machine's counters, so a test that runs the real CLI in a child process does not depend on the load of
+    the machine it runs on. Unset, not a number, not finite or below 0: None (the real reading)."""
+    raw = sl.env("SUITE_TEST_CPU")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(value) and value >= 0):
+        return None
+    return lambda: value
+
+
 class SuiteSlot:
     """`with SuiteSlot(label, notify=fn) as slot:` -> slot.waited (seconds queued), slot.load (the busy snapshot at start,
     a string from busy_snapshot; `snapshot` injects it). `notify(waited_seconds, holder_dict)` is called when the wait
     begins and then every minute."""
 
     def __init__(self, label="", notify=None, sleep=time.sleep, wait_load=False, load_notice=None, project=None, release=None,
-                 snapshot=None, cpu=None):
+                 snapshot=None, cpu=None, mem=None):
         self.label, self.notify, self.sleep = label, notify, sleep
+        self.mem = mem                                   # memory picture reader; default read_memory (admission.mem_reading)
         self.snapshot = snapshot or busy_snapshot
-        self.cpu = cpu                                   # busy cores reader; default admit.cpu_load (kernel counters)
+        self.cpu = cpu or _fixed_cpu()                   # busy cores reader; default admit.cpu_load (kernel counters)
         self.project, self.release = project, (release if release is not None else bool(sl.env("SUITE_RELEASE")))
         self.wait_load, self.load_notice = wait_load, load_notice
         self.waited, self.load, self.fd, self.path = 0, None, None, None
@@ -208,13 +237,17 @@ class SuiteSlot:
         import admit
         while True:
             self.load = self.snapshot()                             # recorded for timing notes only, never decides (R-889b)
-            got = admit.decide({"cpu_load": (self.cpu or admit.cpu_load)(), "cores": admit.cores()}, "suite")
+            mem = (self.mem or read_memory)()                       # memory is read for a suite too: one rule with lanes
+            got = admit.decide({"cpu_load": (self.cpu or admit.cpu_load)(), "cores": admit.cores(),
+                                "free_mb": mem.get("free_true_mb"), "mem": mem}, "suite")
             if got["verdict"] == admit.GO:
                 return
             limits = got["limits"]
             limit = limits["refuse_load"] if got["verdict"] == admit.REFUSE else limits["wait_load"]
             load = got["measured"]["cpu_load"]
             if not self.wait_load:
+                if got["verdict"] == admit.REFUSE and (load is None or load <= limits["refuse_load"]):
+                    raise MemoryTooLow(load or 0.0, limit, got["reason"])
                 raise LoadTooHigh(load, limit)
             if self.load_notice:
                 self.load_notice(load, limit)

@@ -1,0 +1,27 @@
+{
+  "plan": {
+    "status": "ok",
+    "plan": "Max",
+    "windows": [
+      {
+        "label": "Weekly · all models",
+        "percentUsed": 31,
+        "resetsAt": "2026-11-30T04:00:00.103Z",
+        "resetsIn": "5d 18h"
+      },
+      {
+        "label": "Weekly · Fable",
+        "percentUsed": 6,
+        "resetsAt": "2026-11-30T04:00:00.103Z",
+        "resetsIn": "5d 18h"
+      }
+    ],
+    "extraUsage": {
+      "enabled": false,
+      "percentUsed": 0,
+      "spent": "0.00",
+      "monthlyLimit": "100.00",
+      "currency": "USD"
+    }
+  }
+}

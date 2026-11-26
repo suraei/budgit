@@ -82,7 +82,7 @@ def on_call(inp, project, lang=None):
         if not fire:
             return None
         import i18n
-        return i18n.t("replyfirst.warn", lang, n=n)
+        return i18n.ask("replyfirst.warn", lang, n=n)
     except Exception:
         return None
 
@@ -107,6 +107,6 @@ def browser_refusal(inp, project, lang=None):
         if not is_browser_action(inp) or not is_coordinator(inp, project):
             return None
         import i18n
-        return i18n.t("replyfirst.browser", lang)
+        return i18n.ask("replyfirst.browser", lang)
     except Exception:
         return None

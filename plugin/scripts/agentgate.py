@@ -146,4 +146,28 @@ def deny_reason(tool_input, notes=None):
                 raise LegalCheckError(str(e)) from e
     return ("budgit token guard: %s is an all-tools agent (65-79k tokens of fixed context per spawn). Use a Budgit agent "
             "instead (%s). If an all-tools type is really needed, add a line "
-            "`ALL-TOOLS: <reason>` to the prompt." % (str(kind)[:60], INSTEAD))
+            "`ALL-TOOLS: <reason>` to the prompt; its reason must name the tool no Budgit agent has."
+            % (str(kind)[:60], _instead_for(tool_input)))
+
+
+_AGENT_FOR_TASK = {"build-code": "studio:builder", "fix-bug": "studio:builder", "verify": "studio:verifier",
+                   "research": "studio:researcher", "plan-review": "studio:plan-critic",
+                   "security-review": "studio:security-reviewer"}
+
+
+def _instead_for(tool_input):
+    """R-1360: the Budgit agent for the brief's `task:` type (a synonym counts); with no task line, or a type with no agent
+    here, the whole list. Text only: the decision never reads this."""
+    prompt = str(tool_input.get("prompt") or "") if isinstance(tool_input, dict) else ""
+    try:
+        import agentcap
+        m = agentcap._TASK_LINE.search(prompt)
+        if m:
+            for t in agentcap._split_names(m.group(1)):
+                t = t.lower()
+                t = t if t in _AGENT_FOR_TASK else agentcap.task_synonym(t, m.group(1))
+                if t in _AGENT_FOR_TASK:
+                    return "%s for task: %s" % (_AGENT_FOR_TASK[t], t)
+    except Exception:
+        pass
+    return INSTEAD

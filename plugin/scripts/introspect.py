@@ -8,11 +8,10 @@ import hashlib
 import json
 import os
 
+import i18n
 import studiolib as sl
 
 REPEAT = 3
-ASK = ("Before going on, ask: is this inefficient or wrong? In one line: what you change now, or the ledger item "
-       "you open (`budgit ledger add`); if nothing is wrong, say why and continue.")
 LIVE = ("agents_without_model", "bursts_over_limit", "agents_over_call_budget", "compactions_without_checkpoint")
 # not live: untracked inputs (own Stop guard) and research_unsaved (a running researcher has not saved yet → noise)
 
@@ -56,8 +55,8 @@ def on_failure(session_id, tool, tool_input, error):
     note = None
     if fails[key] >= REPEAT:
         fails[key] = 0
-        note = ("budgit self-check: 3rd failure of the same call (%s): %s. Retrying the same way is waste. "
-                % (key[:80], (error or "").splitlines()[0][:120] if error else "error") + ASK)
+        note = i18n.t("r1284.selfcheck_repeat", call=key[:80], error=(error or "").splitlines()[0][:120] if error else "error")
+        note += " " + i18n.ask("r1284.ask")
     _save(session_id, data)
     return note
 
@@ -152,4 +151,4 @@ def live_check(session_id, transcript_path, level=None):
                 for g in grew]
     if not grew:
         return None
-    return "budgit self-check: since the last prompt: %s (rules: reference/budget.md). " % ", ".join(grew) + ASK
+    return i18n.t("r1284.selfcheck_live", grew=", ".join(grew)) + " " + i18n.ask("r1284.ask")

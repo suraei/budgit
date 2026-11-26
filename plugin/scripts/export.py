@@ -301,6 +301,7 @@ def build(stage_dir, version, config, repo="OWNER/REPO", author=None):
         if name.endswith(".svg"):                                                # the version strip carries fields
             vendor._write(os.path.join(stage_dir, "assets", name), fill(vendor._read(os.path.join(share, name))))
     _copy_float(os.path.dirname(root), stage_dir)
+    _copy_ci(os.path.dirname(root), stage_dir, table)
     vendor._write(os.path.join(stage_dir, ".gitattributes"), "plugin/float/** -text -diff\n")   # the signed bundle: git never rewrites its bytes
     changelog = os.path.join(share, "CHANGELOG.md")                              # written by hand, shipped as it is
     if not os.path.isfile(changelog):
@@ -359,6 +360,53 @@ def _copy_float(hub, stage_dir):
         raise ExportRefused("%s/README.public.md not found: the floating Brote needs its public README" % FLOAT_SRC)
     vendor._write(os.path.join(dst, "README.md"), vendor._read(readme))
     vendor._write(os.path.join(dst, ".gitignore"), "build/\n")
+
+
+CI_TOOLS = (                       # R-1198: the only tools/ files the shipped suite imports or runs, and why
+    "runtests.py",                 # the suite runner every shard calls
+    "ci_shard.py",                 # the shard split the workflow calls
+    "pooleq.py",                   # test_runtests_equal and tests/fixtures/homecache_probe.py
+    "budgit_test.py",              # test_budget_test_cmd and the test-command tests
+    "token_baseline.py",           # test_token_baseline
+    os.path.join("index", "fnindex.py"),            # test_fnindex
+    os.path.join("tokens", "spend_split.py"),       # test_spend_split
+    os.path.join("tokens", "tokens.py"),            # test_tokens
+)
+CI_WORKFLOWS = ("tests.yml",)      # .github/workflows/: only the public test workflow; the hub's own workflows never ship
+CI_OMIT_FILE = os.path.join("tests", "ci_export_omit.txt")   # `module  # reason`: tests that need the hub, kept in the hub
+CI_ALWAYS_OMIT = ("red-runs", "kit")      # hub evidence and the TypeScript desk tests
+
+
+def _ci_omit(hub):
+    """Names under tests/ that do not ship: the fixed ones plus every module listed in CI_OMIT_FILE."""
+    names = list(CI_ALWAYS_OMIT)
+    path = os.path.join(hub, CI_OMIT_FILE)
+    if os.path.isfile(path):
+        for line in vendor._read(path).splitlines():
+            mod = line.split("#", 1)[0].strip()
+            if mod and not line.lstrip().startswith("#"):
+                names.append(mod if mod.endswith(".py") else mod + ".py")
+    return tuple(names)
+
+
+def _copy_ci(hub, stage_dir, table):
+    """R-1198: tests/ (minus the hub-only ones), the CI_TOOLS and the public workflow, so the public repo runs its own suite."""
+    tests = os.path.join(hub, "tests")
+    if not os.path.isdir(tests):
+        return
+    _copy_tree(tests, os.path.join(stage_dir, "tests"), table, _ci_omit(hub))
+    for rel in CI_TOOLS:
+        src = os.path.join(hub, "tools", rel)
+        if not os.path.isfile(src):
+            raise ExportRefused("tools/%s not found: the shipped suite needs it" % rel)
+        _refuse_odd(src)
+        vendor._copy(src, os.path.join(stage_dir, "tools", rel), 0o755 if os.access(src, os.X_OK) else 0o644)
+    for name in CI_WORKFLOWS:
+        src = os.path.join(hub, ".github", "workflows", name)
+        if not os.path.isfile(src):
+            raise ExportRefused(".github/workflows/%s not found: the public repo needs its test workflow" % name)
+        _refuse_odd(src)
+        vendor._copy(src, os.path.join(stage_dir, ".github", "workflows", name), 0o644)
 
 
 def _ledger_texts(config):

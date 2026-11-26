@@ -2,6 +2,139 @@
 
 To update, ask Claude in any chat to update Budgit: it runs `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, and reports the version. Your next chat uses it. In a terminal session, `/reload-plugins` is an optional extra. The Release notes page of the wiki has the same notes.
 
+## 0.13.9.46
+
+### Changed
+
+- The budget line follows the account figure from the app, so it no longer shows a weekly percentage your account does not have.
+- A serial full test run now tells you where the faster runner is.
+- The test gate moves up to the full suite on its own when needed.
+- A clean snapshot commit is made for the private CI push.
+
+## 0.13.9.45
+
+### Changed
+
+- Read commands are no longer asked as writes.
+- A full test suite no longer needs a click.
+- Protected names are checked before a push, with reviewed exceptions.
+- CI runs only nightly, on main and by hand.
+
+## 0.13.9.44
+
+### Changed
+
+- R-1366: ledger, inbox and progress text replace private project names with their aliases on write; a strict pre-push names check (budgit names-check) refuses a push that holds one.
+
+## 0.13.9.43
+
+### Changed
+
+- R-1313: a work folder is removed when its branch lands on main, and kept when it holds untracked files.
+
+## 0.13.9.42
+
+### Changed
+
+- R-1358: skills are picked by task type, project and request words (1-3 per task, new types finance, market data, 3D, office docs); outside tools (Codex, Gemini, OpenRouter) get a use log, a health check and a quota fallback.
+
+## 0.13.9.41
+
+### Changed
+
+- R-1359: long notes go in through a file instead of the command line: ledger add, finding add and link take --text-file; tm log --text-file; new progress add and friction add.
+
+## 0.13.9.40
+
+### Changed
+
+- R-1333: One task order: urgent bugs that stop work first, then what is marked urgent, each row with its reason; pinned items in their own block.
+
+## 0.13.9.39
+
+### Changed
+
+- R-1343: notes from the coordinator now reach the registered project manager session, which takes over automatically when the earlier one has ended.
+
+## 0.13.9.38
+
+### Changed
+
+- R-1345: an item in a project with no git repository can now be closed using a sealed PASS report as evidence.
+
+## 0.13.9.37
+
+### Changed
+
+- R-1309: the weekly budget figure now follows a plausible rise at once and only holds an outlier. A lower reading from a source that was not typed no longer replaces a correct figure.
+
+## 0.13.9.36
+
+### Changed
+
+- R-1343: the TM's briefs reach the PM as notes shown on its next turn, so relays no longer need anyone to type them.
+
+## 0.13.9.35
+
+### Changed
+
+- The weekly usage figure hold now ends (R-1309 follow-up): it lasts 6 hours after the app's own reading, or until two different sources both report a higher figure within 30 minutes, and the line says why. A row left by the previous build gets its 6 hours at the first reading after the update; a future or unknown time releases the hold; window kinds are cleaned and capped.
+- New: `budgit housekeeping procs` lists stale agent test servers (dry run); `--stop` sends SIGTERM only, and only to processes with a session marker or in a session worktree (R-1322). Ports saved with `--protect-port` or `--protect-listening` are never touched. The daily cleanup job also stops them when it runs with --apply.
+- One task-order module and a read-only dry run, with no view change (R-1333, first step).
+- Stale tests and the rules preview are updated.
+
+## 0.13.9.34
+
+### Changed
+
+- The weekly usage figure follows the app's usage panel (R-1309). A higher reading from the status line or the host no longer overwrites it; it is held and marked as possibly stale.
+- Looking at status or changes in a protected repo asks unless the safe form is used (R-1294).
+- Team rule text is corrected (R-1327).
+- A pointer or link into a protected or private folder is not checked (R-644).
+
+### Fixed
+
+- A commit right after tests run with node or npm is no longer blocked (R-1326).
+- A test table entry for the capacity set action is fixed (r901 test fix).
+
+## 0.13.9.33
+
+### Changed
+
+- The weekly budget reset is now taken and not hidden. A stale reading says its age and source.
+- The test gate always adds the leak checks when visible text changes, and it fails closed when it cannot list the changed files.
+- The model cap honours a Fable request only with a written reason at the start of a line (`ESCALATE-FABLE: <why>`). It logs the requested and served model for each agent, and when the cap check fails it lowers to the cheapest model.
+
+### Fixed
+
+- The write guard closes more ways a shell line can hide a destructive command.
+
+## 0.13.9.32
+
+### Changed
+
+- You can set how many tasks run at once per project, and it holds until your weekly reset.
+
+### Fixed
+
+- A refusal message from a hook is no longer saved as if you had typed it.
+
+## 0.13.9.31
+
+### Fixed
+
+- The guard refuses a read command whose arguments hold a shell expansion (a variable, a backtick, a home tilde) or a glob that could spell an option.
+- A home stand-in no longer hides the live checkout from the guard.
+- A line the guard cannot lex safely counts as reaching the live checkout.
+
+## 0.13.9.30
+
+### Fixed
+
+- The guard accepts a link to the user's own budgit.
+- The pinned test runner may record test timings (`--record`) from the bound main checkout only.
+- A failed Brote swap never starts a copy that failed its check, and turning Brote on keeps the version already tried.
+
 ## 0.13.9.29
 
 - **An open Brote switches to the new version.** At the next session start after an update, a Brote that is already open closes (keeping its window place) and the new one opens, once per version; if the new one cannot start, the old one comes back.
@@ -9,6 +142,90 @@ To update, ask Claude in any chat to update Budgit: it runs `claude plugin marke
 ## 0.13.9.28
 
 - **Brote dresses up on its days.** Moustache and small hat on 19 Nov, party hat on 29 Mar, flag on 25 Nov; it looks normal on other days. The README explains how to turn on auto-update.
+
+## 0.13.9.27
+
+### Fixed
+
+- Brote wears the moustache on its day; on other days it looks exactly as before.
+
+## 0.13.9.26
+
+### Fixed
+
+- Headless Chrome for design checks uses a mock keychain, so macOS no longer shows a keychain pop-up.
+
+## 0.13.9.25
+
+### Added
+
+- Skills tree: a small decision tree routes agents to skills, with a coverage check.
+
+## 0.13.9.24
+
+### Fixed
+
+- Ledger retext removes a protected project name from an input or item text: the tool replaces the name itself, fails closed and keeps no free text for inputs.
+
+## 0.13.9.23
+
+### Fixed
+
+- A subagent may read another project with `--project $HOME/...` when that read is the only command on the line; any other step on the line keeps the refusal, and a changed home variable never reaches a write target that it judged.
+
+## 0.13.9.22
+
+### Fixed
+
+- A subagent may ask `ledger finding --help` again; only changing a finding stays with the coordinator.
+
+## 0.13.9.21
+
+### Added
+
+- Ledger items keep structured findings from reviews (severity, class, state); `ledger finding add|set` and `ledger findings` record and list them, closing a finding needs a commit that exists, and an open high finding stops done and verified.
+
+## 0.13.9.20
+
+### Fixed
+
+- The commit guard reads npm, pnpm and yarn option values (--prefix, --dir, --cwd, -w) before the test word, so a test run with a folder option followed by a commit is accepted; unknown options still fail closed.
+
+## 0.13.9.19
+
+### Fixed
+
+- The guard's command tables list the new read-only `ledger timeline`, so the table tests pass again.
+
+## 0.13.9.18
+
+### Added
+
+- Live run tracking: an agent launch marks the ledger items its brief names as in progress, with who and when; a hand-back records an event; `budgit ledger timeline` shows each item's history. The launch text is shielded and redacted, a tampered ledger is never written, and the brief scan is capped.
+
+## 0.13.9.17
+
+### Changed
+
+- A test suite now checks memory like a lane but at the scheduled-job level: critical pressure, heavy swap or compressor use refuses it, warn alone does not; urgent mode reruns a known flaky test once, lets a step already in flight continue with fewer workers, and bisects a red merge group.
+
+## 0.13.9.16
+
+### Changed
+
+- The merge guard refuses a read loop with any redirect, tee, subshell, newline or loop variable after done, and takes a reader step after the loop only from a fixed flag list per reader; the secret-scanner form must stand alone with no redirect.
+
+## 0.13.9.15
+
+### Changed
+
+- The merge guard checks a read loop's variable strictly: a reassignment, source, dot, eval or any other variable refuses the line, and the guard checks the command as typed, before any home-path rewrite.
+
+## 0.13.9.14
+
+### Changed
+
+- The merge guard no longer refuses a plain command only because it names an absolute path inside the project or one of its worktrees; relative, dot-dot, variable, glob, brace and link-making words still get the full scan.
 
 ## 0.13.9.13
 

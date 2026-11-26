@@ -4,6 +4,7 @@
 import json
 import os
 import re
+import sys
 
 import studiolib as sl
 
@@ -94,9 +95,59 @@ def protected_side_session(session_id, project):
     return None
 
 
-def assign(session_id, project, cwd=None, lock_timeout=1.0):
+def _liveness_known():
+    """R-1343: whether this machine can tell a live session from an ended one. livework trusts a session file only with
+    pidDomain darwin and the kernel's start time (livework._verified), so elsewhere every PM would read as ended."""
+    return sys.platform == "darwin"
+
+
+def manual_line(done):
+    """The SessionStart notice when a takeover was withheld because liveness is unknown here (assign's result list), or None."""
+    old = next((d[len("pm-manual:"):] for d in done if d.startswith("pm-manual:")), None)
+    if not old:
+        return None
+    import i18n
+    return i18n.t("roles.pm_manual", old=old[:8])
+
+
+def _pm_ended(old):
+    """R-1343 F2: True only when no listed record names the recorded PM session `old`. live_sessions lists a record only when its
+    pid is alive; verified or not does not matter here, so a reused pid blocks the takeover (the safe direction), and a
+    running PM with no pidDomain or an off procStart is never read as ended. With no readable sessions folder nothing is known."""
+    try:
+        import livework
+        found = livework.live_sessions(verify=False)
+        if found.get("status") != "ok":
+            return False
+        return not any(s["session_id"] == old for s in found["sessions"])
+    except Exception:
+        sl.log_error("roles: pm liveness")
+        return False
+
+
+def _is_main_folder(cwd, row, project):
+    """R-1343 F1: the session's folder AND its bound project are literally the recorded project folder (real paths). Never
+    livework.canon(): it maps a worktree, or any folder holding a pointer file that names the repo, to the main repo."""
+    if not (isinstance(cwd, str) and os.path.isabs(cwd) and isinstance(project, str) and project and row and row.get("path")):
+        return False
+    here = os.path.realpath(row["path"])
+    return os.path.realpath(cwd) == here and os.path.realpath(project) == here
+
+
+def takeover_line(done):
+    """The SessionStart notice for a takeover that assign() recorded (its result list), or None."""
+    old = next((d[len("pm-from:"):] for d in done if d.startswith("pm-from:")), None)
+    if not old:
+        return None
+    import i18n
+    return i18n.t("roles.pm_takeover", old=old[:8])
+
+
+def assign(session_id, project, cwd=None, lock_timeout=1.0, interactive=True):
     """Binding time (SessionStart): a project with no recorded pm records this session as its pm; a session started in the hub
-    folder records itself as tm when none is recorded. Never overwrites a recorded tm or pm. A session whose pointer names a
+    folder records itself as tm when none is recorded. Never overwrites a recorded tm. A recorded pm is replaced only by
+    a takeover (R-1343): the recorded pm is not live, this session is interactive, top level (no parent pointer) and sits in the
+    project's own folder; the old id stays in the row as previous_pm, and the first session under the lock wins. A session whose pointer names a
     parent (a lane or nested session) is never recorded. The read-modify-write holds the portfolio lock; if it stays taken for
     `lock_timeout` seconds nothing is recorded (the hook never waits). -> list of what was written."""
     if not sl.valid_session(session_id):
@@ -116,7 +167,7 @@ def assign(session_id, project, cwd=None, lock_timeout=1.0):
         if not got:
             return []
         data = portfolio.registry()
-        done = []
+        done, hint = [], []
         if wants_tm and not data.get("tm"):
             data["tm"] = session_id
             done.append("tm")
@@ -131,9 +182,33 @@ def assign(session_id, project, cwd=None, lock_timeout=1.0):
             if not row.get("pm"):
                 row["pm"] = session_id
                 done.append("pm")
+            elif row["pm"] != session_id and interactive and not child and _is_main_folder(cwd, row, project):
+                if not _liveness_known():                      # R-1343: no way to tell a live PM from an ended one here: never take over, say how
+                    hint = ["pm-manual:" + row["pm"]]
+                elif _pm_ended(row["pm"]):                     # the PM chat was renewed or resumed under a new id; the old one is gone
+                    old = row["pm"]
+                    row["previous_pm"], row["previous_pm_at"] = old, sl.now()
+                    row["pm"] = session_id
+                    done.extend(["pm", "pm-from:" + old])
         if done:
             portfolio.save(data)
-        return done
+        return done + hint
+
+
+def take_over_now(inp, project):
+    """R-1343, UserPromptSubmit: a chat that began before the takeover existed (or whose start was skipped) gets the same
+    chance on its prompt. Cheap for a true lane: a read-only precheck first, the portfolio lock only when it may win.
+    -> the takeover notice, or None."""
+    sid = inp.get("session_id")
+    if not sl.valid_session(sid) or not project or not sl.interactive_session(inp) or _parent_of(sid):
+        return None
+    tm, entries = _entries()
+    row = next((e for e in entries if os.path.realpath(e["path"]) == os.path.realpath(project)), None)
+    if not row or not row.get("pm") or row["pm"] == sid or tm == sid:
+        return None
+    if not _liveness_known() or not _is_main_folder(inp.get("cwd"), row, project) or not _pm_ended(row["pm"]):
+        return None                                  # unknown liveness: the hint is printed at SessionStart only, never on every prompt
+    return takeover_line(assign(sid, project, inp.get("cwd")))
 
 
 def detect(session_id, project):
@@ -213,8 +288,9 @@ def session_start_parts(inp, project):
     """R-1137: -> (role or None, [(tag, text)]) for startbudget. Records the first session of a project as its PM (or a session
     the TM started, when the project has no PM yet) and the first hub session as the TM (never overwriting). Never edits
     CLAUDE.md. Tags: "role" (the fixed card and a protected-folder warning), "role.rules", "notice"."""
+    done = []
     try:
-        assign(inp.get("session_id"), project, inp.get("cwd"))
+        done = assign(inp.get("session_id"), project, inp.get("cwd"), interactive=sl.interactive_session(inp))
     except (sl.StudioError, OSError):
         sl.log_error("roles: assign")
     info = detect(inp.get("session_id"), project)
@@ -230,6 +306,12 @@ def session_start_parts(inp, project):
         out.append(("role", parts[0][-1]))
     if warn:
         out.append(("role", warn))
+    took = takeover_line(done)
+    if took:
+        out.append(("notice", took))
+    manual = manual_line(done)
+    if manual:
+        out.append(("notice", manual))
     if parts and claude_md_has_rules():
         out.append(("notice", "budgit: both rule sources are active (Budgit team rules and your CLAUDE.md team rules); CLAUDE.md wins on conflict."))
     return (info or {}).get("role"), out

@@ -40,14 +40,22 @@ def _matcher():
     return match
 
 
+def _env():
+    """S3-3: the shared safe git environment (no system config, no replace objects, no GIT_DIR / GIT_WORK_TREE)."""
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    import studiolib as sl
+    return sl.safe_git_env()
+
+
 def _trailers(text):
     """What `git interpret-trailers --parse` reads as the trailers of the cleaned message (comments stripped). A missing
     git or a failing call raises, and main() turns that into a rejection (fail closed)."""
-    clean = subprocess.run(["git", "stripspace", "--strip-comments"], input=text, capture_output=True, text=True, timeout=60)
+    clean = subprocess.run(["git", "stripspace", "--strip-comments"], input=text, capture_output=True, text=True, timeout=60, env=_env())
     if clean.returncode:
         raise RuntimeError("git stripspace failed")
     parsed = subprocess.run(["git", "interpret-trailers", "--only-trailers", "--only-input", "--unfold"],
-                            input=clean.stdout, capture_output=True, text=True, timeout=60)
+                            input=clean.stdout, capture_output=True, text=True, timeout=60, env=_env())
     if parsed.returncode:
         raise RuntimeError("git interpret-trailers failed")
     return parsed.stdout
@@ -74,7 +82,7 @@ def commit_msg(path, match):
 
 
 def _git(*args, input=None):
-    return subprocess.run(["git"] + list(args), capture_output=True, text=True, errors="replace", timeout=300, input=input)
+    return subprocess.run(["git"] + list(args), capture_output=True, text=True, errors="replace", timeout=300, input=input, env=_env())
 
 
 def _commits(range_args):
@@ -106,7 +114,7 @@ def _tag_texts(shas):
             return None
     if not tags:
         return []
-    raw = subprocess.run(["git", "cat-file", "--batch"], input=("\n".join(tags) + "\n").encode(), capture_output=True, timeout=300)
+    raw = subprocess.run(["git", "cat-file", "--batch"], input=("\n".join(tags) + "\n").encode(), capture_output=True, timeout=300, env=_env())
     if raw.returncode:
         return None
     out, data, pos = [], raw.stdout, 0
@@ -125,12 +133,17 @@ def _tag_texts(shas):
 
 def pre_push(remote, stdin, match):
     refs = []
+    pushed = []                                           # (local ref, local sha, remote ref, remote sha) of every non-delete line
+    deleted = []                                          # remote ref names of the delete lines: a name still travels
     for line in stdin.read().splitlines():
         parts = line.split()
         if len(parts) >= 4 and parts[1] != ZERO:          # a delete (local sha all zeros) sends no commit
             refs.append((parts[1], parts[3]))
+            pushed.append((parts[0], parts[1], parts[2], parts[3]))
+        elif len(parts) >= 4:
+            deleted.append(parts[2])
     if not refs:
-        return 0
+        return _names_refusal([], [], remote, deleted) if deleted else 0
     lshas = list(dict.fromkeys(l for l, _ in refs))
     rshas = list(dict.fromkeys(r for _, r in refs if r != ZERO))
     # one call: everything the pushed tips reach, minus what the remote tips we know of already hold, minus what ANY remote-tracking
@@ -155,6 +168,45 @@ def pre_push(remote, stdin, match):
         hit = match(text)
         if hit:
             return _fail("push rejected (R-1042): the tag %s carries an AI attribution line: %r." % (sha[:12], hit[:120]))
+    return _names_refusal(list(texts), pushed, remote, deleted)
+
+
+def _excluded(remote, rsha):
+    """What the remote already has for one pushed line: its old sha, or for a new branch every remote-tracking ref of `remote`
+    (none known: nothing is excluded and the full history is scanned). Raises when git cannot answer."""
+    if rsha != ZERO:
+        r = _git("cat-file", "--batch-check", input=rsha + "\n")      # L6: an old sha we do not have (diverged remote) is dropped:
+        if r.returncode:                                              # a bigger scan is safe, a failing rev-list would only block
+            raise RuntimeError("cat-file failed")
+        return [rsha] if r.stdout.split()[1:2] not in ([], ["missing"]) else []
+    r = _git("for-each-ref", "--format=%(refname)", "refs/remotes/%s/" % remote)
+    if r.returncode:
+        raise RuntimeError("for-each-ref failed")
+    return [x for x in r.stdout.splitlines() if x.startswith("refs/")]
+
+
+def _names_refusal(messages, pushed, remote, deleted=()):
+    """R-1366: ONE leak.push_check call in range mode over every pushed line (strict, fail closed): every object the push sends,
+    and the ref names (pushed and deleted); the report names an alias, never a protected name. The exclusions of all lines are
+    joined: those objects are already on the remote. Only deletes: no object is read (HEAD minus HEAD), the names still are."""
+    try:
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import leak
+        extra = list(messages) + [("ref", name) for _l, _s, lref_rref_l, _r in pushed for name in (_l, lref_rref_l)]
+        extra += [("ref", name) for name in deleted]
+        if pushed:
+            revs = list(dict.fromkeys(p[1] for p in pushed))
+            exclude = []
+            for rsha in dict.fromkeys(p[3] for p in pushed):
+                exclude += [x for x in _excluded(remote, rsha) if x not in exclude]
+        else:
+            revs, exclude = ["HEAD"], ["HEAD"]
+        hits = leak.push_check(os.getcwd(), rev=revs, messages=extra, exclude=exclude)
+        if hits:
+            return _fail("push rejected (R-1366):\n%s" % leak.names_report(hits))
+    except Exception:
+        return _fail("push blocked (fail closed): names-check could not run.")
     return 0
 
 
