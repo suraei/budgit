@@ -1032,8 +1032,9 @@ def _level_for(u7, pace, u5, m, r7=0.0, r5=0.0):
     return "normal"
 
 
-def classify(limits, prev=None, now=None):
-    """-> (level, reason). A window whose reset time has passed is treated as unused (stale snapshot)."""
+def classify(limits, prev=None, now=None, weekly_src=None, lang=None):
+    """-> (level, reason). A window whose reset time has passed is treated as unused (stale snapshot). weekly_src ("account" or
+    "estimate", R-1378) names where the weekly figure comes from at the end of the weekly line; None leaves the line bare."""
     now = now or time.time()
     live = {k: v for k, v in (limits or {}).items()
             if isinstance(v, dict) and (v.get("resets_at") or 0) > now and v.get("used") is not None}
@@ -1053,7 +1054,11 @@ def classify(limits, prev=None, now=None):
     elif "seven_day" in live:
         elapsed = 100.0 * (1 - (live["seven_day"]["resets_at"] - now) / WEEK)
         pace = u7 - elapsed
-        bits.append("weekly %d%% used with %d%% of the week elapsed (pace %+d)" % (u7, max(elapsed, 0), pace))
+        src_note = ""
+        if weekly_src:
+            import i18n
+            src_note = " " + i18n.t("r1378.src_" + weekly_src, lang)
+        bits.append("weekly %d%% used with %d%% of the week elapsed (pace %+d)%s" % (u7, max(elapsed, 0), pace, src_note))
         days = max(WEEK * max(elapsed, 0) / 100.0 / 86400, MIN_WEEK_DAYS)
         r7 = _ratio(u7, max(elapsed, 0) / 100.0, MIN_WEEK_DAYS * 86400 / WEEK)       # R-865: x the sustainable pace (100/7 % a day)
         bits.append("%d%% a day so far against %d%% a day that keeps you inside the week (%.1fx)" % (u7 / days, 100 / 7.0, r7))
@@ -1143,7 +1148,7 @@ def brote_state(limits, now=None):
             "resets_at": o["resets_at"], "h5": h5}
 
 
-def current(now=None):
+def current(now=None, lang=None):
     """-> {level, reason, source}. Persists the computed level (the hysteresis needs the previous one)."""
     data = load()
     if data.get("override") in LEVELS:
@@ -1153,7 +1158,11 @@ def current(now=None):
     if isinstance(limits, dict) and (now or time.time()) - (_num(data.get("seen_at")) or 0) > STALE_AFTER:
         limits = {k: v for k, v in limits.items() if not (isinstance(v, dict) and v.get("resets_at") is None)}   # R-522: a figure with no reset time only counts while fresh
     limits = floored(limits, data, now or time.time())      # R-1378: never below the app's account figure while its window is live
-    level, reason = classify(plan_limits(limits), prev=data.get("level"), now=now)
+    floor = _floor(data, now or time.time())
+    wk = limits.get("seven_day") if isinstance(limits, dict) else None
+    from_account = floor is not None and isinstance(wk, dict) and _num(wk.get("used")) == floor[0]      # the stored account figure is the weekly shown
+    level, reason = classify(plan_limits(limits), prev=data.get("level"), now=now,
+                             weekly_src="account" if from_account else "estimate", lang=lang)
     if data.get("level") != level:
         with _locked():                       # re-read under the lock so a merge that just happened is not overwritten
             fresh = load()

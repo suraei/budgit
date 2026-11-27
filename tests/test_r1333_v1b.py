@@ -72,7 +72,7 @@ class Urgency(V1b):
 
     def test_ya_no_se_ve_is_not_urgent(self):
         self.add(1, src=["I-1"])
-        self.inbox = [her(1, text="ya no se ve el menu lateral")]
+        self.inbox = [her(1, text="ya no se ve el boton de arriba")]
         self.assertFalse(self.row(self.order(), "R-1")["urgent"])
 
     def test_hand_due_without_her_word_is_tiebreak_only(self):
@@ -93,7 +93,7 @@ class Type(V1b):
     def test_bug_she_sees_enters_from_parked_phase(self):
         self.add(1, flags=["bug", "visible"], phase=sl.LATER_PHASE, src=["I-1"], age=20)       # the explicit mark makes it type 3
         self.add(2, flags=["bug"], phase=sl.LATER_PHASE, age=20)
-        self.inbox = [her(1, text="no se ve el menu lateral")]       # the same words without the mark change nothing
+        self.inbox = [her(1, text="hoy no se ve el boton de arriba")]       # the same words without the mark change nothing
         res = self.order()
         seen, control = self.row(res, "R-1"), self.row(res, "R-2")
         self.assertEqual(seen["type"], 3)
@@ -273,7 +273,7 @@ class UrgencyAboutThisItem(V1b):
         self.add(1, flags=["bug"], src=["legacy", "I-1"])
         self.add(2, flags=["bug"], src=["I-1"])
         self.add(3, src=["legacy", "I-1"])
-        self.inbox = [her(1, text=URGENT_ES + ", no se ve el menu lateral")]      # visible words, but R-1 only links to them
+        self.inbox = [her(1, text=URGENT_ES + ", hoy no se ve el boton de arriba")]      # visible words, but R-1 only links to them
         res = self.order()
         self.assertEqual(self.row(res, "R-1")["type"], 2)
         self.assertEqual(self.row(res, "R-2")["type"], 2)                         # the words never make type 3 (only the mark does)

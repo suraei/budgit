@@ -11,9 +11,11 @@ Every reading is a parameter, so tests inject fakes; production code reads no te
 import contextlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 PER_WORKER_MB = {"test": 300, "build": 1500}      # estimates per kind; a caller may pass its own per_worker_mb
@@ -86,11 +88,73 @@ def vm_stat_free_mb(text):
     return pages * page // (1024 * 1024) if pages else None
 
 
-def _run(cmd):
+class Owner:
+    """R-1379 P1a: the children one bounded busy check starts. `give_up()` kills every one of them and makes later run_bounded
+    calls of that check's thread return None, so an abandoned check leaves no process behind and starts no new one."""
+
+    def __init__(self):
+        self.lock, self.children, self.dead = threading.Lock(), set(), False
+
+    def give_up(self):
+        with self.lock:
+            self.dead = True
+            left = list(self.children)
+            self.children.clear()
+        for p in left:
+            kill_tree(p)
+
+
+CURRENT = threading.local()           # .owner: the Owner of the bounded check this thread works for (absent outside one)
+
+
+def kill_tree(p):
+    """Kill one child and its whole process group (it was started in its own session); never raises, never waits long."""
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout
-    except (OSError, subprocess.SubprocessError):
+        os.killpg(p.pid, signal.SIGKILL)
+    except (OSError, AttributeError, ValueError):
+        try:
+            p.kill()
+        except OSError:
+            pass
+
+
+def run_bounded(cmd, timeout=5):
+    """stdout of `cmd`, or None when it cannot run, fails to start or overruns. R-1379 P1a: the child runs in its own session
+    and on a timeout its whole group is killed and reaped with a short bound (subprocess.run waits on a killed child without
+    limit, and a child stuck in the kernel never dies, which is how `budgit busy` once hung for minutes). A child of a bounded
+    busy check is also registered with that check's Owner, which kills it when the check gives up."""
+    owner = getattr(CURRENT, "owner", None)
+    if owner is not None and owner.dead:
         return None
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+    except (OSError, ValueError):
+        return None
+    if owner is not None:
+        with owner.lock:
+            owner.children.add(p)
+        if owner.dead:
+            kill_tree(p)
+    try:
+        return p.communicate(timeout=timeout)[0]
+    except subprocess.TimeoutExpired:
+        kill_tree(p)
+        try:
+            p.communicate(timeout=1)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        return None
+    except (OSError, ValueError):
+        kill_tree(p)
+        return None
+    finally:
+        if owner is not None:
+            with owner.lock:
+                owner.children.discard(p)
+
+
+def _run(cmd):
+    return run_bounded(cmd, 5)
 
 
 def _read(path):

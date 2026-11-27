@@ -5,8 +5,8 @@ import os
 from helpers import StudioTestCase
 import studiolib as sl
 
-CARD_LINT = ("PreToolUse:AskUserQuestion hook error: budgit: El aviso cita carpetas y columnas; "
-             "redactalo con frases cortas.")
+CARD_LINT = ("PreToolUse:AskUserQuestion hook error: budgit: el texto menciona rutas y columnas; "
+             "vuelve a escribirlo sin tecnicismos.")
 POST_NOTE = "PostToolUse:Bash hook error: budgit: nota sobre la herramienta."
 
 

@@ -32,17 +32,19 @@ class TestCommandText(unittest.TestCase):
         d = _project("make verify-all")
         for text in (self.judge(UNCHAINED, d)[1], commitguard.refusal_text(d, commitguard.FIX_LINE)):
             self.assertIn("make verify-all", text[:200])
-            self.assertNotIn("runtests", text)
-            self.assertNotIn("gate_test", text)
+            bare = text.replace(d, "<project>")   # the runner's temp root is named runtests-XXXX; only the text around the path is judged
+            self.assertNotIn("runtests", bare)
+            self.assertNotIn("gate_test", bare)
 
     def test_project_without_a_command_gets_the_no_command_text(self):
         d = _project()
         text = self.judge(UNCHAINED, d)[1]
         self.assertIn("no registered test command", text[:200])
         self.assertIn("test_command", text[:200])
+        bare = text.replace(d, "<project>")
         self.assertNotIn("check:", text)
-        self.assertNotIn("runtests", text)
-        self.assertNotIn("gate_test", text)
+        self.assertNotIn("runtests", bare)
+        self.assertNotIn("gate_test", bare)
 
     def test_receipt_path_in_a_git_project_uses_the_project_text(self):
         d = _project("npm run verify")
@@ -51,7 +53,7 @@ class TestCommandText(unittest.TestCase):
             verdict = self.judge(PLAIN, d)
         self.assertEqual(verdict[0], "deny")
         self.assertIn("npm run verify", verdict[1][:200])
-        self.assertNotIn("runtests", verdict[1])
+        self.assertNotIn("runtests", verdict[1].replace(d, "<project>"))
 
     def test_plugin_checkout_gets_its_runner(self):
         self.assertEqual(self.judge(UNCHAINED, ROOT), ("deny", commitguard.REASON))

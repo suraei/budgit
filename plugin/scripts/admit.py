@@ -61,9 +61,10 @@ BUSY_EXIT = 10             # the thresholds (85 % CPU, 1 GB) live once, in admis
 def cpu_sample():
     """Summed %CPU of all processes as a share of all cores, in percent (ps on macOS and Linux). None when it cannot be read.
     Windows (a PowerShell counter) is not built: None there, so the CPU half is skipped. UNTESTED on Windows."""
+    import admission
     try:
-        out = subprocess.run(["ps", "-A", "-o", "%cpu="], capture_output=True, text=True, timeout=10).stdout
-        return sum(float(x) for x in out.split()) / cores()
+        out = admission.run_bounded(["ps", "-A", "-o", "%cpu="], 10)       # R-1379 P1a: bounded, the child is killed on a timeout
+        return None if out is None else sum(float(x) for x in out.split()) / cores()
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
 
@@ -85,7 +86,69 @@ def cpu_median(sampler=cpu_sample, sleep=None, window=60, step=5):
     return statistics.median(got) if got else None
 
 
-def is_busy(sampler=None, sleep=None, window=60, free=None, mem=None, pressure_level=None, use_cpu=True, kernel_gate=False):
+BUSY_UNKNOWN_EXIT = 12     # R-1379 P1a: `budgit busy` could not answer inside its time limit: not free, not busy, retry later
+BUSY_UNKNOWN = "busy-unknown"
+BUSY_TIMEOUT_S = 5.0       # wall-clock limit of the WORK of one check (readers, subprocesses); the requested CPU window is extra
+
+
+def busy_check(timeout=None, **kw):
+    """-> (state, why), state "free", "busy" or "unknown". R-1379 P1a: the ONE bounded busy check. It runs the reading
+    (_is_busy, same arguments as is_busy) in a worker thread and waits at most `timeout` seconds (default BUSY_TIMEOUT_S) of
+    WORK: the seconds the check sleeps on purpose for its CPU window do not count, a slow reader or a stuck subprocess does.
+    Past the limit it returns ("unknown", "busy-unknown: ...") at once, kills every child it started and leaves the thread to
+    die with its sleep; a caller treats unknown like busy with a retry, never as red and never as free."""
+    import threading
+    import time
+    import admission
+    limit = BUSY_TIMEOUT_S if timeout is None else float(timeout)
+    real_sleep = kw.get("sleep") or time.sleep
+    slept = {"done": 0.0, "since": None}            # time spent in the injected sleep (the window), excluded from the limit
+
+    def window_sleep(seconds):
+        slept["since"] = time.monotonic()
+        try:
+            real_sleep(seconds)
+        finally:
+            slept["done"] += time.monotonic() - slept["since"]
+            slept["since"] = None
+    kw["sleep"] = window_sleep
+    box = {}
+    started = time.monotonic()
+
+    def work_s():
+        since = slept["since"]
+        asleep = slept["done"] + (time.monotonic() - since if since is not None else 0.0)
+        return time.monotonic() - started - asleep
+
+    owner = admission.Owner()
+
+    def target():
+        admission.CURRENT.owner = owner              # every child this thread starts is killed when the check gives up
+        try:
+            box["result"] = _is_busy(**kw)
+        except BaseException as exc:                 # handed to the caller, never lost in the thread
+            box["error"] = exc
+    worker = threading.Thread(target=target, daemon=True)
+    worker.start()
+    while worker.is_alive() and work_s() < limit:
+        worker.join(0.02)
+    if worker.is_alive():
+        owner.give_up()
+        return "unknown", "%s: no answer after %.0f s of reading (a reader or a subprocess is stuck); retry later" % (BUSY_UNKNOWN, limit)
+    if "error" in box:
+        raise box["error"]
+    busy, why = box["result"]
+    return ("busy" if busy else "free"), why
+
+
+def is_busy(**kw):
+    """-> (busy, reason) for every in-process caller (suite wait, suite note, housekeeping, jobs). R-1379 P1a: bounded, through
+    busy_check; an unknown answer is (True, "busy-unknown: ...") so each caller treats it like busy with a retry."""
+    state, why = busy_check(**kw)
+    return state != "free", why
+
+
+def _is_busy(sampler=None, sleep=None, window=60, free=None, mem=None, pressure_level=None, use_cpu=True, kernel_gate=False):
     """-> (busy, reason). R-889b: memory first, instantly (kernel pressure, compressor, truly free memory); then the CPU
     median over the window from kernel counters (admission.SystemCPU, the ps sum only as fallback), with the swap-in rate
     measured across that same window. A reading that cannot be taken is skipped and the calm reason names it.

@@ -70,15 +70,15 @@ class Type3Evidence(R7):
         self.add(2, flags=["bug"], src=["I-2"], area="load")
         self.add(3, flags=["bug", "visible"], src=["I-3"])           # only the explicit mark makes type 3
         self.add(4, flags=["bug"], area="brote")                    # a visible area is not a mark
-        self.inbox = [her(1, text="brote queda listo y al dia para el lunes"), her(2, text="no resulta normal que demore tanto"),
-                      her(3, text="no se ve el menu lateral")]
+        self.inbox = [her(1, text="brote hoy debe quedar correcto y al dia"), her(2, text="hoy la pantalla tarda demasiado en abrir"),
+                      her(3, text="hoy no se ve el boton de arriba")]
         res = self.order()
         self.assertEqual([self.row(res, "R-%d" % i)["type"] for i in (1, 2, 3, 4)], [2, 2, 3, 2])
         self.assertNotIn(i18n.t("ledger.order_why_seen", lang="es"), lo.reason_line(self.row(res, "R-1"), "es"))     # no «arreglo de algo que ves»
 
 
 class StopsWords(R7):
-    PHRASES_ES = ("este es un blocker, varios blockers estan frenando muchas tareas del equipo",
+    PHRASES_ES = ("este blocker y otros blockers estan ralentizando varias tareas del dia",
                   "me frena todo", "no puedo seguir", "esto ralentiza", "me impidió trabajar", "impide el arranque")
     PHRASES_EN = ("it slows me down", "this blocks me", "it stopped me", "I cannot continue", "a blocker")
 

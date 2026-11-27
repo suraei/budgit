@@ -172,7 +172,7 @@ class Inheritance(Base):
         self.add(2, flags=["feature"])
         self.add(3, flags=["feature"], src=["I-2"])
         self.add(4, flags=["bug"])
-        self.inbox = [her(1, text="no se ve el menu lateral"), her(2)]      # the mark "visible": R-1 is a bug the user sees (type 3)
+        self.inbox = [her(1, text="hoy no se ve el boton de arriba"), her(2)]      # the mark "visible": R-1 is a bug the user sees (type 3)
         res = self.order()
         self.assertEqual(self.head_ids(res), ["R-2", "R-4", "R-3"])
         self.assertEqual((self.rows(res)["R-2"]["class"], self.rows(res)["R-2"]["tier"]), ("B", 0))

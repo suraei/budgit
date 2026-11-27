@@ -897,11 +897,19 @@ def cmd_setup_answer(args):
 
 def cmd_busy(args):
     """R-788, R-889b: the one busy rule (admission.busy_reason via admit.is_busy): CPU from kernel counters, memory pressure,
-    swap-ins, compressor, free memory. Exit 0 free, 10 busy; the line names the signal that fired."""
+    swap-ins, compressor, free memory. Exit 0 free, 10 busy; the line names the signal that fired. R-1379 P1a: the reading has a
+    hard limit (admit.BUSY_TIMEOUT_S of work, 5 s, children killed); past it the answer is exit 12 "busy-unknown": retry later,
+    never free and never red."""
     import admit
-    busy, why = admit.is_busy(window=args.window)
-    print("busy: " + why if busy else "not busy")
-    return admit.BUSY_EXIT if busy else 0
+    # No --window: ONE instant reading (window 0), so the CLI answers within 5 s. A caller that needs the steady median (admission
+    # before a full suite, suitewait) passes its window explicitly and gets that window plus 5 s at most.
+    window = getattr(args, "window", None)
+    state, why = admit.busy_check(window=0 if window is None else window)
+    if state == "unknown":
+        print(why)
+        return admit.BUSY_UNKNOWN_EXIT
+    print("busy: " + why if state == "busy" else "not busy")
+    return admit.BUSY_EXIT if state == "busy" else 0
 
 
 def cmd_ext_review(args):
@@ -3676,8 +3684,8 @@ def build_parser(tm_file=False):
     s = sub.add_parser("repo-read", parents=[common], help="read-only repo verbs for helpers: [--repo DIR] status|log|diff|show|merge-base [flags] [-- paths], or grep -e PATTERN [flags] [REV] [-- paths], ls [REV] [-- paths], lines PATH START END (at most 400 lines), lines --count PATH; run under a sandbox")
     s.add_argument("rest", nargs=argparse.REMAINDER)
     s.set_defaults(func=lambda a: sys.exit(__import__("repo_read").main(a.rest)))
-    s = sub.add_parser("busy", parents=[common], help="is the machine busy? CPU over 85 %% of cores (kernel counters), memory pressure, sustained swap-ins, a full compressor or too little free memory: exit 10, else 0")
-    s.add_argument("--window", type=int, default=60, help="seconds of CPU sampling (default 60)")
+    s = sub.add_parser("busy", parents=[common], help="is the machine busy? CPU over 85 %% of cores (kernel counters), memory pressure, sustained swap-ins, a full compressor or too little free memory: exit 10, else 0; exit 12 (busy-unknown) when the reading itself overruns 5 s: retry later")
+    s.add_argument("--window", type=int, default=None, help="seconds of CPU sampling for the steady median; without it one instant reading, answered within 5 s (R-1379 P1a)")
     s.set_defaults(func=cmd_busy)
     s = sub.add_parser("ext-review", parents=[common],
                        help="one timed, tagged wrapper for an external-model review (auto: gemini, then codex, then openrouter); exit 3 none, 4 timeout, 5 unavailable")

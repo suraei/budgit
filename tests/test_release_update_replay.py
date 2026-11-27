@@ -21,7 +21,7 @@ import test_pinned_runner_allow as pra
 
 BASE_VERSION = "0.13.9.27"
 BASE_SHA = "f7305f43"          # the commit that set plugin.json to BASE_VERSION
-NEW_VERSION = "0.13.9.46"
+NEW_VERSION = "0.13.9.48"
 MAIN_ONLY = sys.platform == "darwin"
 HOOK_REL = os.path.join("scripts", "hook.py")
 

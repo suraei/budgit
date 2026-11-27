@@ -445,7 +445,7 @@ class PromiseMatrixTest(unittest.TestCase):
 
 # ---------- the worked cases: the stated verdict of each, asserted ----------
 
-CASE_VERDICT = {"1-residence-ei.md": "ámbar", "2-weekend-plan.md": "ámbar", "3-own-accounts.md": "ámbar", "4-crypto.md": "ámbar",
+CASE_VERDICT = {"1-residence-ei.md": "ámbar", "2-plan-finde.md": "ámbar", "3-own-accounts.md": "ámbar", "4-crypto.md": "ámbar",
                 "5-budgit-licences.md": "rojo", "6-onphone-osint.md": "rojo", "7-work-timesheets.md": "ámbar"}
 
 
@@ -453,7 +453,7 @@ LICENCES_CASE = "5-budgit-licences.md"
 U, E = "green-unverified", "escalation-trigger"
 # The exact hard codes each worked case gets when its verdict is rewritten as VERDE (rows are fresh on the frozen day, so case 5
 # fails on the trigger alone; the others also rest on an unverified row or source).
-CASE_GREEN_CODES = {"1-residence-ei.md": [U], "2-weekend-plan.md": [U, E], "3-own-accounts.md": [U], "4-crypto.md": [U, E],
+CASE_GREEN_CODES = {"1-residence-ei.md": [U], "2-plan-finde.md": [U, E], "3-own-accounts.md": [U], "4-crypto.md": [U, E],
                     "5-budgit-licences.md": [E], "6-onphone-osint.md": [U, E], "7-work-timesheets.md": [U, E]}
 
 

@@ -36,7 +36,8 @@ var DIRECTOR = (function () {
     think:  { id: 'pc_think',  loop: [0, 32] },
   }
   /* an API error class -> how he looks: the account (login, payment, organisation) is three small stories that alternate; a limit, a busy server or anything else is a calm pause */
-  const ACCOUNT = { authentication_failed: 1, oauth_org_not_allowed: 1, account_on_hold: 1, billing_error: 1, cloud_credential_error: 1 }
+  const ACCOUNT = { billing_error: 1 }                                 // only a billing stop is the money story; a login or account problem (authentication_failed, oauth_org_not_allowed, account_on_hold, cloud_credential_error) is the calm pause
+  const STUCK_MAX = 6000                                               // a stuck face gives up after 10 minutes without an event from its session (a scheduled task never sends a next message)
   const BROKE = ['c_broke_coin', 'c_broke_cane', 'c_broke_cry'], BROKE_TICKS = 160      // each 8 s story plays whole at TEMPO (16 s), then the next one
   const NO_BROWS = /^bw[LR]$/                           // the eyebrows are gone everywhere: drop them if an older bank still draws them
 
@@ -245,6 +246,7 @@ var DIRECTOR = (function () {
     event(ev) {
       if (!ev || !KINDS[ev.k]) return
       const s = this.session(ev.sid)
+      const wasOpen = s.open
       s.last = this.t
       const c = this.clock()
       if (this.morningDay !== c.day) { this.morningDay = c.day; this.morningDue = c.h >= 5 && c.h < 12 }
@@ -257,6 +259,7 @@ var DIRECTOR = (function () {
           this.intro = { sid: ev.sid, until: this.t + INTRO }; this.outro = null; this.answered = null; this.desk = null
           break
         case 'pre':
+          if (this.stuck && this.stuck.sid !== ev.sid && !wasOpen) this.stuck = null   // another session starts a turn: the stuck face is old news
           if (ev.tool === 'AskUserQuestion') { dropMarker(['done', 'ask', 'perm']); this.open(ev.sid, 'ask'); break }
           dropMarker(['done', 'ask', 'perm']); this.unstick(ev.sid)
           if (!s.open) { s.open = true; s.since = this.t }                     // the app started in the middle of a turn
@@ -360,6 +363,7 @@ var DIRECTOR = (function () {
         const s = this.sessions[sid]
         if (s.open && this.t - s.last > (s.running ? STALE_RUNNING : STALE_QUIET)) { s.open = false; s.running = 0; this.note('turn timed out') }
       })
+      if (this.stuck && this.t - Math.max(this.stuck.t0, (this.sessions[this.stuck.sid] || { last: 0 }).last) >= STUCK_MAX) { this.stuck = null; this.note('stuck gave up') }
       if (this.intro && this.t >= this.intro.until) this.intro = null
       if (this.outro && this.t >= this.outro.until) this.outro = null
       if (this.answered && this.t >= this.answered.until) this.answered = null

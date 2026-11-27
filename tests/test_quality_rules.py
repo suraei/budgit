@@ -125,7 +125,7 @@ class QualityRulesTest(unittest.TestCase):
             self.assertIn(rule, build, rule)
 
     def test_money_moves_paper_first(self):
-        # wave 3 row 8 (ecc-deep-extraction l.74): trading-class apps never go live on model confidence
+        # wave 3 row 8 (ecc-deep-extraction l.74): CriptoSis-class apps never go live on model confidence
         lens = read(K, "lenses", "security.md")
         for rule in ("paper", "model confidence", "replay", "risk limits", "the user's approval"):
             self.assertIn(rule, lens, rule)

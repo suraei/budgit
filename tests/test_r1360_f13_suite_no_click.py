@@ -291,7 +291,7 @@ class SuiteNoClick(StudioTestCase):
         self.assertEqual(call[2], [self.lane])                           # the only path is the project, checked as a read target
         for stray in ("--receipt", "--out", "--file", "--record"):
             self.assertDenied("%s suite --project %s %s %s/receipt" % (self.main_cli, self.lane, stray, self.home))
-        self.assertEqual(sl.RUNTESTS_SHA256, "176b5c9664fe231004efb7e24ef0d04a917618f80e7338a87b0199a9804c2867")
+        self.assertEqual(sl.RUNTESTS_SHA256, "208c09a75487bd619890431e3c8063fdc4ad77b7b42a425bfe2bd2130b2e5b32")
         self.assertEqual(sl._cli_table()["suite"], ("suite", (), ()))
 
 

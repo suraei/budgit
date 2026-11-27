@@ -2,6 +2,22 @@
 
 To update, ask Claude in any chat to update Budgit: it runs `claude plugin marketplace update budgit-hub`, then `claude plugin update budgit@budgit-hub`, and reports the version. Your next chat uses it. In a terminal session, `/reload-plugins` is an optional extra. The Release notes page of the wiki has the same notes.
 
+## 0.13.9.48
+
+### Fixed
+
+- Brote shows the out-of-money animation only when the account really has a billing stop. A sign-in or account problem shows the calm pause instead, and a stuck face clears by itself after 10 minutes or when another chat starts.
+
+## 0.13.9.47
+
+### Changed
+
+- A verifier can read through a newer installed copy of Budgit, and writes into the plugin install area now ask.
+- The commit guard accepts the project's own registered test command, but only after you approve its exact text at a terminal; commands that test nothing never count.
+- `budgit busy` answers within 5 seconds (busy-unknown exits 12: wait and retry), and the gate's full suite runs through the parallel workers, about 14 minutes instead of many hours.
+- The plain weekly budget line says whether it comes from the app's reading or is an estimate.
+- The gitleaks ignore file gains a reason comment.
+
 ## 0.13.9.46
 
 ### Changed

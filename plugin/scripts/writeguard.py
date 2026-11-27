@@ -22,6 +22,7 @@ _PERSIST_PATH = re.compile(
     r"(?:^|/)(?:\.githooks|\.husky|launchagents|launchdaemons|\.ssh|\.zshrc\.d)(?:/|$)|(?:^|/)\.mcp\.json$|"
     r"(?:^|/)\.config/git(?:/|$)|"
     r"(?:^|/)\.claude/(?:settings(?:\.local)?\.json|hooks)(?:/|$)|"
+    r"(?:^|/)\.claude/plugins/(?:installed_plugins\.json|known_marketplaces\.json|cache|marketplaces)(?:/|$)|"  # plugin install area
     r"(?:^|/)(?:\.envrc|\.zshrc|\.zshenv|\.zprofile|\.zlogin|\.zlogout|\.bashrc|\.bash_profile|\.bash_login|\.bash_logout|"
     r"\.profile|\.inputrc|\.gitconfig|\.npmrc|\.yarnrc|\.yarnrc\.yml|\.pypirc|\.netrc|\.pgpass)$|"
     r"(?:^|/)(?:pip\.conf|pip\.ini)$|"
@@ -29,7 +30,7 @@ _PERSIST_PATH = re.compile(
 # code that names such a place without a slash (os.path.join('.git', 'hooks', ...)) or spells it in the open
 _PERSIST_CODE = re.compile(
     r"\.git\b(?![\w-])|\bhooks?\b|\.(?:zshrc|zshenv|zprofile|zlogin|bashrc|bash_profile|profile|envrc|gitconfig|npmrc|pypirc|netrc)\b|"
-    r"launch(?:agents|daemons)|\.ssh\b|settings(?:\.local)?\.json|/etc/", re.I)
+    r"launch(?:agents|daemons)|\.ssh\b|settings(?:\.local)?\.json|installed_plugins|known_marketplaces|/etc/", re.I)
 _UNREADABLE = re.compile(r"[$`]")
 
 _DEST_ONLY = {"cp", "install", "rsync", "ditto", "ln"}      # only the destination is written

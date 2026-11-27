@@ -9,8 +9,58 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# One run per workflow and ref: a newer push cancels the older run still going.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
+  cancel-in-progress: true
 jobs:
+  # The nightly run skips when this sha already has a successful run of this workflow; push and workflow_dispatch always run.
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.chk.outputs.run }}
+    steps:
+      - id: chk
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          n=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/tests.yml/runs?head_sha=${GITHUB_SHA}&status=success" --jq .total_count || echo 0)
+          if [ "${n:-0}" -gt 0 ]; then
+            echo "sha ${GITHUB_SHA} already has a successful run: skipping the nightly"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+  # The fast tier: the Linux-safe modules (tests/ci_linux_skip.txt) minus the slow ones (tools/gate_test.slow_modules).
+  # A broken tree fails here, so the 8 shard jobs below wait for it instead of all failing together.
+  fast:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Run the fast tier
+        run: |
+          mods=$(python3 -c 'import sys; sys.path.insert(0, "tools"); import ci_shard, gate_test; kept, _ = ci_shard.apply_skip(ci_shard.discover(), ci_shard.load_skip(), "linux"); slow = set(gate_test.slow_modules() or []); print(" ".join(m for m in kept if m not in slow))')
+          if [ -z "$mods" ]; then
+            echo "::error::the fast tier module list is empty; refusing to run the runner with no modules"
+            exit 1
+          fi
+          python3 tools/runtests.py --workers 3 $mods
   tests:
+    needs: [gate, fast]
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:

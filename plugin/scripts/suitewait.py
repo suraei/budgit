@@ -27,7 +27,7 @@ import time
 NICE = 10
 POLL = 1.0
 LOAD_POLL = 30
-BUSY_WINDOW = 15            # seconds of CPU sampling at launch (budgit busy defaults to 60; a suite should not idle a minute)
+BUSY_WINDOW = 15            # seconds of CPU sampling at launch (passed explicitly: `budgit busy` without --window takes one instant reading; a suite should not idle a minute)
 HOLDER_EVERY = 60
 ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
 

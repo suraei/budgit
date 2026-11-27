@@ -232,8 +232,11 @@ class RealTreeTest(unittest.TestCase):
         with mock.patch.object(gt, "prepare", return_value=list(sys.path)), \
                 mock.patch.object(gt, "check_dataless", return_value=None), \
                 mock.patch.object(gt, "branch_files", return_value=[LEAK]), \
-                mock.patch.object(gt.unittest, "main", fake_main), redirect_stdout(out):
-            rc = gt.main(["test_a"])
+                mock.patch.object(gt.unittest, "main", fake_main), \
+                mock.patch.object(gt, "run_full_suite", lambda mods, **k: ran.extend(mods) or 0), \
+                mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if k != gt.NESTED_ENV}, clear=True), \
+                redirect_stdout(out):
+            rc = gt.main(["test_a"])      # R-1379 P1a: the escalated modules go to run_full_suite (runtests workers), not unittest.main
         self.assertEqual(rc, 0)
         self.assertIn("test_livework", ran)
         self.assertIn("test_r1229_retext", ran)
@@ -430,8 +433,11 @@ class NoBypassTest(unittest.TestCase):
         with mock.patch.object(gt, "prepare", return_value=list(sys.path)), \
                 mock.patch.object(gt, "check_dataless", return_value=None), \
                 mock.patch.object(gt, "branch_files", return_value=[LEAK]), \
-                mock.patch.object(gt.unittest, "main", fake_main), redirect_stdout(out):
-            patches = [mock.patch.object(gt, n, spies[n]) for n in SEVEN]
+                mock.patch.object(gt.unittest, "main", fake_main), \
+                mock.patch.object(gt, "run_full_suite", lambda mods, **k: ran.extend(mods) or 0), \
+                mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if k != gt.NESTED_ENV}, clear=True), \
+                redirect_stdout(out):
+            patches =[mock.patch.object(gt, n, spies[n]) for n in SEVEN]
             for p in patches:
                 p.start()
             try:

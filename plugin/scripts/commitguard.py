@@ -101,8 +101,10 @@ _PKG_BOOL_OPTS = {"--silent", "-s", "--quiet", "-q", "--if-present", "--recursiv
                   "--frozen-lockfile", "--no-color", "--color"}
 
 
-def is_test_run(segment):
-    """True when the segment's head (after wrappers) is a known test runner. echo, printf, true and : never are."""
+def is_test_run(segment, registered=None):
+    """True when the segment's head (after wrappers) is a known test runner. echo, printf, true and : never are.
+    R-1360 F41: `registered` (registered_tokens) is the project's own test_command as wrapper-stripped tokens; a segment whose
+    wrapper-stripped tokens equal it exactly is a test run too."""
     try:
         t = _strip_wrappers(shlex.split(segment))
     except ValueError:
@@ -112,6 +114,8 @@ def is_test_run(segment):
     head, args = os.path.basename(t[0]), t[1:]       # /bin/test and /usr/bin/[ are the builtins too
     if head in ("test", "[", "[["):                  # they test a file, not the code
         return False
+    if registered and t == registered:               # token lists, not substrings: an extra argument is a different command
+        return True
     if _PYTHON.fullmatch(head):
         i = 0
         while i < len(args):
@@ -373,6 +377,7 @@ def judge(tool, tool_input, agent_id, cwd=None, now=None):
     if not isinstance(cmd, str) or "commit" not in cmd:
         return None
     segs = split_chain(cmd)
+    reg = registered_tokens(cwd) if cwd else None
     for i, (seg, _) in enumerate(segs):
         if not _COMMIT.search(seg):             # R-1326: no read exemption, the anywhere-match alone decides
             continue
@@ -386,7 +391,7 @@ def judge(tool, tool_input, agent_id, cwd=None, now=None):
             # status of the LAST command, so a failing test would still commit: it is NOT a test run. Only when `set -o pipefail`
             # came earlier in the same line does the pipeline keep the test's status (_pipefail_before walks set -o / +o as state);
             # then any member of it may be the test.
-            if is_test_run(segs[j][0]) or (any(is_test_run(x) for x, _ in segs[s:j]) and _pipefail_before(segs, s)):
+            if is_test_run(segs[j][0], reg) or (any(is_test_run(x, reg) for x, _ in segs[s:j]) and _pipefail_before(segs, s)):
                 ok = True
                 break
             j = s
@@ -405,8 +410,9 @@ def judge(tool, tool_input, agent_id, cwd=None, now=None):
 
 
 # R-1360 C3: Budgit's own runner (tools/runtests.py) exists only in the Budgit checkout. In any other project the refusal names that
-# project's registered `test_command` (its .studio/project.json), or says plainly it has none. Text only: no decision depends on it.
-NO_COMMAND = ("budgit guard: this project has no registered test command: set \"test_command\" in its .studio/project.json, then chain "
+# project's registered `test_command` (its .studio/project.json), or says plainly it has none. The text only advises. Whether a
+# registered command is accepted at all is decided by registered_state (F41, F43: approved at a terminal, not a no-op, not chained).
+NO_COMMAND = ("budgit guard: this project has no registered test command: set \"test_command\" in its %s/project.json, then chain "
               "it before the commit: <test_command> && git commit ... (joined with &&; not ; or ||).")
 
 
@@ -416,6 +422,86 @@ def _project_root(cwd):
         return studiolib.suite_repo_root(cwd) or os.path.realpath(cwd)
     except Exception:
         return os.path.realpath(cwd)
+
+
+def _data_folder_name(cwd):
+    """The data folder the project really uses (.budgit once migrated, else .studio), as studiolib.resolve_data_dir picks it."""
+    try:
+        import studiolib
+        return os.path.basename(studiolib.resolve_data_dir(_project_root(cwd)))
+    except Exception:
+        return ".studio"
+
+
+_NO_OP_HEADS = {"true", "false", ":", "echo", "printf", "exit", "test", "[", "[["}
+_PY_C_CLUSTER = re.compile(r"-[BdEhIiOPqsSuvVxX]*c")
+
+
+def _chained(command):
+    """True when the command has a shell operator outside quotes (&& || | ; & a redirect, a subshell or substitution, a newline, a
+    backtick). Such a command never equals one chain segment, so it cannot be a registered test command."""
+    if "\n" in command or "`" in command:
+        return True
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return any(t and all(c in "();<>|&" for c in t) for t in lexer)
+    except ValueError:
+        return True
+
+
+def _no_op(tokens):
+    """True when the wrapper-stripped command can only succeed or print, whatever it is told to run: true, false, :, echo, printf,
+    exit, test, [ ; python -c ... ; or no command at all."""
+    if not tokens:
+        return True
+    head, args = os.path.basename(tokens[0]), tokens[1:]
+    if head in _NO_OP_HEADS:
+        return True
+    if _PYTHON.fullmatch(head):
+        i = 0
+        while i < len(args):
+            a = args[i]
+            if a == "-m":
+                return False
+            if a == "-c" or _PY_C_CLUSTER.fullmatch(a):
+                return True
+            if a in _PY_ARG_OPTS:
+                i += 2
+            elif a.startswith("-"):
+                i += 1
+            else:
+                return False
+    return False
+
+
+def registered_state(cwd):
+    """F43: (tokens, why, command, project) for the project's registered `test_command`. `tokens` is the wrapper-stripped command,
+    set only when the command may count (why is None). `why` is None, "none" (missing, empty, not a string or does not parse),
+    "chained" (has a shell operator), "noop" (does nothing, approved or not) or "unapproved" (the user has not approved this exact
+    string at a terminal: studiolib.test_command_approved, digest only, the standing yes does not count)."""
+    project = _project_root(cwd)
+    try:
+        import studiolib
+        command = studiolib.load_project_config(project).get("test_command")
+        if not isinstance(command, str) or not command.strip():
+            return None, "none", None, project
+        if _chained(command):
+            return None, "chained", command, project
+        tokens = _strip_wrappers(shlex.split(command))
+        if _no_op(tokens):
+            return None, "noop", command, project
+        if not studiolib.test_command_approved(project, command, digest_only=True):
+            return None, "unapproved", command, project
+        return tokens, None, command, project
+    except Exception:
+        return None, "none", None, project
+
+
+def registered_tokens(cwd):
+    """F41, F43: the project's registered `test_command` as wrapper-stripped tokens when it may count (approved, not a no-op, not
+    chained), else None. Compared token by token with a chain segment, so it never matches a longer or different command."""
+    return registered_state(cwd)[0]
 
 
 def _is_budgit_checkout(root):
@@ -443,8 +529,25 @@ def refusal_text(cwd, budgit_text):
         return budgit_text
     command = registered_test_command(cwd)
     if command:
+        _, why, _, project = registered_state(cwd)
+        if why == "chained":
+            return ("budgit guard: this project's registered test command (%s) has a shell operator (&&, ||, |, ;, a redirect or $( ), "
+                    "so it cannot be registered: it can never match one step of the chain. Register one plain command, then chain it "
+                    "before the commit." % command)
+        if why == "noop":
+            return ("budgit guard: this project's registered test command (%s) does nothing (true, false, :, echo, printf, exit, "
+                    "test, [ or python -c), so it is never accepted, approved or not. Register a real test runner." % command)
+        if why == "unapproved":
+            try:
+                import studiolib
+                approve = studiolib.approve_command(project)
+            except Exception:
+                approve = "budgit prepare --approve"
+            return ("budgit guard: this project's registered test command is not approved yet: %s . The user approves it once at a "
+                    "terminal (read the command, answer y): %s . Then chain it before the commit: <test_command> && git commit ... "
+                    "(joined with &&; not ; or ||)." % (command, approve))
         return "budgit guard: chain this project's registered test command before the commit: %s && git commit ... (joined with &&; not ; or ||)." % command
-    return NO_COMMAND
+    return NO_COMMAND % _data_folder_name(cwd)
 
 
 def decision(tool, tool_input, agent_id, cwd=None, now=None, verdict=None):

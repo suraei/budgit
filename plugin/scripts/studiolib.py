@@ -5819,7 +5819,7 @@ def _git_common_dir(root):
     return None
 
 
-RUNTESTS_SHA256 = "176b5c9664fe231004efb7e24ef0d04a917618f80e7338a87b0199a9804c2867"    # R-1058: tools/runtests.py as read and approved; update on purpose with a change to it (R-1149: compileall runs with safepath flags from the checkout root; R-1259: the green-run receipt; the runner now also writes a per-module times file and skips the receipt on a partial run; a red run keeps its worker logs and workers start from an allowlist of the caller's environment)
+RUNTESTS_SHA256 = "208c09a75487bd619890431e3c8063fdc4ad77b7b42a425bfe2bd2130b2e5b32"    # R-1058: tools/runtests.py as read and approved; update on purpose with a change to it (R-1149: compileall runs with safepath flags from the checkout root; R-1259: the green-run receipt; the runner now also writes a per-module times file and skips the receipt on a partial run; a red run keeps its worker logs and workers start from an allowlist of the caller's environment; R-1379: the runner's busy read)
 
 
 def _is_test_runner(tokens, words, cwd, user_home, project=None):
@@ -6359,7 +6359,7 @@ def _home_write_target_unsafe(raw):
     return bool("{" in rest or "IFS" in rest or _HOME_WORD.search(rest) or _HOME_CHANGERS.search(rest))
 
 
-def _cli_call(tokens, words, text="", cwd=None, home=None, project=None, user_home=None):
+def _cli_call(tokens, words, text="", cwd=None, home=None, project=None, user_home=None, sibling=False):
     """R-901: (table key, entry, path values, python form) of a call to THIS plugin's own CLI, else None. Two shapes only: the
     own `budgit` (absolute, or found on the hook's PATH, `_is_own_budgit`) and a pinned absolute python3 + the pinned CLI
     (`_pinned_python`, `_pinned_cli`, realpath). No env prefix, no wrapper (words equal tokens). `--project V` values are paths."""
@@ -6371,11 +6371,13 @@ def _cli_call(tokens, words, text="", cwd=None, home=None, project=None, user_ho
     # R-1199: a `$` anywhere in the call is judged below (_var_args_ok): only a plain `$name` in argument position of a read row passes
     if cwd is not None and _in_home(cwd):
         return None                                      # L2: the command's own folder is a Budgit home
-    alt = False
+    alt = sib = False
     if _is_own_budgit_name(tokens[0]) and _canonical_word(tokens[0]):
         k, py = 0, False
     elif _suite_cli_word(tokens[0], project, user_home):
         k, py, alt = 0, False, True                      # R-1360 F13: main's or a lane's own CLI, for `suite` only (checked below)
+    elif sibling and _is_sibling_budgit(tokens[0]) and _canonical_word(tokens[0]):
+        k, py, sib = 0, False, True                      # R-1360 F37: a sibling installed version, read verbs only (checked below)
     elif len(tokens) > 1 and re.fullmatch(r"python[\d.]*", os.path.basename(tokens[0])) and _pinned_python(tokens[0]) \
             and _pinned_cli(tokens[1]) and _canonical_word(tokens[1]):
         k, py = 1, True
@@ -6396,7 +6398,7 @@ def _cli_call(tokens, words, text="", cwd=None, home=None, project=None, user_ho
             rest.append(t)
         i += 1
     if rest in (["--help"], ["-h"]):                     # R-1173 part 2: root help prints and exits before any code runs
-        if alt:
+        if alt or sib:
             return None                                  # R-1360 F13: another checkout's CLI runs `suite` only
         return "help", ("none", (), ()), paths, py
     if not rest or rest[0].startswith("-"):
@@ -6439,6 +6441,8 @@ def _cli_call(tokens, words, text="", cwd=None, home=None, project=None, user_ho
             entry = ("home", (), ())
     if alt and (key != "suite" or entry[0] != "suite" or not paths):
         return None                                    # R-1360 F13: another checkout's CLI runs `suite` and nothing else; any other verb keeps the "other CLI" denial
+    if sib and not _sibling_read_ok(key, args, entry):
+        return None                                    # R-1360 F37: a sibling version runs read verbs only; the rest keeps the "other CLI" denial
     if key == "prepare" and any(a.startswith("--a") and "--approve".startswith(a.partition("=")[0]) for a in args):
         entry = ("home", (), ())                         # R-1014: `prepare --approve` (or an argparse abbreviation of it) is the user's approval: refused for tools
     if key in ("budget", "comply", "rm-guard status") and not _bare_form(key, args):
@@ -6561,7 +6565,7 @@ def _home_write_decision(tool, tool_input, cwd=None, verifier=False, box=None, s
         dirs, unknown_cwd = step["dirs"], step["unknown_cwd"]
         call = _cli_call(tokens, words, raw_text if "$" in raw_text or "`" in raw_text else text, dirs[-1],
                          None if moved or not _home_var_stays(raw_text, steps) else os.path.expanduser("~"),
-                         project=box.get("project"), user_home=user_home)  # round 7: the line as written (`$HOME` was expanded in text); R-1220: a leading `$HOME` of a read row's `--project` is the user's home; R-901: this plugin's own CLI; its arguments are the CLI's, not the interpreter's
+                         project=box.get("project"), user_home=user_home, sibling=bool(subagent and verifier))  # round 7: the line as written (`$HOME` was expanded in text); R-1220: a leading `$HOME` of a read row's `--project` is the user's home; R-901: this plugin's own CLI; its arguments are the CLI's, not the interpreter's
         if subagent:                                     # M1: an allow list, not a list of wrappers
             if call and call[0] == "ledger finding" and not _finding_add(tokens) and call[1][0] != "none":
                 return deny                              # R-1213: a subagent only adds findings; `finding set` stays with the coordinator (a help shape is class "none" after the shared help check, R-1235)
@@ -10413,6 +10417,51 @@ def _is_own_budgit(word):
     if not cand or not os.path.isabs(cand) or os.path.islink(cand):
         return False
     return os.path.join(os.path.realpath(os.path.dirname(cand)), "budgit") == _own_budgit() and os.path.isfile(cand)
+
+
+_SIBLING_VERSION = re.compile(r"\d+(?:\.\d+)*")
+_SIBLING_READ_KEYS = frozenset(("secrets", "budget", "status", "names-check", "ledger show", "ledger list", "ledger findings"))
+_SIBLING_FLAGS = frozenset(("--json",)) | _STATUS_FLAGS
+
+
+def _is_sibling_budgit(word):
+    """R-1360 F37: the word is `<ver>/bin/budgit` of ANOTHER version folder of the same installed plugin as the hook's own copy
+    (the same plugins/cache/<marketplace>/<plugin>/ parent): an absolute path with no symlink anywhere on it, a regular file,
+    a version-like folder name. A worktree, a copy elsewhere or a look-alike folder is never one (own copy outside the cache: never)."""
+    if not word or word.startswith("~") or os.sep not in word or os.path.basename(word) != "budgit" or not os.path.isabs(word):
+        return False
+    if os.path.normpath(word) != word or os.path.realpath(word) != word or os.path.islink(word) or not os.path.isfile(word):
+        return False
+    own_root = os.path.dirname(os.path.dirname(_own_budgit()))
+    parent = os.path.dirname(own_root)
+    plugins = os.path.dirname(os.path.dirname(os.path.dirname(parent)))
+    if os.path.basename(os.path.dirname(os.path.dirname(parent))) != "cache" or os.path.basename(plugins) != "plugins":
+        return False
+    root = os.path.dirname(os.path.dirname(word))
+    if not (os.path.dirname(root) == parent and root != own_root and os.path.basename(os.path.dirname(word)) == "bin"
+            and _SIBLING_VERSION.fullmatch(os.path.basename(root))):
+        return False
+    try:                                                 # round 3: fail closed on any error below
+        if os.lstat(word).st_nlink != 1:
+            return False                                 # M1: a hard link is another path to some inode
+        import updatelib
+        sibling_version = updatelib.registered_root(root)     # M1: a registered, user-owned, not group/other-writable install
+        if not sibling_version:
+            return False
+        return bool(updatelib.older(updatelib.running_version(own_root), sibling_version))    # M2: only a NEWER sibling
+    except Exception:
+        return False
+
+
+def _sibling_read_ok(key, args, entry):
+    """R-1360 F37: a sibling version's CLI runs only the read verbs of `_SIBLING_READ_KEYS`, with no flag but `--json` (and the
+    status display flags): `--mine`, `--install-hook` or any other flag keeps the "other checkout" refusal."""
+    if key not in _SIBLING_READ_KEYS or entry[0] == "home":
+        return False
+    if key == "status" and "--line" not in args and "--brote" not in args:
+        return False                                     # round 3: plain `status` reconciles the ledger under the lock (a write)
+    allowed = _SIBLING_FLAGS | (_STATUS_VALUE_FLAGS if key == "status" else frozenset())
+    return all(not a.startswith("-") or a in allowed for a in args)
 
 
 def _link_chain_in_protected(cand, project, patterns, base):

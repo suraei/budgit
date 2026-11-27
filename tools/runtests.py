@@ -121,6 +121,7 @@ def list_home_readers(tests_dir=None):
 # Terminal's CLAUDE_* and BUDGIT_*, tokens, a stale BUDGIT_HOME) stays out. A name is added here only when a test needs it.
 ENV_KEEP = ("PATH", "LANG", "TERM", "USER", "LOGNAME", "SHELL", "BUDGIT_TEST_REAL_HOME",
             "SDKROOT", "MACOSX_DEPLOYMENT_TARGET", "DEVELOPER_DIR", "TOOLCHAINS", "SOURCE_DATE_EPOCH", "BROTE_FORCE_OS",   # tests/brotecache.py KEY_ENV (a test checks the lists match): they choose the compiler and feed the build-cache key, so a caller's value must reach the build
+            "GATE_TEST_NESTED",         # R-1379 P1a: the marker tools/gate_test.run_full_suite sets; a gate run inside a worker never escalates again
             "BUDGIT_TEST_CACHE")        # BUDGIT_TEST_CACHE: test_runtests_home.test_a_cache_the_caller_set_is_kept needs a caller's Swift-build cache path to reach the workers
 ENV_RUNNER = ("TMPDIR", "HOME", "BUDGIT_HOME", "BUDGIT_LANG", "BUDGIT_ADMIT_ADVICE", "BUDGIT_HOUSEKEEPING_LAUNCHCTL",
               "PYTHONHASHSEED", "PYTHONPYCACHEPREFIX", "PYTHONPATH", "BUDGIT_TEST_RC")
@@ -384,6 +385,37 @@ def write_module_times(path, kind, n, rows):
     except OSError:
         return False                    # a times file is a report, never a reason to fail a run
     return True
+
+
+MODULE_LOG = TIMES_FILE + "l"      # last-module-times.jsonl: one line per module, appended the moment its worker ends (R-1379 P1a)
+
+
+def start_module_log(path=None):
+    """Empty the per-module log at the start of a run; False when it cannot be written (never a reason to fail a run)."""
+    try:
+        os.makedirs(os.path.dirname(path or MODULE_LOG), exist_ok=True)
+        with open(path or MODULE_LOG, "w"):
+            pass
+    except OSError:
+        return False
+    return True
+
+
+def note_module_done(module, wall, code, path=None):
+    """Append {"module", "wall", "exit", "time"} for one finished module. A run killed after hours still names its slow modules."""
+    try:
+        with open(path or MODULE_LOG, "a") as f:
+            f.write(json.dumps({"module": module, "wall": round(wall, 2), "exit": code, "time": int(time.time())}) + "\n")
+    except OSError:
+        return False
+    return True
+
+
+def module_exited(p, module, started, ends, path=None):
+    """The end-of-worker hook: wait for `p`, record when it ended and append its line to the per-module log."""
+    p.wait()
+    ends[p.pid] = time.time()
+    note_module_done(module, ends[p.pid] - started, p.returncode, path)
 
 
 def self_peak_mb():
@@ -853,11 +885,26 @@ def reap(procs, grace=TERM_GRACE, sleep=time.sleep, clock=time.monotonic):
             pass
 
 
+def plain_path(path):
+    """R-1379 P1a: the same folder named without a macOS "/private" prefix ("/private/var/..." -> "/var/..."), when that name
+    reaches the very same folder; else `path` unchanged. The gate hands the runner a resolved TMPDIR (it must be sure the folder is
+    outside Documents, Desktop and iCloud), and that name is 8 characters longer and is not the name a plain TMPDIR gives: tests
+    that cut a path at 80 characters (the HOME guard message) or strip "/private" from output (githooks status) were written
+    against the plain name, so the workers use it."""
+    if not path.startswith("/private/"):
+        return path
+    short = path[len("/private"):]
+    try:
+        return short if os.path.samefile(short, path) else path
+    except OSError:
+        return path
+
+
 def supervise(run, grace=TERM_GRACE):
     """Run `run(base, live)` with a fresh temp base dir. `live` collects every process the run starts. However the run
     ends (return, exception, Ctrl-C, SIGTERM to this process) the workers' groups are terminated, waited for, killed,
     and only then the base dir is removed."""
-    base = tempfile.mkdtemp(prefix="runtests-")
+    base = plain_path(tempfile.mkdtemp(prefix="runtests-"))
     live = []
     old = None
     if threading.current_thread() is threading.main_thread() and hasattr(signal, "SIGTERM"):
@@ -1441,6 +1488,7 @@ def run_pool(mods, n, flag_n, record, base, live, outcomes_out=None, kind="full"
     ends, results, logs_text, noresult = {}, {}, {}, set()      # R-1282: when each worker ended, its verdict and its log text
     order = schedule(mods)          # one queue: unknown modules first, then the heaviest recorded first
     t0 = time.time()
+    start_module_log()                # R-1379 P1a: a fresh per-module log; each worker appends its line as it ends
     warm_env = dict(os.environ)
     warm_env.pop("PYTHONDONTWRITEBYTECODE", None)
     warm_env["PYTHONPYCACHEPREFIX"] = os.path.join(base, "pycache")
@@ -1472,7 +1520,7 @@ def run_pool(mods, n, flag_n, record, base, live, outcomes_out=None, kind="full"
                       stdout=log, stderr=subprocess.STDOUT, text=True)
         live.append(p)
         procs.append((p, tmp, rec, time.time(), module))
-        threading.Thread(target=lambda: (p.wait(), ends.__setitem__(p.pid, time.time())), daemon=True).start()
+        threading.Thread(target=module_exited, args=(p, module, procs[-1][3], ends), daemon=True).start()
         return p
 
     # Count guard, now per worker as it starts: a worker that stalls (no CPU time gained for STALL_WINDOW s) before it
